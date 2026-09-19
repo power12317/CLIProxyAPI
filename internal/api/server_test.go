@@ -2684,6 +2684,7 @@ func TestDecodeHomeModelsKeepsTokenMetadata(t *testing.T) {
 				"owned_by": "anthropic",
 				"context_length": 200000,
 				"max_completion_tokens": 64000
+				,"use_responses_lite": false
 			}
 		],
 		"gemini": [
@@ -2697,6 +2698,12 @@ func TestDecodeHomeModelsKeepsTokenMetadata(t *testing.T) {
 					"dynamic_allowed": true,
 					"levels": ["low", "medium", "high"]
 				}
+			}
+		],
+		"codex": [
+			{
+				"id": "gpt-5.6-luna",
+				"use_responses_lite": true
 			}
 		]
 	}`))
@@ -2715,6 +2722,9 @@ func TestDecodeHomeModelsKeepsTokenMetadata(t *testing.T) {
 	if claudeEntry.contextLength != 200000 || claudeEntry.maxCompletionTokens != 64000 {
 		t.Fatalf("claude token metadata = %d/%d, want 200000/64000", claudeEntry.contextLength, claudeEntry.maxCompletionTokens)
 	}
+	if claudeEntry.useResponsesLite {
+		t.Fatal("claude model unexpectedly marked as Codex Responses Lite")
+	}
 	geminiEntry, ok := byID["gemini-3-pro"]
 	if !ok {
 		t.Fatalf("expected gemini-3-pro entry, got %v", byID)
@@ -2724,6 +2734,10 @@ func TestDecodeHomeModelsKeepsTokenMetadata(t *testing.T) {
 	}
 	if geminiEntry.thinking == nil || !reflect.DeepEqual(geminiEntry.thinking.Levels, []string{"low", "medium", "high"}) {
 		t.Fatalf("gemini thinking metadata = %#v, want low/medium/high", geminiEntry.thinking)
+	}
+	codexEntry, ok := byID["gpt-5.6-luna"]
+	if !ok || !codexEntry.useResponsesLite {
+		t.Fatalf("codex model use_responses_lite = %v, want true", codexEntry.useResponsesLite)
 	}
 
 	formatted := formatHomeCodexModel(geminiEntry)

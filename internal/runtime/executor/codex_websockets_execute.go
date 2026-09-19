@@ -84,11 +84,11 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	clientBody := body
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
-	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, officialCodexRequest)
+	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, baseModel, officialCodexRequest)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, nativeRequest, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
-	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody, officialCodexRequest)
+	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody, baseModel, officialCodexRequest)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
 	turnState.ApplyHeaders(wsHeaders)

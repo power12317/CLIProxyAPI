@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -17,37 +18,31 @@ func codexOfficialRequest(originalPayload, payload []byte) bool {
 	return helps.IsOfficialCodexRequest(originalPayload) || helps.IsOfficialCodexRequest(payload)
 }
 
-func codexResponsesLiteToolsCompatible(body []byte, official bool) bool {
-	switch util.ClassifyCodexResponsesLiteTools(body) {
-	case util.CodexResponsesLiteToolsCompatible:
-		return true
-	case util.CodexResponsesLiteToolsUnknown:
-		return official
-	default:
-		return false
-	}
-}
-
 func codexResponsesLiteBodyMode(body []byte, official bool, headers http.Header) bool {
-	if official && codexResponsesLiteToolsCompatible(body, true) {
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if official && registry.CodexModelUsesResponsesLite(model) {
 		return true
 	}
 	return util.IsCodexResponsesLiteRequest(body, headers)
 }
 
+func codexResponsesLiteModelEnabled(model string) bool {
+	return registry.CodexModelUsesResponsesLite(model)
+}
+
 // ensureCodexResponsesLiteHeader only reconstructs a missing header for an
 // official Codex body. Existing client or configured headers are preserved.
-func ensureCodexResponsesLiteHeader(headers http.Header, body []byte, official bool) {
+func ensureCodexResponsesLiteHeader(headers http.Header, body []byte, model string, official bool) {
 	if headers == nil || headers.Get(codexResponsesLiteHeader) != "" {
 		return
 	}
-	if official && codexResponsesLiteToolsCompatible(body, true) {
+	if official && registry.CodexModelUsesResponsesLite(model) {
 		headers.Set(codexResponsesLiteHeader, "true")
 	}
 }
 
-func ensureCodexResponsesLiteMirror(body []byte, official bool) []byte {
-	if !official || !codexResponsesLiteToolsCompatible(body, true) {
+func ensureCodexResponsesLiteMirror(body []byte, model string, official bool) []byte {
+	if !official || !registry.CodexModelUsesResponsesLite(model) {
 		return body
 	}
 	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {

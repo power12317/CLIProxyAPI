@@ -729,6 +729,7 @@ func formatHomeCodexModel(entry homeModelEntry) map[string]any {
 	if entry.maxCompletionTokens > 0 {
 		model["max_completion_tokens"] = entry.maxCompletionTokens
 	}
+	model["use_responses_lite"] = entry.useResponsesLite
 	if entry.thinking != nil {
 		model["thinking"] = entry.thinking
 	}
@@ -764,6 +765,7 @@ type homeModelEntry struct {
 	displayName            string
 	contextLength          int
 	maxCompletionTokens    int
+	useResponsesLite       bool
 	thinking               *registry.ThinkingSupport
 	providers              []string
 	nativeCapabilityRoutes []registry.NativeCapabilityRoute
@@ -1036,6 +1038,7 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 	}
 
 	indexByID := make(map[string]int)
+	responsesLite := make(map[string]bool)
 	out := make([]homeModelEntry, 0, 256)
 	for section, models := range bySection {
 		provider := strings.ToLower(strings.TrimSpace(section))
@@ -1058,6 +1061,11 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 			if index, ok := indexByID[id]; ok {
 				out[index].providers = appendUniqueHomeProvider(out[index].providers, provider)
 				out[index].nativeCapabilityRoutes = append(out[index].nativeCapabilityRoutes, route)
+				if strings.HasPrefix(provider, "codex") {
+					useResponsesLite, _ := model["use_responses_lite"].(bool)
+					out[index].useResponsesLite = useResponsesLite
+					responsesLite[id] = useResponsesLite
+				}
 				continue
 			}
 
@@ -1070,6 +1078,10 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 				displayName = strings.TrimSpace(displayName)
 			}
 			thinking := homeModelThinkingSupport(model)
+			useResponsesLite, _ := model["use_responses_lite"].(bool)
+			if strings.HasPrefix(provider, "codex") {
+				responsesLite[id] = useResponsesLite
+			}
 
 			indexByID[id] = len(out)
 			out = append(out, homeModelEntry{
@@ -1079,12 +1091,14 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 				displayName:            displayName,
 				contextLength:          int(homeModelInt64Value(model, "context_length", "contextLength", "inputTokenLimit", "max_input_tokens")),
 				maxCompletionTokens:    int(homeModelInt64Value(model, "max_completion_tokens", "maxCompletionTokens", "outputTokenLimit", "max_tokens")),
+				useResponsesLite:       useResponsesLite,
 				thinking:               thinking,
 				providers:              appendUniqueHomeProvider(nil, provider),
 				nativeCapabilityRoutes: []registry.NativeCapabilityRoute{route},
 			})
 		}
 	}
+	registry.UpdateCodexResponsesLiteCapabilities(responsesLite)
 
 	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
 	if len(out) == 0 {

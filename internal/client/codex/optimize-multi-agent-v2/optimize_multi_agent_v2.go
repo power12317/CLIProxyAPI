@@ -365,8 +365,9 @@ func decodeCodexHomeAvailableModels(raw []byte) []map[string]any {
 	}
 
 	seen := make(map[string]struct{})
+	responsesLite := make(map[string]bool)
 	models := make([]map[string]any, 0, 256)
-	for _, sectionModels := range sections {
+	for section, sectionModels := range sections {
 		for _, model := range sectionModels {
 			modelID := mapString(model, "id")
 			if modelID == "" {
@@ -379,12 +380,16 @@ func decodeCodexHomeAvailableModels(raw []byte) []map[string]any {
 				continue
 			}
 			seen[modelID] = struct{}{}
+			useResponsesLite, _ := model["use_responses_lite"].(bool)
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(section)), "codex") {
+				responsesLite[modelID] = useResponsesLite
+			}
 
 			displayName := mapString(model, "display_name")
 			if displayName == "" {
 				displayName = mapString(model, "displayName")
 			}
-			entry := map[string]any{"id": modelID}
+			entry := map[string]any{"id": modelID, "use_responses_lite": useResponsesLite}
 			if displayName != "" {
 				entry["display_name"] = displayName
 				entry["description"] = displayName
@@ -392,6 +397,7 @@ func decodeCodexHomeAvailableModels(raw []byte) []map[string]any {
 			models = append(models, entry)
 		}
 	}
+	registry.UpdateCodexResponsesLiteCapabilities(responsesLite)
 	sort.Slice(models, func(i, j int) bool {
 		return mapString(models[i], "id") < mapString(models[j], "id")
 	})

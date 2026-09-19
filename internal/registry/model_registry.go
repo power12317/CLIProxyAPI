@@ -80,6 +80,8 @@ type ModelInfo struct {
 	// SupportsWebSearch indicates this Antigravity model is listed by
 	// fetchAvailableModels.webSearchModelIds and can execute native googleSearch.
 	SupportsWebSearch bool `json:"supports_web_search,omitempty"`
+	// UseResponsesLite indicates whether Codex should use Responses Lite for this model.
+	UseResponsesLite bool `json:"use_responses_lite,omitempty"`
 
 	// NativeCapabilities contains internal, static per-model capability metadata.
 	// It is intentionally separate from Antigravity's dynamically probed capability.

@@ -60,6 +60,7 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 	}
 
 	cloned := append([]byte(nil), data...)
+	UpdateCodexResponsesLiteCapabilitiesFromCatalog(cloned)
 	codexClientCatalogStore.mu.Lock()
 	defer codexClientCatalogStore.mu.Unlock()
 	if bytes.Equal(codexClientCatalogStore.data, cloned) {

@@ -78,7 +78,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	var fixedInstallationID string
 	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth))
-		if officialOAuthRequest && codexResponsesLiteToolsCompatible(body, true) {
+		if officialOAuthRequest && codexResponsesLiteModelEnabled(baseModel) {
 			body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
 		}
 	}
@@ -119,7 +119,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			httpReq.Header.Set("X-Codex-Turn-Metadata", helps.RewriteCodexTurnMetadataInstallation(httpReq.Header.Get("X-Codex-Turn-Metadata"), fixedInstallationID))
 		}
 	}
-	ensureCodexResponsesLiteHeader(httpReq.Header, turnStateBody, officialCodexRequest)
+	ensureCodexResponsesLiteHeader(httpReq.Header, turnStateBody, baseModel, officialCodexRequest)
 	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
 	turnState.ApplyHeaders(httpReq.Header)
 	var authID, authLabel, authType, authValue string
@@ -299,7 +299,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	turnStateBody := upstreamBody
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
-	ensureCodexResponsesLiteHeader(httpReq.Header, upstreamBody, officialCodexRequest)
+	ensureCodexResponsesLiteHeader(httpReq.Header, upstreamBody, baseModel, officialCodexRequest)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
 	turnState.ApplyHeaders(httpReq.Header)

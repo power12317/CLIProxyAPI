@@ -58,7 +58,7 @@ func TestCodexExecutorExecuteResponsesLiteHeaderDoesNotInjectImageGenerationTool
 	}
 }
 
-func TestCodexOfficialRequestReconstructsMissingLiteHeaderFromTools(t *testing.T) {
+func TestCodexOfficialRequestReconstructsMissingLiteHeaderFromModelMetadata(t *testing.T) {
 	var gotHeaders http.Header
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +81,15 @@ func TestCodexOfficialRequestReconstructsMissingLiteHeaderFromTools(t *testing.T
 	}
 	if got := gjson.GetBytes(gotBody, "tools.0.type").String(); got != "function" {
 		t.Fatalf("tool type = %q, want function; body=%s", got, gotBody)
+	}
+}
+
+func TestCodexOfficialRequestDoesNotReconstructLiteHeaderForNonLiteModel(t *testing.T) {
+	headers := make(http.Header)
+	body := []byte(`{"model":"gpt-5.5","tools":[{"type":"function","name":"exec"}]}`)
+	ensureCodexResponsesLiteHeader(headers, body, "gpt-5.5", true)
+	if got := headers.Get(codexResponsesLiteHeader); got != "" {
+		t.Fatalf("Lite header = %q, want no reconstructed header", got)
 	}
 }
 
@@ -107,7 +116,7 @@ func TestCodexLiteHeaderIsPreservedWhenToolShapeIsNotLite(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set(codexResponsesLiteHeader, "true")
 	body := []byte(`{"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"tools":[{"type":"image_generation"}]}`)
-	ensureCodexResponsesLiteHeader(headers, body, true)
+	ensureCodexResponsesLiteHeader(headers, body, "gpt-5.6-luna", true)
 	if got := headers.Get(codexResponsesLiteHeader); got != "true" {
 		t.Fatalf("Lite header = %q, want existing true header preserved", got)
 	}
