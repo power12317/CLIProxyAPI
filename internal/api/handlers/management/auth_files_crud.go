@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -42,6 +43,17 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read file: %v", err)})
 		}
 		return
+	}
+	// Harvested tickets are server-managed ephemeral credentials. Keep them in
+	// the auth file for runtime reuse, but never hand their blobs to downloads.
+	var metadata map[string]any
+	if json.Unmarshal(data, &metadata) == nil {
+		redacted := helps.RedactCodexTurnStateTicketMetadata(metadata)
+		if len(redacted) != len(metadata) {
+			if encoded, errMarshal := json.Marshal(redacted); errMarshal == nil {
+				data = encoded
+			}
+		}
 	}
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", name))
 	c.Data(200, "application/json", data)

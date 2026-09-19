@@ -215,8 +215,78 @@ type CodexConfig struct {
 	// ModelLevelCooling scopes Codex usage_limit_reached quota cooldowns to the requested model
 	// rather than cooling down the entire credential across all sibling models.
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
+	// TurnStateTicket configures the optional one-hour x-codex-turn-state ticket
+	// harvester used by Codex OAuth credentials. Tickets are harvested through a
+	// dedicated proxy and injected only for the configured models.
+	TurnStateTicket CodexTurnStateTicketConfig `yaml:"turn-state-ticket" json:"turn-state-ticket"`
 	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
+}
+
+// CodexTurnStateTicketConfig controls proactive Codex turn-state ticket harvest.
+// A ticket is a short-lived, account/model-scoped value returned by ChatGPT.
+type CodexTurnStateTicketConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	TargetLength          int      `yaml:"target-length" json:"target-length"`
+	TTLSeconds            int      `yaml:"ttl-seconds" json:"ttl-seconds"`
+	RefreshBeforeSeconds  int      `yaml:"refresh-before-seconds" json:"refresh-before-seconds"`
+	HarvestProxyURL       string   `yaml:"harvest-proxy-url" json:"harvest-proxy-url"`
+	ProbeIntervalSeconds  int      `yaml:"probe-interval-seconds" json:"probe-interval-seconds"`
+	AttemptTimeoutSeconds int      `yaml:"attempt-timeout-seconds" json:"attempt-timeout-seconds"`
+	FailClosed            bool     `yaml:"fail-closed" json:"fail-closed"`
+	Models                []string `yaml:"models" json:"models"`
+}
+
+const (
+	DefaultCodexTurnStateTicketTargetLength          = 292
+	DefaultCodexTurnStateTicketTTLSeconds            = 3600
+	DefaultCodexTurnStateTicketRefreshBeforeSeconds  = 600
+	DefaultCodexTurnStateTicketProbeIntervalSeconds  = 6
+	DefaultCodexTurnStateTicketAttemptTimeoutSeconds = 25
+)
+
+// EffectiveTurnStateTicket returns a copy with safe defaults applied. Keeping
+// defaults here also covers callers that construct Config values directly in
+// tests or through the SDK instead of loading YAML.
+func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
+	var out CodexTurnStateTicketConfig
+	if c != nil {
+		out = c.TurnStateTicket
+	}
+	if out.TargetLength <= 0 {
+		out.TargetLength = DefaultCodexTurnStateTicketTargetLength
+	}
+	if out.TTLSeconds <= 0 {
+		out.TTLSeconds = DefaultCodexTurnStateTicketTTLSeconds
+	}
+	if out.RefreshBeforeSeconds <= 0 {
+		out.RefreshBeforeSeconds = DefaultCodexTurnStateTicketRefreshBeforeSeconds
+	}
+	if out.ProbeIntervalSeconds <= 0 {
+		out.ProbeIntervalSeconds = DefaultCodexTurnStateTicketProbeIntervalSeconds
+	}
+	if out.AttemptTimeoutSeconds <= 0 {
+		out.AttemptTimeoutSeconds = DefaultCodexTurnStateTicketAttemptTimeoutSeconds
+	}
+	if len(out.Models) == 0 {
+		out.Models = []string{"gpt-6-astra", "gpt-5.6-sol"}
+	}
+	models := make([]string, 0, len(out.Models))
+	seen := make(map[string]struct{}, len(out.Models))
+	for _, model := range out.Models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		models = append(models, model)
+	}
+	out.Models = models
+	out.HarvestProxyURL = strings.TrimSpace(out.HarvestProxyURL)
+	return out
 }
 
 // DefaultCodexStreamBootstrapTimeout is the default maximum duration to buffer bootstrap events.

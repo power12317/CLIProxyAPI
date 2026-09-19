@@ -92,6 +92,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
 	turnState.ApplyHeaders(wsHeaders)
 	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
+	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, wsHeaders); errTicket != nil {
+		return nil, errTicket
+	}
+	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
 	logTurnStateOnReturn := false
 	defer func() {
 		if logTurnStateOnReturn {

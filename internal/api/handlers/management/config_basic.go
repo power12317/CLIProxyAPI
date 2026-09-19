@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	log "github.com/sirupsen/logrus"
@@ -28,7 +29,10 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		c.JSON(200, gin.H{})
 		return
 	}
-	c.JSON(200, new(*h.cfg))
+	// Do not return the password embedded in the dedicated harvest proxy.
+	view := h.cfg.CloneForRuntime()
+	view.Codex.TurnStateTicket.HarvestProxyURL = helps.MaskCodexTurnStateTicketHarvestProxyURL(view.Codex.TurnStateTicket.HarvestProxyURL)
+	c.JSON(200, view)
 }
 
 type releaseInfo struct {

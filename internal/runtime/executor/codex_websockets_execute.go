@@ -93,6 +93,10 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
 	turnState.ApplyHeaders(wsHeaders)
 	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
+	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, wsHeaders); errTicket != nil {
+		return resp, errTicket
+	}
+	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
