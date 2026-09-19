@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -74,6 +75,15 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if errReplay != nil {
 		return resp, errReplay
 	}
+	var oauthIdentity helps.CodexOAuthIdentity
+	officialOAuthRequest := false
+	var fixedInstallationID string
+	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
+		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth))
+		if officialOAuthRequest {
+			body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
+		}
+	}
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -82,9 +92,37 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if err != nil {
 		return resp, err
 	}
+	turnStateBody := upstreamBody
+	if !officialOAuthRequest {
+		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth))
+		replaceCodexRequestBody(httpReq, upstreamBody)
+	} else {
+		encodedBody, errEncode := helps.EncodeCodexOAuthBody(upstreamBody)
+		if errEncode != nil {
+			return resp, fmt.Errorf("codex oauth: encode zstd body: %w", errEncode)
+		}
+		upstreamBody = encodedBody
+		replaceCodexRequestBody(httpReq, upstreamBody)
+		httpReq.Header.Set("Content-Encoding", "zstd")
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
-	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
+	if officialOAuthRequest {
+		configuredUA, configuredBeta := codexHeaderDefaults(e.cfg, auth)
+		helps.ApplyCodexOAuthHeaders(httpReq.Header, oauthIdentity, baseModel, true, configuredUA, configuredBeta)
+		applyCodexConfiguredHeaderOverrides(httpReq, auth, opts.Headers)
+		applyModelHeaderOverrides(httpReq.Header, baseModel)
+		httpReq.Header.Del("Cookie")
+		httpReq.Header.Set("Authorization", "Bearer "+helps.CodexOAuthAccessToken(auth))
+		httpReq.Header.Set("Chatgpt-Account-Id", helps.CodexOAuthAccountID(auth))
+	} else {
+		applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
+		if fixedInstallationID != "" && httpReq.Header.Get("X-Codex-Turn-Metadata") != "" {
+			httpReq.Header.Set("X-Codex-Turn-Metadata", helps.RewriteCodexTurnMetadataInstallation(httpReq.Header.Get("X-Codex-Turn-Metadata"), fixedInstallationID))
+		}
+	}
+	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
+	turnState.ApplyHeaders(httpReq.Header)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -115,6 +153,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 	}()
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	turnState.ObserveResponse(httpResp)
+	turnState.LogResponse(ctx, e.cfg, false)
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		b = applyCodexIdentityConfuseResponsePayload(b, identityState)
@@ -195,7 +235,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		if responseFormat == sdktranslator.FormatOpenAIResponse {
 			out = helps.EnsureResponsesUsageDetails(out)
 		}
-		resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+		resp = cliproxyexecutor.Response{Payload: out, Headers: helps.StripCodexInternalResponseHeaders(httpResp.Header)}
 		return resp, nil
 	}
 	if errRead != nil {
@@ -255,9 +295,12 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return resp, err
 	}
+	turnStateBody := upstreamBody
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
+	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
+	turnState.ApplyHeaders(httpReq.Header)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -288,6 +331,8 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		}
 	}()
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	turnState.ObserveResponse(httpResp)
+	turnState.LogResponse(ctx, e.cfg, false)
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		b = applyCodexIdentityConfuseResponsePayload(b, identityState)
@@ -312,6 +357,6 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		out = helps.EnsureResponsesUsageDetails(out)
 	}
-	resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+	resp = cliproxyexecutor.Response{Payload: out, Headers: helps.StripCodexInternalResponseHeaders(httpResp.Header)}
 	return resp, nil
 }

@@ -18,6 +18,7 @@ import (
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/credentialweight"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -90,6 +91,13 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to synchronize plugin virtual auth: %v", errHook)})
 			return
 		}
+		if !*req.Disabled {
+			for _, hookAuth := range hookAuths {
+				if hookAuth != nil && strings.EqualFold(strings.TrimSpace(hookAuth.Provider), "codex") {
+					go helps.WarmupCodexCredential(context.Background(), h.cfg, hookAuth)
+				}
+			}
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": *req.Disabled})
 		return
 	}
@@ -141,6 +149,9 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		log.Errorf("post-auth persist hook failed for status update on %s: %v", targetAuth.ID, errHook)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to synchronize auth runtime: %v", errHook)})
 		return
+	}
+	if !*req.Disabled && strings.EqualFold(strings.TrimSpace(hookAuth.Provider), "codex") {
+		go helps.WarmupCodexCredential(context.Background(), h.cfg, hookAuth)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": *req.Disabled})
@@ -963,6 +974,11 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 	if errSave != nil {
 		return savedPath, errSave
 	}
+	if strings.EqualFold(strings.TrimSpace(record.Provider), "codex") && record.AuthKind() == coreauth.AuthKindOAuth {
+		// A successful OAuth save replaces the credential identity. Do not let a
+		// re-login reuse cookies established by the previous access token.
+		helps.InvalidateCodexCookieJar(record.ID)
+	}
 	if legacyClaudeCredential != nil {
 		if strings.TrimSpace(savedPath) == "" {
 			return "", fmt.Errorf("canonical Claude credential was not persisted; legacy credential retained")
@@ -975,8 +991,8 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 			return savedPath, fmt.Errorf("canonical Claude credential saved but legacy credential cleanup failed: %w", errDelete)
 		}
 	}
+	persistedRecord := record
 	if h.postAuthPersistHook != nil {
-		persistedRecord := record
 		if data, errRead := os.ReadFile(savedPath); errRead == nil && len(data) > 0 {
 			auths, errSynthesize := synthesizer.SynthesizeAuthFile(&synthesizer.SynthesisContext{
 				Config:           h.cfg,
@@ -998,6 +1014,9 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 		if errHook := h.postAuthPersistHook(ctx, persistedRecord); errHook != nil {
 			return savedPath, fmt.Errorf("post-auth persist hook failed: %w", errHook)
 		}
+	}
+	if strings.EqualFold(strings.TrimSpace(persistedRecord.Provider), "codex") && !persistedRecord.Disabled {
+		go helps.WarmupCodexCredential(context.Background(), h.cfg, persistedRecord)
 	}
 	return savedPath, nil
 }

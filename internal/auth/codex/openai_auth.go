@@ -167,12 +167,13 @@ func (o *CodexAuth) ExchangeCodeForTokensWithRedirect(ctx context.Context, code,
 
 	// Create token data
 	tokenData := CodexTokenData{
-		IDToken:      tokenResp.IDToken,
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		AccountID:    accountID,
-		Email:        email,
-		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
+		IDToken:       tokenResp.IDToken,
+		AccessToken:   tokenResp.AccessToken,
+		RefreshToken:  tokenResp.RefreshToken,
+		AccountID:     accountID,
+		ChatGPTUserID: ChatGPTUserIDFromAccessToken(tokenResp.AccessToken),
+		Email:         email,
+		Expire:        time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
 
 	// Create auth bundle
@@ -271,12 +272,13 @@ func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken 
 	}
 
 	return &CodexTokenData{
-		IDToken:      tokenResp.IDToken,
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		AccountID:    accountID,
-		Email:        email,
-		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
+		IDToken:       tokenResp.IDToken,
+		AccessToken:   tokenResp.AccessToken,
+		RefreshToken:  tokenResp.RefreshToken,
+		AccountID:     accountID,
+		ChatGPTUserID: ChatGPTUserIDFromAccessToken(tokenResp.AccessToken),
+		Email:         email,
+		Expire:        time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}, nil
 }
 
@@ -284,13 +286,14 @@ func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken 
 // It populates the storage struct with token data, user information, and timestamps.
 func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStorage {
 	storage := &CodexTokenStorage{
-		IDToken:      bundle.TokenData.IDToken,
-		AccessToken:  bundle.TokenData.AccessToken,
-		RefreshToken: bundle.TokenData.RefreshToken,
-		AccountID:    bundle.TokenData.AccountID,
-		LastRefresh:  bundle.LastRefresh,
-		Email:        bundle.TokenData.Email,
-		Expire:       bundle.TokenData.Expire,
+		IDToken:       bundle.TokenData.IDToken,
+		AccessToken:   bundle.TokenData.AccessToken,
+		RefreshToken:  bundle.TokenData.RefreshToken,
+		AccountID:     bundle.TokenData.AccountID,
+		ChatGPTUserID: ChatGPTUserIDFromAccessToken(bundle.TokenData.AccessToken),
+		LastRefresh:   bundle.LastRefresh,
+		Email:         bundle.TokenData.Email,
+		Expire:        bundle.TokenData.Expire,
 	}
 
 	return storage
@@ -341,6 +344,7 @@ func isNonRetryableRefreshErr(err error) bool {
 func (o *CodexAuth) UpdateTokenStorage(storage *CodexTokenStorage, tokenData *CodexTokenData) {
 	storage.IDToken = tokenData.IDToken
 	storage.AccessToken = tokenData.AccessToken
+	storage.ChatGPTUserID = ChatGPTUserIDFromAccessToken(tokenData.AccessToken)
 	storage.RefreshToken = tokenData.RefreshToken
 	storage.AccountID = tokenData.AccountID
 	storage.LastRefresh = time.Now().Format(time.RFC3339)

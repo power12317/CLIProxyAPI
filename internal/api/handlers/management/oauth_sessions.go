@@ -265,6 +265,28 @@ var oauthSessions = newOAuthSessionStore(oauthSessionTTL)
 
 func RegisterOAuthSession(state, provider string) { oauthSessions.Register(state, provider) }
 
+func RegisterOAuthSessionWithMetadata(state, provider string, metadata map[string]any) {
+	state = strings.TrimSpace(state)
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if state == "" || provider == "" {
+		return
+	}
+	// Built-in sessions use the same store as the legacy helper while retaining
+	// the small amount of context required by system-scoped OAuth flows.
+	now := time.Now()
+	oauthSessions.mu.Lock()
+	defer oauthSessions.mu.Unlock()
+	oauthSessions.purgeExpiredLocked(now)
+	oauthSessions.sessions[state] = oauthSession{
+		Provider:  provider,
+		Status:    "",
+		Source:    oauthSessionSourceBuiltin,
+		Metadata:  cloneOAuthSessionMetadata(metadata),
+		CreatedAt: now,
+		ExpiresAt: now.Add(oauthSessions.ttl),
+	}
+}
+
 func RegisterPluginOAuthSession(state, provider string, metadata map[string]any) error {
 	return oauthSessions.RegisterPlugin(state, provider, metadata)
 }

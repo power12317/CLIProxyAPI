@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -145,6 +146,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	if identityState.promptCacheKey != "" {
 		cache.ID = identityState.promptCacheKey
 	}
+	rawJSON = helps.ApplyCodexSafetyIdentifier(rawJSON, auth)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
 	if err != nil {
 		return nil, nil, codexIdentityConfuseState{}, err
@@ -156,6 +158,9 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 }
 
 func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, userPayload []byte, rawJSON []byte) ([]byte, codexIdentityConfuseState) {
+	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(rawJSON) {
+		return rawJSON, codexIdentityConfuseState{}
+	}
 	if !codexIdentityConfuseEnabled(cfg) || auth == nil || strings.TrimSpace(auth.ID) == "" || len(rawJSON) == 0 {
 		return rawJSON, codexIdentityConfuseState{}
 	}
@@ -367,6 +372,48 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	}
 	util.ApplyCustomHeadersFromAttrs(r, attrs, ginHeaders)
 	applyCodexCloakingHeaders(r.Header, cfg)
+}
+
+func replaceCodexRequestBody(r *http.Request, body []byte) {
+	if r == nil {
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	r.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+}
+
+func codexInstallationAccountID(auth *cliproxyauth.Auth) string {
+	if accountID := helps.CodexOAuthAccountID(auth); accountID != "" {
+		return accountID
+	}
+	if auth != nil {
+		return strings.TrimSpace(auth.ID)
+	}
+	return ""
+}
+
+func applyCodexConfiguredHeaderOverrides(r *http.Request, auth *cliproxyauth.Auth, clientHeaders http.Header) {
+	if r == nil || auth == nil || len(auth.Attributes) == 0 {
+		return
+	}
+	configured := r.Clone(r.Context())
+	configured.Header = make(http.Header)
+	util.ApplyCustomHeadersFromAttrs(configured, auth.Attributes, clientHeaders)
+	for key := range auth.Attributes {
+		if !strings.HasPrefix(key, "header:") {
+			continue
+		}
+		headerName := strings.TrimSpace(strings.TrimPrefix(key, "header:"))
+		if headerName == "" || strings.EqualFold(headerName, "Authorization") || strings.EqualFold(headerName, "Chatgpt-Account-Id") || strings.EqualFold(headerName, "Cookie") {
+			continue
+		}
+		if value := configured.Header.Get(headerName); value != "" {
+			r.Header.Set(headerName, value)
+		}
+	}
 }
 
 func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config) {

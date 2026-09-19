@@ -85,10 +85,20 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	clientBody := body
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
+	upstreamBody = helps.ApplyCodexSafetyIdentifier(upstreamBody, auth)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
+	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
+	turnState.ApplyHeaders(wsHeaders)
+	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
+	logTurnStateOnReturn := false
+	defer func() {
+		if logTurnStateOnReturn {
+			turnState.LogResponse(ctx, e.cfg, true)
+		}
+	}()
 
 	var authID, authLabel, authType, authValue string
 	authID = auth.ID
@@ -180,6 +190,8 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, errBind
 	}
 	recordAPIWebsocketHandshake(ctx, e.cfg, respHS)
+	turnState.ObserveResponse(respHS)
+	logTurnStateOnReturn = true
 	reporter.StartResponseTTFT()
 
 	if sess == nil {
@@ -246,6 +258,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				AuthValue: authValue,
 			})
 			recordAPIWebsocketHandshake(ctx, e.cfg, respHSRetry)
+			turnState.ObserveResponse(respHSRetry)
 			reporter.StartResponseTTFT()
 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
 			if errSendRetry := writeCodexWebsocketMessage(sess, conn, wsReqBodyRetry); errSendRetry != nil {
@@ -388,6 +401,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				continue
 			}
 			observeCodexTokenEvent(reporter, payload)
+			turnState.ObserveEvent(payload)
 			payload = applyCodexIdentityConfuseResponsePayload(payload, identityState)
 			helps.AppendCodexAPIWebsocketResponse(ctx, e.cfg, payload)
 			helps.EmitWebSocketResponseEvent(ctx, opts, auth, e.Identifier(), req.Model, payload)
@@ -578,11 +592,13 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return &cliproxyexecutor.StreamResult{Headers: upstreamHeaders, Chunks: out}, nil
 	}
 
+	logTurnStateOnReturn = false
 	go func() {
 		terminateReason := "completed"
 		var terminateErr error
 
 		defer close(out)
+		defer turnState.LogResponse(ctx, e.cfg, true)
 		defer func() {
 			if sess != nil {
 				sess.clearActive(conn, readCh)
@@ -655,6 +671,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				continue
 			}
 			observeCodexTokenEvent(reporter, payload)
+			turnState.ObserveEvent(payload)
 			payload = applyCodexIdentityConfuseResponsePayload(payload, identityState)
 			helps.AppendCodexAPIWebsocketResponse(ctx, e.cfg, payload)
 			helps.EmitWebSocketResponseEvent(ctx, opts, auth, e.Identifier(), req.Model, payload)

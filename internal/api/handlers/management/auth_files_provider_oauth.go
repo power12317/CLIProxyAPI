@@ -34,6 +34,58 @@ type codexOAuthService interface {
 	CreateTokenStorage(bundle *codex.CodexAuthBundle) *codex.CodexTokenStorage
 }
 
+func normalizeCodexClientSystem(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "windows") {
+		return "windows"
+	}
+	return "mac"
+}
+
+func codexCredentialFileNameForSystem(baseName, system string) string {
+	baseName = strings.TrimSpace(baseName)
+	if baseName == "" {
+		return baseName
+	}
+	extension := filepath.Ext(baseName)
+	stem := strings.TrimSuffix(baseName, extension)
+	if normalizeCodexClientSystem(system) != "windows" {
+		stem = strings.TrimSuffix(stem, "-mac")
+		return stem + extension
+	}
+	stem = strings.TrimSuffix(stem, "-mac")
+	if strings.HasSuffix(strings.ToLower(stem), "-windows") {
+		return stem + extension
+	}
+	return stem + "-windows" + extension
+}
+
+func codexClientSystemForAuth(auth *coreauth.Auth) string {
+	if auth == nil || auth.Metadata == nil {
+		return "mac"
+	}
+	if value, ok := auth.Metadata["codex_client_system"].(string); ok && strings.EqualFold(strings.TrimSpace(value), "windows") {
+		return "windows"
+	}
+	return "mac"
+}
+
+func cloneCodexAuthAttributes(attributes map[string]string) map[string]string {
+	if len(attributes) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+// GetCodexCapabilities exposes optional Codex OAuth features to newer management panels.
+// Older CPA versions do not have this endpoint; clients must treat a 404 as legacy mode.
+func (h *Handler) GetCodexCapabilities(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"system_scoped_oauth": true})
+}
+
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 	ctx := context.Background()
 	ctx = PopulateAuthContext(ctx, c)
@@ -198,6 +250,32 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 func (h *Handler) RequestCodexToken(c *gin.Context) {
 	ctx := context.Background()
 	ctx = PopulateAuthContext(ctx, c)
+	authIndex := strings.TrimSpace(c.Query("auth_index"))
+	targetAuth := h.authByIndex(authIndex)
+	if authIndex != "" && targetAuth == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth credential not found"})
+		return
+	}
+	if targetAuth != nil && !strings.EqualFold(strings.TrimSpace(targetAuth.Provider), "codex") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "auth credential is not a Codex credential"})
+		return
+	}
+	clientSystem := normalizeCodexClientSystem(c.Query("client_system"))
+	if targetAuth != nil {
+		clientSystem = codexClientSystemForAuth(targetAuth)
+	}
+	targetAuthID := ""
+	targetFileName := ""
+	targetLabel := ""
+	targetProxyURL := ""
+	var targetAttributes map[string]string
+	if targetAuth != nil {
+		targetAuthID = targetAuth.ID
+		targetFileName = targetAuth.FileName
+		targetLabel = targetAuth.Label
+		targetProxyURL = targetAuth.ProxyURL
+		targetAttributes = cloneCodexAuthAttributes(targetAuth.Attributes)
+	}
 
 	fmt.Println("Initializing Codex authentication...")
 
@@ -228,7 +306,10 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 		return
 	}
 
-	RegisterOAuthSession(state, "codex")
+	RegisterOAuthSessionWithMetadata(state, "codex", map[string]any{
+		"codex_client_system":     clientSystem,
+		"codex_target_auth_index": authIndex,
+	})
 
 	isWebUI := isWebUIRequest(c)
 	var forwarder *callbackForwarder
@@ -312,16 +393,33 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 
 		// Create token storage and persist
 		tokenStorage := openaiAuth.CreateTokenStorage(bundle)
-		fileName := codex.CredentialFileName(tokenStorage.Email, planType, hashAccountID, true)
+		fileName := codexCredentialFileNameForSystem(codex.CredentialFileName(tokenStorage.Email, planType, hashAccountID, true), clientSystem)
+		recordID := fileName
+		if targetAuthID != "" {
+			recordID = targetAuthID
+			if strings.TrimSpace(targetFileName) != "" {
+				fileName = targetFileName
+			} else {
+				fileName = targetAuthID
+			}
+		}
 		record := &coreauth.Auth{
-			ID:       fileName,
-			Provider: "codex",
-			FileName: fileName,
-			Storage:  tokenStorage,
+			ID:         recordID,
+			Provider:   "codex",
+			FileName:   fileName,
+			Label:      targetLabel,
+			ProxyURL:   targetProxyURL,
+			Attributes: targetAttributes,
+			Storage:    tokenStorage,
 			Metadata: map[string]any{
-				"email":      tokenStorage.Email,
-				"account_id": tokenStorage.AccountID,
+				"email":               tokenStorage.Email,
+				"account_id":          tokenStorage.AccountID,
+				"auth_kind":           coreauth.AuthKindOAuth,
+				"codex_client_system": clientSystem,
 			},
+		}
+		if tokenStorage.ChatGPTUserID != "" {
+			record.Metadata["chatgpt_user_id"] = tokenStorage.ChatGPTUserID
 		}
 		if errGuard := guardOAuthSessionPendingForSave(state, "codex"); errGuard != nil {
 			return
@@ -340,7 +438,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 		CompleteOAuthSession(state)
 	}()
 
-	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state, "client_system": clientSystem})
 }
 
 func (h *Handler) RequestAntigravityToken(c *gin.Context) {

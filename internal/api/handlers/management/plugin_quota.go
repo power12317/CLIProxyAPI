@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
@@ -435,9 +436,13 @@ func (h *Handler) executeQuotaProbe(c *gin.Context, auth *coreauth.Auth, probe m
 			req.Header.Set(k, strVal)
 		}
 	}
+	isCodexUsageRequest := helps.ConfigureCodexChatGPTUsageRequest(req, auth)
 
 	client := &http.Client{
 		Transport: h.apiCallTransport(auth, ""),
+	}
+	if isCodexUsageRequest {
+		client.Jar = helps.CodexCookieJarForAuth(auth)
 	}
 
 	resp, errDo := client.Do(req)

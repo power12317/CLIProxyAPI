@@ -15,6 +15,7 @@ import (
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
@@ -208,11 +209,16 @@ func (h *Handler) APICall(c *gin.Context) {
 	if hostOverride != "" {
 		req.Host = hostOverride
 	}
+	isCodexUsageRequest := helps.ConfigureCodexChatGPTUsageRequest(req, auth)
 
 	httpClient := &http.Client{
 		Timeout: defaultAPICallTimeout,
 	}
 	httpClient.Transport = h.apiCallTransport(auth, requestProxyURL)
+	if auth != nil && helps.CodexAuthUsesOAuthCookieJar(auth) && (isCodexUsageRequest || strings.EqualFold(parsedURL.Hostname(), "chatgpt.com")) {
+		httpClient.Jar = helps.CodexCookieJarForAuth(auth)
+		req.Header.Del("Cookie")
+	}
 
 	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
@@ -232,9 +238,15 @@ func (h *Handler) APICall(c *gin.Context) {
 		return
 	}
 
+	responseHeaders := resp.Header
+	if auth != nil && helps.CodexAuthUsesOAuthCookieJar(auth) && strings.EqualFold(parsedURL.Hostname(), "chatgpt.com") {
+		responseHeaders = responseHeaders.Clone()
+		responseHeaders.Del("Set-Cookie")
+		responseHeaders.Del("Set-Cookie2")
+	}
 	c.JSON(http.StatusOK, apiCallResponse{
 		StatusCode: resp.StatusCode,
-		Header:     resp.Header,
+		Header:     responseHeaders,
 		Body:       string(respBody),
 	})
 }

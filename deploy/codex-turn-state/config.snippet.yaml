@@ -1,0 +1,27 @@
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    codex-turn-state:
+      enabled: true
+      priority: 100
+      role: probe
+      store_dir: "/CLIProxyAPI/plugins/codex-turn-state-store"
+      template_length: 292
+      replace_length: 312
+      ttl_seconds: 3600
+      inject_mode: replace-only
+      harvest_inband: false
+      dry_run: false
+      log_decisions: true
+      probe_base_url: "http://127.0.0.1:8317"
+      probe_api_key: "REPLACE_WITH_ONE_CPA_API_KEY"
+      probe_management_key: "REPLACE_WITH_PLAINTEXT_MANAGEMENT_KEY"
+      models:
+        - gpt-5.5
+        - gpt-5.6-luna
+        - gpt-5.6-terra
+        - gpt-5.6-sol
+        - gpt-6-astra
+      probe_accounts: []
+      probe_proxies: []

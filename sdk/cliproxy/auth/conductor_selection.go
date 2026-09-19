@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -75,10 +76,13 @@ func isBuiltInSelector(selector Selector) bool {
 type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
+const codexClientSystemMetadataKey = "cliproxy.codex.client_system"
+
 type authSelectionEligibility struct {
-	requiredKind     string
-	credentialPolicy string
-	disallowFreeAuth bool
+	requiredKind      string
+	credentialPolicy  string
+	disallowFreeAuth  bool
+	codexClientSystem string
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -99,6 +103,11 @@ func credentialPolicyFromContext(ctx context.Context) string {
 
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
 	eligibility := authSelectionEligibility{disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata)}
+	if opts.Metadata != nil {
+		if value, ok := opts.Metadata[codexClientSystemMetadataKey].(string); ok {
+			eligibility.codexClientSystem = strings.TrimSpace(strings.ToLower(value))
+		}
+	}
 	if ctx != nil {
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
@@ -116,7 +125,128 @@ func (e authSelectionEligibility) allows(auth *Auth) bool {
 	if e.credentialPolicy != "" && !credentialPolicyAllows(e.credentialPolicy, auth) {
 		return false
 	}
+	if e.codexClientSystem != "" {
+		if auth.AuthKind() != AuthKindOAuth || codexClientSystemForAuth(auth) != e.codexClientSystem {
+			return false
+		}
+	}
 	return !e.disallowFreeAuth || !isFreeCodexAuth(auth)
+}
+
+func codexClientSystemForAuth(auth *Auth) string {
+	if auth == nil || auth.Metadata == nil {
+		return "mac"
+	}
+	if value, ok := auth.Metadata["codex_client_system"].(string); ok && strings.EqualFold(strings.TrimSpace(value), "windows") {
+		return "windows"
+	}
+	return "mac"
+}
+
+// WithCodexClientSystemMetadata records a system requirement only for requests
+// carrying the explicit Codex turn metadata marker. Requests without that body
+// marker retain the existing selector behavior.
+func WithCodexClientSystemMetadata(opts *cliproxyexecutor.Options, payload []byte) {
+	if opts == nil || len(payload) == 0 {
+		return
+	}
+	var document map[string]any
+	if json.Unmarshal(payload, &document) != nil || document == nil {
+		return
+	}
+	clientMetadata, _ := document["client_metadata"].(map[string]any)
+	if clientMetadata == nil {
+		return
+	}
+	turnRawValue, exists := clientMetadata["x-codex-turn-metadata"]
+	if !exists {
+		return
+	}
+	turnRaw, _ := turnRawValue.(string)
+	var turnMetadata map[string]any
+	_ = json.Unmarshal([]byte(turnRaw), &turnMetadata)
+	system := "mac"
+	if turnMetadata != nil {
+		if sandbox, _ := turnMetadata["sandbox"].(string); sandbox == "windows_elevated" || sandbox == "windows_sandbox" {
+			system = "windows"
+		}
+	}
+	if system == "mac" && containsWindowsToolDescription(document) {
+		system = "windows"
+	}
+	if system == "mac" {
+		cwd, shell := findCodexEnvironment(document)
+		if windowsCodexPath(cwd) || shell == "cmd" {
+			system = "windows"
+		}
+	}
+	opts.EnsureMetadata()[codexClientSystemMetadataKey] = system
+}
+
+func containsWindowsToolDescription(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if strings.EqualFold(key, "description") {
+				if description, ok := child.(string); ok && strings.Contains(description, "Windows safety rules:") {
+					return true
+				}
+			}
+			if containsWindowsToolDescription(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if containsWindowsToolDescription(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func findCodexEnvironment(value any) (string, string) {
+	var cwd, shell string
+	var walk func(any, bool)
+	walk = func(current any, inEnvironment bool) {
+		switch typed := current.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+				if normalized == "environment_context" {
+					walk(child, true)
+					continue
+				}
+				switch normalized {
+				case "environment_context_cwd":
+					cwd, _ = child.(string)
+				case "environment_context_shell":
+					shell, _ = child.(string)
+				case "cwd":
+					if inEnvironment && cwd == "" {
+						cwd, _ = child.(string)
+					}
+				case "shell":
+					if inEnvironment && shell == "" {
+						shell, _ = child.(string)
+					}
+				}
+				walk(child, inEnvironment)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child, inEnvironment)
+			}
+		}
+	}
+	walk(value, false)
+	return strings.TrimSpace(cwd), strings.TrimSpace(shell)
+}
+
+func windowsCodexPath(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '\\' || value[2] == '/')
 }
 
 func (m *Manager) syncSchedulerFromSnapshot(auths []*Auth) {

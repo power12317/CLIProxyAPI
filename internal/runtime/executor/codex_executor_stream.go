@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -82,6 +83,15 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if errReplay != nil {
 		return nil, errReplay
 	}
+	var oauthIdentity helps.CodexOAuthIdentity
+	officialOAuthRequest := false
+	var fixedInstallationID string
+	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
+		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth))
+		if officialOAuthRequest {
+			body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
+		}
+	}
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -90,9 +100,37 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if err != nil {
 		return nil, err
 	}
+	turnStateBody := upstreamBody
+	if !officialOAuthRequest {
+		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth))
+		replaceCodexRequestBody(httpReq, upstreamBody)
+	} else {
+		encodedBody, errEncode := helps.EncodeCodexOAuthBody(upstreamBody)
+		if errEncode != nil {
+			return nil, fmt.Errorf("codex oauth: encode zstd body: %w", errEncode)
+		}
+		upstreamBody = encodedBody
+		replaceCodexRequestBody(httpReq, upstreamBody)
+		httpReq.Header.Set("Content-Encoding", "zstd")
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
-	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
+	if officialOAuthRequest {
+		configuredUA, configuredBeta := codexHeaderDefaults(e.cfg, auth)
+		helps.ApplyCodexOAuthHeaders(httpReq.Header, oauthIdentity, baseModel, true, configuredUA, configuredBeta)
+		applyCodexConfiguredHeaderOverrides(httpReq, auth, opts.Headers)
+		applyModelHeaderOverrides(httpReq.Header, baseModel)
+		httpReq.Header.Del("Cookie")
+		httpReq.Header.Set("Authorization", "Bearer "+helps.CodexOAuthAccessToken(auth))
+		httpReq.Header.Set("Chatgpt-Account-Id", helps.CodexOAuthAccountID(auth))
+	} else {
+		applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
+		if fixedInstallationID != "" && httpReq.Header.Get("X-Codex-Turn-Metadata") != "" {
+			httpReq.Header.Set("X-Codex-Turn-Metadata", helps.RewriteCodexTurnMetadataInstallation(httpReq.Header.Get("X-Codex-Turn-Metadata"), fixedInstallationID))
+		}
+	}
+	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
+	turnState.ApplyHeaders(httpReq.Header)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -119,6 +157,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	turnState.ObserveResponse(httpResp)
+	turnState.LogResponse(ctx, e.cfg, false)
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		data, readErr := io.ReadAll(httpResp.Body)
 		if errClose := httpResp.Body.Close(); errClose != nil {
@@ -340,12 +380,12 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		// stream and delivers this failure in-stream, exactly as the unbuffered path would.
 		out <- cliproxyexecutor.StreamChunk{Err: bootstrapTerminalErr}
 		close(out)
-		return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+		return &cliproxyexecutor.StreamResult{Headers: helps.StripCodexInternalResponseHeaders(httpResp.Header), Chunks: out}, nil
 	}
 	if immediateTerminal {
 		closeBootstrapBody()
 		close(out)
-		return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+		return &cliproxyexecutor.StreamResult{Headers: helps.StripCodexInternalResponseHeaders(httpResp.Header), Chunks: out}, nil
 	}
 
 	go func() {
@@ -449,5 +489,5 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		case <-ctx.Done():
 		}
 	}()
-	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+	return &cliproxyexecutor.StreamResult{Headers: helps.StripCodexInternalResponseHeaders(httpResp.Header), Chunks: out}, nil
 }

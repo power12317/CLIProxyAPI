@@ -75,6 +75,47 @@ func ParseJWTToken(token string) (*JWTClaims, error) {
 	return &claims, nil
 }
 
+// ChatGPTUserIDFromAccessToken reads the ChatGPT user claim from an OAuth access
+// token. This only decodes the payload; upstream authentication verifies the JWT.
+// Decode just the needed claim because access and ID tokens have different schemas.
+func ChatGPTUserIDFromAccessToken(token string) string {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, errDecode := base64URLDecode(parts[1])
+	if errDecode != nil {
+		return ""
+	}
+	var claims struct {
+		ChatGPTUserID string `json:"chatgpt_user_id"`
+		Auth          struct {
+			ChatGPTUserID string `json:"chatgpt_user_id"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if errDecode := json.Unmarshal(payload, &claims); errDecode != nil {
+		return ""
+	}
+	if userID := strings.TrimSpace(claims.Auth.ChatGPTUserID); userID != "" {
+		return userID
+	}
+	return strings.TrimSpace(claims.ChatGPTUserID)
+}
+
+// SyncAccessTokenUserID replaces a cached identity with the current access-token
+// claim, removing stale values when the token no longer supplies that claim.
+func SyncAccessTokenUserID(metadata map[string]any) {
+	if metadata == nil {
+		return
+	}
+	token, _ := metadata["access_token"].(string)
+	if userID := ChatGPTUserIDFromAccessToken(token); userID != "" {
+		metadata["chatgpt_user_id"] = userID
+	} else {
+		delete(metadata, "chatgpt_user_id")
+	}
+}
+
 // base64URLDecode decodes a Base64 URL-encoded string, adding padding if necessary.
 // JWTs use a URL-safe Base64 alphabet and omit padding, so this function ensures
 // correct decoding by re-adding the padding before decoding.

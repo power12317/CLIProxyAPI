@@ -2,6 +2,8 @@
 
 [English](README.md) | 中文 | [日本語](README_JA.md)
 
+本 fork 的仓库地址为 [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI)，包含 Codex OAuth 请求还原、macOS/Windows 独立凭据、凭据级 Cookie Jar 和 turn-state 缓存。完整改动与 Docker 启动方式见 [fork 部署说明](docs/fork-deployment.md)。镜像地址为 `ghcr.io/power12317/cliproxyapi:latest`，Compose 默认从当前源码构建。
+
 如果您想在您的桌面使用 CLIProxyAPI，我们推荐您使用我们的 [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) 桌面客户端，该客户端提供了图形化的配置界面、自动更新、系统托盘集成、一键启动/关闭 CLIProxyAPI 服务等功能。
 
 CLIProxyAPI 是一个为 CLI 提供 OpenAI/Gemini/Claude/Codex/Grok 兼容 API 接口的代理服务器。

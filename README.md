@@ -2,6 +2,8 @@
 
 English | [中文](README_CN.md) | [日本語](README_JA.md)
 
+This fork is maintained at [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI). It includes Codex OAuth request reconstruction, separate macOS/Windows credentials, credential-scoped cookies, and turn-state caching. See [fork changes and Docker deployment](docs/fork-deployment.md). The fork image is `ghcr.io/power12317/cliproxyapi:latest`; Compose builds this checkout by default.
+
 If you want to use CLIProxyAPI on your desktop, we recommend our [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop client. It provides a graphical configuration UI, automatic updates, system tray integration, and one-click start/stop for the CLIProxyAPI service.
 
 CLIProxyAPI is a proxy server that provides OpenAI/Gemini/Claude/Codex/Grok compatible API interfaces for CLI.

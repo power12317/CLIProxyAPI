@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README_CN.md) | 日本語
 
+この fork のリポジトリは [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI) です。Codex OAuth リクエストの復元、macOS/Windows ごとの認証情報、認証情報ごとの Cookie Jar、turn-state キャッシュを含みます。[変更内容と Docker 起動方法](docs/fork-deployment.md)を参照してください。イメージは `ghcr.io/power12317/cliproxyapi:latest` で、Compose は既定で現在のソースからビルドします。
+
 デスクトップで CLIProxyAPI を利用したい場合は、[EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) デスクトップクライアントをおすすめします。グラフィカルな設定画面、自動更新、システムトレイ連携、CLIProxyAPI サービスのワンクリック起動/停止などの機能を提供します。
 
 CLIProxyAPI は、CLI向けのOpenAI/Gemini/Claude/Codex/Grok互換APIインターフェースを提供するプロキシサーバーです。

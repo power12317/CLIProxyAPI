@@ -1,0 +1,8 @@
+Upstream: https://github.com/arden-aaai/cpa-plugin-codex-turn-state
+Revision: 95ff9bac7b5b015fe3704d468a5f4fbaf4816238
+SDK dependency: github.com/router-for-me/CLIProxyAPI/v7 v7.3.4
+Native ABI: 1; schema: 6
+
+The go/ directory and LICENSE are copied unchanged from this upstream revision.
+install.sh, config.snippet.yaml and README_CN.md are deployment helpers.
+The installer builds on the server using golang:1.26-bookworm (amd64 or arm64).

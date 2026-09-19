@@ -21,6 +21,8 @@ type CodexTokenData struct {
 	RefreshToken string `json:"refresh_token"`
 	// AccountID is the OpenAI account identifier
 	AccountID string `json:"account_id"`
+	// ChatGPTUserID is the user identifier carried by the access token.
+	ChatGPTUserID string `json:"chatgpt_user_id,omitempty"`
 	// Email is the OpenAI account email
 	Email string `json:"email"`
 	// Expire is the timestamp of the token expire

@@ -25,6 +25,8 @@ type CodexTokenStorage struct {
 	RefreshToken string `json:"refresh_token"`
 	// AccountID is the OpenAI account identifier associated with this token.
 	AccountID string `json:"account_id"`
+	// ChatGPTUserID is derived from the access token, not the account or ID token.
+	ChatGPTUserID string `json:"chatgpt_user_id,omitempty"`
 	// LastRefresh is the timestamp of the last token refresh operation.
 	LastRefresh string `json:"last_refresh"`
 	// Email is the OpenAI account email address associated with this token.
@@ -66,6 +68,9 @@ func (ts *CodexTokenStorage) SaveTokenToFile(authFilePath string) error {
 	if errMerge != nil {
 		return fmt.Errorf("failed to merge metadata: %w", errMerge)
 	}
+	// Persist the identity of the token actually being saved, even on re-login
+	// when metadata from an older credential was merged into this record.
+	SyncAccessTokenUserID(data)
 
 	f, err := os.Create(authFilePath)
 	if err != nil {

@@ -15,15 +15,15 @@ fi
 
 # --- Step 1: Choose Environment ---
 echo "Please select an option:"
-echo "1) Run using Pre-built Image (Recommended)"
-echo "2) Build from Source and Run (For Developers)"
+echo "1) Run using Fork Image (ghcr.io/power12317/cliproxyapi)"
+echo "2) Build this Fork from Source and Run (Recommended)"
 read -r -p "Enter choice [1-2]: " choice
 
 # --- Step 2: Execute based on choice ---
 case "$choice" in
   1)
     echo "--- Running with Pre-built Image ---"
-    docker compose up -d --remove-orphans --no-build
+    docker compose up -d --remove-orphans --no-build --pull always
     echo "Services are starting from remote image."
     echo "Run 'docker compose logs -f' to see the logs."
     ;;
@@ -42,7 +42,7 @@ case "$choice" in
     echo "----------------------------------------"
 
     # Build and start the services with a local-only image tag
-    export CLI_PROXY_IMAGE="cli-proxy-api:local"
+    export CLI_PROXY_IMAGE="ghcr.io/power12317/cliproxyapi:local"
 
     echo "Building the Docker image..."
     docker compose build \
@@ -51,7 +51,7 @@ case "$choice" in
       --build-arg BUILD_DATE="${BUILD_DATE}"
 
     echo "Starting the services..."
-    docker compose up -d --remove-orphans --pull never
+    docker compose up -d --remove-orphans --no-build --pull never
 
     echo "Build complete. Services are starting."
     echo "Run 'docker compose logs -f' to see the logs."
