@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -74,13 +73,5 @@ func TestSaveTokenToFile_PreservesCustomMetadata(t *testing.T) {
 	}
 	if saved["weight"] != float64(42) {
 		t.Errorf("weight = %v, want 42", saved["weight"])
-	}
-}
-
-func TestChatGPTUserIDFromAccessToken(t *testing.T) {
-	payload := `{"https://api.openai.com/auth":{"chatgpt_user_id":"user-123"}}`
-	token := "e30." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".sig"
-	if got := ChatGPTUserIDFromAccessToken(token); got != "user-123" {
-		t.Fatalf("ChatGPTUserIDFromAccessToken() = %q, want user-123", got)
 	}
 }

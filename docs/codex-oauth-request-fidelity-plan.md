@@ -206,7 +206,7 @@ The current translator and executor already perform compatibility work. The fide
 - The unsupported top-level `user` field is removed.
 - `system` roles in the input array become `developer` roles.
 - Known legacy built-in tool aliases are normalized.
-- The executor removes `previous_response_id`, `generate`, and `prompt_cache_retention`. Before the final OAuth/API request is sent, `safety_identifier` is always replaced with the `chatgpt_user_id` claim decoded from the selected OAuth access token (or the persisted value for legacy auth files). In the stream path it preserves only the supported `stream_options.reasoning_summary_delivery` subfield; the non-stream path removes `stream_options`.
+- The executor retains its existing removal of `previous_response_id`, `generate`, `prompt_cache_retention`, and `safety_identifier`. CPA does not derive `safety_identifier` from OAuth tokens or inject it into requests. Existing response handling remains unchanged. In the stream path it preserves only the supported `stream_options.reasoning_summary_delivery` subfield; the non-stream path removes `stream_options`.
 - Non-native compatibility requests may gain an empty top-level `instructions`; native Codex requests keep the absence of `instructions`.
 - Existing image-tool, reasoning-encrypted-content, tool-schema, multi-agent, replay-cache, and response translation logic remains in its current stage.
 

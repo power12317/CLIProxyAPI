@@ -418,9 +418,6 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 				"codex_client_system": clientSystem,
 			},
 		}
-		if tokenStorage.ChatGPTUserID != "" {
-			record.Metadata["chatgpt_user_id"] = tokenStorage.ChatGPTUserID
-		}
 		if errGuard := guardOAuthSessionPendingForSave(state, "codex"); errGuard != nil {
 			return
 		}

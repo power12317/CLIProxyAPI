@@ -275,9 +275,6 @@ func (a *CodexAuthenticator) buildAuthRecord(authSvc *codex.CodexAuth, authBundl
 	metadata := map[string]any{
 		"email": tokenStorage.Email,
 	}
-	if tokenStorage.ChatGPTUserID != "" {
-		metadata["chatgpt_user_id"] = tokenStorage.ChatGPTUserID
-	}
 
 	fmt.Println("Codex authentication successful")
 	if authBundle.APIKey != "" {
