@@ -85,6 +85,9 @@ func GinLogrusLogger() gin.HandlerFunc {
 			requestID = "--------"
 		}
 		logLine := fmt.Sprintf("%3d | %13v | %15s | %-7s \"%s\"", statusCode, latency, clientIP, method, path)
+		if turnState, ok := codexTurnStateLogFields(c); ok {
+			logLine += fmt.Sprintf(" email=%s session_id=%s turn_id=%s response_turn_state_len=%d", turnState.Email, turnState.SessionID, turnState.TurnID, turnState.ResponseTurnStateLen)
+		}
 		if creditsUsed(c) {
 			logLine += " [credits]"
 		}

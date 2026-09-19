@@ -14,7 +14,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -280,24 +279,25 @@ func (s *CodexTurnState) ObserveEvent(payload []byte) {
 	})
 }
 
-// LogResponse adds only the five agreed fields; existing headers and body logs
-// retain their original contents and formatting.
+// LogResponse attaches the turn-state statistics to the current Gin request.
+// GinLogrusLogger writes them on the same access-log line as the HTTP status.
 func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, websocket bool) {
 	if s == nil {
 		return
 	}
+	ginCtx := ginContextFrom(ctx)
 	requestID := logging.GetRequestID(ctx)
-	log.WithFields(log.Fields{
-		"request_id":              requestID,
-		"email":                   s.email,
-		"session_id":              s.sessionID,
-		"turn_id":                 s.key.turnID,
-		"response_turn_state_len": s.responseLen,
-	}).Info("codex upstream response")
+	if ginCtx != nil {
+		logging.SetCodexTurnStateLogFields(ginCtx, logging.CodexTurnStateLogFields{
+			Email:                s.email,
+			SessionID:            s.sessionID,
+			TurnID:               s.key.turnID,
+			ResponseTurnStateLen: s.responseLen,
+		})
+	}
 	if !requestLogCaptureEnabled(cfg) {
 		return
 	}
-	ginCtx := ginContextFrom(ctx)
 	if ginCtx == nil {
 		return
 	}

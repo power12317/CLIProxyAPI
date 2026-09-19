@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -148,6 +149,54 @@ func TestGinLogrusLoggerAddsRequestIDForCodexBackend(t *testing.T) {
 	}
 	if requestIDFromGin != requestIDFromContext {
 		t.Fatalf("expected Gin request ID %q to match context request ID %q", requestIDFromGin, requestIDFromContext)
+	}
+}
+
+func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logger := log.StandardLogger()
+	previousHooks := logger.ReplaceHooks(make(log.LevelHooks))
+	previousLevel := logger.GetLevel()
+	hook := logtest.NewLocal(logger)
+	logger.SetLevel(log.InfoLevel)
+	t.Cleanup(func() { logger.ReplaceHooks(previousHooks); logger.SetLevel(previousLevel) })
+
+	engine := gin.New()
+	engine.Use(GinLogrusLogger())
+	engine.POST("/v1/responses", func(c *gin.Context) {
+		SetCodexTurnStateLogFields(c, CodexTurnStateLogFields{
+			Email:                "user@example.com",
+			SessionID:            "session-1",
+			TurnID:               "turn-1",
+			ResponseTurnStateLen: 42,
+		})
+		c.Status(http.StatusBadRequest)
+	})
+
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+
+	entries := hook.AllEntries()
+	if len(entries) != 1 {
+		t.Fatalf("log entries = %d, want 1", len(entries))
+	}
+	message := entries[0].Message
+	for _, want := range []string{
+		`POST    "/v1/responses"`,
+		"email=user@example.com",
+		"session_id=session-1",
+		"turn_id=turn-1",
+		"response_turn_state_len=42",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("access log = %q, missing %q", message, want)
+		}
+	}
+	if strings.Contains(message, "codex upstream response") || strings.Contains(message, "codex turn state") {
+		t.Fatalf("unexpected separate turn-state log message in access log = %q", message)
+	}
+	if requestID, ok := entries[0].Data["request_id"].(string); !ok || requestID == "" {
+		t.Fatalf("request_id = %v, want non-empty request ID", entries[0].Data["request_id"])
 	}
 }
 
