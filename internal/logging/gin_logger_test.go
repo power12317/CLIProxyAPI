@@ -168,6 +168,8 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 			AuthFile:             "codex-user-windows.json",
 			SessionID:            "session-1",
 			TurnID:               "turn-1",
+			RequestedModel:       "gpt-6-astra",
+			ResponseModel:        "gpt-5.6-luna",
 			RequestTurnStateLen:  7,
 			ResponseTurnStateLen: 42,
 		})
@@ -184,7 +186,8 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 	message := entries[0].Message
 	for _, want := range []string{
 		`POST    "/v1/responses"`,
-		"{ 42 }",
+		"gpt-6-astra/gpt-5.6-luna",
+		"7/42",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("access log = %q, missing %q", message, want)
@@ -193,8 +196,78 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 	if strings.Contains(message, "codex upstream response") || strings.Contains(message, "codex turn state") {
 		t.Fatalf("unexpected separate turn-state log message in access log = %q", message)
 	}
+	if strings.Contains(message, "{") || strings.Contains(message, "}") {
+		t.Fatalf("access log contains forbidden braces = %q", message)
+	}
 	if requestID, ok := entries[0].Data["request_id"].(string); !ok || requestID == "" {
 		t.Fatalf("request_id = %v, want non-empty request ID", entries[0].Data["request_id"])
+	}
+	if got := entries[0].Data["session_id"]; got != "session" {
+		t.Fatalf("session_id log field = %v, want first identifier segment", got)
+	}
+	if got := entries[0].Data["turn_id"]; got != "turn" {
+		t.Fatalf("turn_id log field = %v, want first identifier segment", got)
+	}
+}
+
+func TestShortCodexIdentifier(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "uuid", in: "01a0b731-53d0-70e2-856a-378239388662", want: "01a0b731"},
+		{name: "short non uuid", in: "session", want: "session"},
+		{name: "long non uuid", in: "abcdefghijk", want: "abcdefgh"},
+		{name: "empty", in: "", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ShortCodexIdentifier(tc.in); got != tc.want {
+				t.Fatalf("ShortCodexIdentifier(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGinLogrusLoggerPrintsBothTurnStateLengths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logger := log.StandardLogger()
+	previousHooks := logger.ReplaceHooks(make(log.LevelHooks))
+	previousLevel := logger.GetLevel()
+	hook := logtest.NewLocal(logger)
+	logger.SetLevel(log.InfoLevel)
+	t.Cleanup(func() { logger.ReplaceHooks(previousHooks); logger.SetLevel(previousLevel) })
+
+	for _, tc := range []struct {
+		name        string
+		requestLen  int
+		responseLen int
+		want        string
+	}{
+		{name: "response only", requestLen: 0, responseLen: 292, want: "0/292"},
+		{name: "both changed", requestLen: 292, responseLen: 312, want: "292/312"},
+		{name: "request only", requestLen: 292, responseLen: 0, want: "292/0"},
+		{name: "request refreshed", requestLen: 312, responseLen: 0, want: "312/0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hook.Reset()
+			engine := gin.New()
+			engine.Use(GinLogrusLogger())
+			engine.POST("/v1/responses", func(c *gin.Context) {
+				SetCodexTurnStateLogFields(c, CodexTurnStateLogFields{
+					RequestedModel:       "gpt-6-astra",
+					ResponseModel:        "gpt-5.6-luna",
+					RequestTurnStateLen:  tc.requestLen,
+					ResponseTurnStateLen: tc.responseLen,
+				})
+				c.Status(http.StatusOK)
+			})
+			engine.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+			entries := hook.AllEntries()
+			if len(entries) != 1 || !strings.Contains(entries[0].Message, tc.want) {
+				t.Fatalf("access log entries = %#v, want length %q", entries, tc.want)
+			}
+		})
 	}
 }
 

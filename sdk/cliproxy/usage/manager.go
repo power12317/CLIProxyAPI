@@ -29,6 +29,7 @@ type Record struct {
 	Alias           string
 	APIKey          string
 	SessionID       string
+	TurnID          string
 	ParentSessionID string
 	AuthID          string
 	AuthIndex       string
@@ -40,6 +41,11 @@ type Record struct {
 	ReasoningEffort string
 	// ServiceTier stores the client-requested service tier.
 	ServiceTier string
+	// System stores the Codex client system when known.
+	System string
+	// RequestTurnStateLen and ResponseTurnStateLen store Codex turn-state sizes.
+	RequestTurnStateLen  int
+	ResponseTurnStateLen int
 	// RequestServiceTier is a deprecated input-only alias retained for existing
 	// plugin callers. It is normalized into ServiceTier and never emitted.
 	RequestServiceTier string

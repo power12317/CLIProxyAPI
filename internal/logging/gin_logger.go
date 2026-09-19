@@ -87,14 +87,11 @@ func GinLogrusLogger() gin.HandlerFunc {
 		entryFields := log.Fields{"request_id": requestID}
 		logLine := fmt.Sprintf("%3d | %13v | %15s | %-7s \"%s\"", statusCode, latency, clientIP, method, path)
 		if turnState, ok := codexTurnStateLogFields(c); ok {
-			turnStateLen := turnState.ResponseTurnStateLen
-			if turnStateLen == 0 {
-				turnStateLen = turnState.RequestTurnStateLen
-			}
-			logLine = fmt.Sprintf("%3d | %13v | { %d } | %15s | %-7s \"%s\"", statusCode, latency, turnStateLen, clientIP, method, path)
+			modelPair := strings.TrimSpace(turnState.RequestedModel) + "/" + strings.TrimSpace(turnState.ResponseModel)
+			logLine = fmt.Sprintf("%3d | %13v | %s | %d/%d | %15s | %-7s \"%s\"", statusCode, latency, modelPair, turnState.RequestTurnStateLen, turnState.ResponseTurnStateLen, clientIP, method, path)
 			entryFields["auth_file"] = turnState.AuthFile
-			entryFields["session_id"] = turnState.SessionID
-			entryFields["turn_id"] = turnState.TurnID
+			entryFields["session_id"] = ShortCodexIdentifier(turnState.SessionID)
+			entryFields["turn_id"] = ShortCodexIdentifier(turnState.TurnID)
 		}
 		if creditsUsed(c) {
 			logLine += " [credits]"

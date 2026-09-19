@@ -41,6 +41,7 @@ type UsageReporter struct {
 	source              string
 	reasoning           string
 	serviceTier         string
+	system              string
 	generate            bool
 	stream              bool
 	requestedAt         time.Time
@@ -119,6 +120,7 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 		authType:        resolveUsageAuthType(auth),
 		reasoning:       usage.ReasoningEffortFromContext(ctx),
 		serviceTier:     usage.ServiceTierFromContext(ctx),
+		system:          resolveCodexClientSystem(provider, auth),
 		generate:        usage.GenerateFromContext(ctx),
 		stream:          usage.StreamFromContext(ctx),
 	}
@@ -128,6 +130,18 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 		reporter.accessTokenHash = authAccessTokenSHA256(auth)
 	}
 	return reporter
+}
+
+func resolveCodexClientSystem(provider string, auth *cliproxyauth.Auth) string {
+	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return ""
+	}
+	if auth != nil && auth.Metadata != nil {
+		if value, ok := auth.Metadata["codex_client_system"].(string); ok && strings.EqualFold(strings.TrimSpace(value), "windows") {
+			return "windows"
+		}
+	}
+	return "mac"
 }
 
 // SetStream records whether the request was executed in streaming mode.
@@ -581,6 +595,16 @@ func (r *UsageReporter) publishAttemptRecord(ctx context.Context, record usage.R
 }
 
 func (r *UsageReporter) publishRecord(ctx context.Context, record usage.Record) {
+	if ginCtx := ginContextFrom(ctx); ginCtx != nil {
+		if fields, ok := internallogging.CodexTurnStateLogFieldsForContext(ginCtx); ok {
+			record.TurnID = fields.TurnID
+			record.RequestTurnStateLen = fields.RequestTurnStateLen
+			record.ResponseTurnStateLen = fields.ResponseTurnStateLen
+			if strings.TrimSpace(record.Model) == strings.TrimSpace(r.model) {
+				internallogging.UpdateCodexTurnStateLogModels(ginCtx, record.Model, record.ResponseModel)
+			}
+		}
+	}
 	record.ResponseHeaders = internallogging.GetResponseHeaders(ctx)
 	usage.PublishRecord(ctx, record)
 }
@@ -616,6 +640,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		APIKey:              r.apiKey,
 		SessionID:           r.sessionID,
 		ParentSessionID:     r.parentSessionID,
+		System:              r.system,
 		AuthID:              r.authID,
 		AuthIndex:           r.authIndex,
 		AccessTokenSHA256:   r.accessTokenFingerprint(),

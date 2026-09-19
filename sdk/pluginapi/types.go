@@ -1412,10 +1412,14 @@ type UsageRecord struct {
 	Model string
 	// Alias is the user-facing model alias when one was used.
 	Alias string
+	// ResponseModel is the model reported by the upstream response.
+	ResponseModel string
 	// APIKey is the client API key identifier when available.
 	APIKey string
 	// SessionID identifies the session when present.
 	SessionID string
+	// TurnID identifies the Codex turn when present.
+	TurnID string
 	// ParentSessionID identifies the parent session in a hierarchy or fork.
 	ParentSessionID string
 	// AuthID identifies the selected credential.
@@ -1430,6 +1434,11 @@ type UsageRecord struct {
 	ReasoningEffort string
 	// ServiceTier records the requested or reported service tier.
 	ServiceTier string
+	// System stores the Codex client system when known.
+	System string
+	// RequestTurnStateLen and ResponseTurnStateLen store Codex turn-state sizes.
+	RequestTurnStateLen  int
+	ResponseTurnStateLen int
 	// Generate reports whether the client requested actual generation.
 	// The host normalizes omitted usage.Record values to true before delivery.
 	Generate bool

@@ -3,6 +3,7 @@ package redisqueue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -66,6 +67,10 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 	responseServiceTier := strings.TrimSpace(record.ResponseServiceTier)
 	responseModel := strings.TrimSpace(record.ResponseModel)
+	turnStateLen := ""
+	if strings.EqualFold(provider, "codex") || record.RequestTurnStateLen > 0 || record.ResponseTurnStateLen > 0 {
+		turnStateLen = fmt.Sprintf("%d/%d", record.RequestTurnStateLen, record.ResponseTurnStateLen)
+	}
 	clientRequestMetadata := internallogging.GetClientRequestMetadata(ctx)
 	sessionID := strings.TrimSpace(record.SessionID)
 	parentSessionID := strings.TrimSpace(record.ParentSessionID)
@@ -123,23 +128,29 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 
 	payload, err := json.Marshal(queuedUsageDetail{
-		requestDetail:       detail,
-		AccountingVersion:   coreusage.TokenAccountingSchemaVersion,
-		TokenBreakdown:      usageDetail.TokenBreakdown,
-		Provider:            provider,
-		ExecutorType:        executorType,
-		Model:               modelName,
-		Alias:               aliasName,
-		Endpoint:            resolveEndpoint(ctx),
-		AuthType:            authType,
-		APIKey:              apiKey,
-		RequestID:           requestID,
-		SessionID:           sessionID,
-		ParentSessionID:     parentSessionID,
-		ReasoningEffort:     reasoningEffort,
-		ServiceTier:         serviceTier,
-		ResponseServiceTier: responseServiceTier,
-		ResponseModel:       responseModel,
+		requestDetail:        detail,
+		AccountingVersion:    coreusage.TokenAccountingSchemaVersion,
+		TokenBreakdown:       usageDetail.TokenBreakdown,
+		Provider:             provider,
+		ExecutorType:         executorType,
+		Model:                modelName,
+		Alias:                aliasName,
+		Endpoint:             resolveEndpoint(ctx),
+		AuthType:             authType,
+		APIKey:               apiKey,
+		RequestID:            requestID,
+		SessionID:            sessionID,
+		TurnID:               strings.TrimSpace(record.TurnID),
+		ParentSessionID:      parentSessionID,
+		ReasoningEffort:      reasoningEffort,
+		ServiceTier:          serviceTier,
+		System:               strings.TrimSpace(record.System),
+		ResponseServiceTier:  responseServiceTier,
+		ResponseModel:        responseModel,
+		ResolvedModel:        responseModel,
+		TurnStateLen:         turnStateLen,
+		RequestTurnStateLen:  record.RequestTurnStateLen,
+		ResponseTurnStateLen: record.ResponseTurnStateLen,
 	})
 	if err != nil {
 		return
@@ -149,22 +160,28 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 
 type queuedUsageDetail struct {
 	requestDetail
-	AccountingVersion   int                      `json:"accounting_version"`
-	TokenBreakdown      coreusage.TokenBreakdown `json:"token_breakdown"`
-	Provider            string                   `json:"provider"`
-	ExecutorType        string                   `json:"executor_type"`
-	Model               string                   `json:"model"`
-	Alias               string                   `json:"alias"`
-	Endpoint            string                   `json:"endpoint"`
-	AuthType            string                   `json:"auth_type"`
-	APIKey              string                   `json:"api_key"`
-	RequestID           string                   `json:"request_id"`
-	SessionID           string                   `json:"session_id,omitempty"`
-	ParentSessionID     string                   `json:"parent_session_id,omitempty"`
-	ReasoningEffort     string                   `json:"reasoning_effort"`
-	ServiceTier         string                   `json:"service_tier"`
-	ResponseServiceTier string                   `json:"response_service_tier,omitempty"`
-	ResponseModel       string                   `json:"response_model,omitempty"`
+	AccountingVersion    int                      `json:"accounting_version"`
+	TokenBreakdown       coreusage.TokenBreakdown `json:"token_breakdown"`
+	Provider             string                   `json:"provider"`
+	ExecutorType         string                   `json:"executor_type"`
+	Model                string                   `json:"model"`
+	Alias                string                   `json:"alias"`
+	Endpoint             string                   `json:"endpoint"`
+	AuthType             string                   `json:"auth_type"`
+	APIKey               string                   `json:"api_key"`
+	RequestID            string                   `json:"request_id"`
+	SessionID            string                   `json:"session_id,omitempty"`
+	TurnID               string                   `json:"turn_id,omitempty"`
+	ParentSessionID      string                   `json:"parent_session_id,omitempty"`
+	ReasoningEffort      string                   `json:"reasoning_effort"`
+	ServiceTier          string                   `json:"service_tier"`
+	System               string                   `json:"system,omitempty"`
+	ResponseServiceTier  string                   `json:"response_service_tier,omitempty"`
+	ResponseModel        string                   `json:"response_model,omitempty"`
+	ResolvedModel        string                   `json:"resolved_model,omitempty"`
+	TurnStateLen         string                   `json:"turn_state_len,omitempty"`
+	RequestTurnStateLen  int                      `json:"request_turn_state_len,omitempty"`
+	ResponseTurnStateLen int                      `json:"response_turn_state_len,omitempty"`
 }
 
 type requestDetail struct {

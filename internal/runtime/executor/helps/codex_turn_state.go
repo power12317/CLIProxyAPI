@@ -52,16 +52,19 @@ func newCodexTurnStateCache(now func() time.Time) *codexTurnStateCache {
 // CodexTurnState captures the final identity of one upstream request. A request
 // retains its bucket so responses in flight cannot resurrect an invalidated auth.
 type CodexTurnState struct {
-	cache       *codexTurnStateCache
-	bucket      *codexTurnStateBucket
-	key         codexTurnStateKey
-	authID      string
-	authFile    string
-	sessionID   string
-	override    string
-	configured  bool
-	requestLen  int
-	responseLen int
+	cache          *codexTurnStateCache
+	bucket         *codexTurnStateBucket
+	key            codexTurnStateKey
+	ctx            context.Context
+	authID         string
+	authFile       string
+	sessionID      string
+	requestedModel string
+	override       string
+	configured     bool
+	requestLen     int
+	responseLen    int
+	fieldsMu       sync.RWMutex
 }
 
 // NewCodexTurnState reads the final outbound headers and uncompressed JSON. It
@@ -71,6 +74,8 @@ func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target stri
 		ctx = context.Background()
 	}
 	state := codexTurnStates.request(auth, target, body, headers)
+	state.ctx = ctx
+	state.requestedModel = strings.TrimSpace(model)
 	// Resolve only explicitly configured values. Inbound headers alone do not
 	// override state returned by ChatGPT; dynamic configured headers still work.
 	if auth != nil {
@@ -93,6 +98,7 @@ func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target stri
 			state.override, state.configured = value, true
 		}
 	}
+	state.updateLogFields()
 	return state
 }
 
@@ -201,7 +207,9 @@ func (s *CodexTurnState) ApplyHeaders(headers http.Header) {
 		return
 	}
 	if existing := codexTurnHeaderValue(headers, codexTurnStateHeader); existing != "" {
+		s.fieldsMu.Lock()
 		s.requestLen = len(existing)
+		s.fieldsMu.Unlock()
 	}
 	value, found := s.cached()
 	if s.configured {
@@ -214,8 +222,11 @@ func (s *CodexTurnState) ApplyHeaders(headers http.Header) {
 			}
 		}
 		headers.Set(codexTurnStateHeader, value)
+		s.fieldsMu.Lock()
 		s.requestLen = len(value)
+		s.fieldsMu.Unlock()
 	}
+	s.updateLogFields()
 }
 
 // ApplyWebsocketBody mirrors state into each frame because a reused websocket
@@ -231,11 +242,14 @@ func (s *CodexTurnState) ApplyWebsocketBody(body []byte) []byte {
 	if !found {
 		return body
 	}
+	s.fieldsMu.Lock()
 	s.requestLen = len(value)
+	s.fieldsMu.Unlock()
 	updated, errSet := sjson.SetBytes(body, "client_metadata.x-codex-turn-state", value)
 	if errSet != nil {
 		return body
 	}
+	s.updateLogFields()
 	return updated
 }
 
@@ -243,7 +257,10 @@ func (s *CodexTurnState) observe(value string) {
 	if s == nil {
 		return
 	}
+	s.fieldsMu.Lock()
 	s.responseLen = len(value)
+	s.fieldsMu.Unlock()
+	s.updateLogFields()
 	if s.bucket == nil || strings.TrimSpace(value) == "" {
 		return
 	}
@@ -261,11 +278,17 @@ func (s *CodexTurnState) ObserveResponse(resp *http.Response) {
 		return
 	}
 	if resp == nil {
+		s.fieldsMu.Lock()
 		s.responseLen = 0
+		s.fieldsMu.Unlock()
+		s.updateLogFields()
 		return
 	}
 	if resp.Request != nil && resp.Request.URL != nil && codexTurnOrigin(resp.Request.URL.String()) != s.key.origin {
+		s.fieldsMu.Lock()
 		s.responseLen = 0
+		s.fieldsMu.Unlock()
+		s.updateLogFields()
 		return
 	}
 	s.observe(codexTurnHeaderValue(resp.Header, codexTurnStateHeader))
@@ -295,23 +318,19 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 	if s == nil {
 		return
 	}
-	ginCtx := ginContextFrom(ctx)
-	if ginCtx != nil {
-		logging.SetCodexTurnStateLogFields(ginCtx, logging.CodexTurnStateLogFields{
-			AuthFile:             s.authFile,
-			SessionID:            s.sessionID,
-			TurnID:               s.key.turnID,
-			RequestTurnStateLen:  s.requestLen,
-			ResponseTurnStateLen: s.responseLen,
-		})
+	if ctx != nil {
+		s.ctx = ctx
 	}
+	s.updateLogFields()
+	ginCtx := ginContextFrom(ctx)
 	if !requestLogCaptureEnabled(cfg) {
 		return
 	}
 	if ginCtx == nil {
 		return
 	}
-	fields := []byte(fmt.Sprintf("\nauth_file: %q\nsession_id: %q\nturn_id: %q\nrequest_turn_state_len: %d\nresponse_turn_state_len: %d\n\n", s.authFile, s.sessionID, s.key.turnID, s.requestLen, s.responseLen))
+	requestLen, responseLen := s.turnStateLengths()
+	fields := []byte(fmt.Sprintf("\nauth_file: %q\nsession_id: %q\nturn_id: %q\nrequest_turn_state_len: %d\nresponse_turn_state_len: %d\n\n", s.authFile, logging.ShortCodexIdentifier(s.sessionID), logging.ShortCodexIdentifier(s.key.turnID), requestLen, responseLen))
 	if websocket {
 		appendAPIWebsocketTimeline(ginCtx, fields)
 		return
@@ -320,6 +339,34 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 	ensureResponseIntro(ginCtx, attempt)
 	writeAttemptResponse(ginCtx, attempt, fields)
 	updateAggregatedResponseIfMemoryBacked(ginCtx, attempts)
+}
+
+func (s *CodexTurnState) turnStateLengths() (int, int) {
+	if s == nil {
+		return 0, 0
+	}
+	s.fieldsMu.RLock()
+	defer s.fieldsMu.RUnlock()
+	return s.requestLen, s.responseLen
+}
+
+func (s *CodexTurnState) updateLogFields() {
+	if s == nil || s.ctx == nil {
+		return
+	}
+	ginCtx := ginContextFrom(s.ctx)
+	if ginCtx == nil {
+		return
+	}
+	requestLen, responseLen := s.turnStateLengths()
+	logging.SetCodexTurnStateLogFields(ginCtx, logging.CodexTurnStateLogFields{
+		AuthFile:             s.authFile,
+		SessionID:            s.sessionID,
+		TurnID:               s.key.turnID,
+		RequestedModel:       s.requestedModel,
+		RequestTurnStateLen:  requestLen,
+		ResponseTurnStateLen: responseLen,
+	})
 }
 
 // InvalidateCodexTurnStates drops state for removed or replaced credentials.

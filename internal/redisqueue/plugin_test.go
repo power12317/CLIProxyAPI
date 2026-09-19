@@ -31,22 +31,26 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 
 		plugin := &usageQueuePlugin{}
 		plugin.HandleUsage(ctx, coreusage.Record{
-			Provider:            "openai",
-			ExecutorType:        "KimiExecutor",
-			Model:               "gpt-5.4",
-			Alias:               "client-gpt",
-			APIKey:              "test-key",
-			AuthIndex:           "0",
-			AccessTokenSHA256:   "token-version-hash",
-			AuthType:            "apikey",
-			Source:              "user@example.com",
-			ReasoningEffort:     "medium",
-			ServiceTier:         "auto",
-			ResponseServiceTier: "default",
-			ResponseModel:       "gpt-5.6-luna",
-			Generate:            coreusage.GenerateFlag(true),
-			RequestedAt:         time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC),
-			Latency:             1500 * time.Millisecond,
+			Provider:             "openai",
+			ExecutorType:         "KimiExecutor",
+			Model:                "gpt-5.4",
+			Alias:                "client-gpt",
+			APIKey:               "test-key",
+			AuthIndex:            "0",
+			AccessTokenSHA256:    "token-version-hash",
+			AuthType:             "apikey",
+			Source:               "user@example.com",
+			ReasoningEffort:      "medium",
+			ServiceTier:          "auto",
+			ResponseServiceTier:  "default",
+			ResponseModel:        "gpt-5.6-luna",
+			TurnID:               "turn-1",
+			System:               "windows",
+			RequestTurnStateLen:  292,
+			ResponseTurnStateLen: 312,
+			Generate:             coreusage.GenerateFlag(true),
+			RequestedAt:          time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC),
+			Latency:              1500 * time.Millisecond,
 			Detail: coreusage.Detail{
 				InputTokens:  10,
 				OutputTokens: 20,
@@ -74,6 +78,12 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireMissingField(t, payload, "request_service_tier")
 		requireStringField(t, payload, "response_service_tier", "default")
 		requireStringField(t, payload, "response_model", "gpt-5.6-luna")
+		requireStringField(t, payload, "resolved_model", "gpt-5.6-luna")
+		requireStringField(t, payload, "turn_id", "turn-1")
+		requireStringField(t, payload, "system", "windows")
+		requireStringField(t, payload, "turn_state_len", "292/312")
+		requireIntField(t, payload, "request_turn_state_len", 292)
+		requireIntField(t, payload, "response_turn_state_len", 312)
 		requireIntField(t, payload, "accounting_version", coreusage.TokenAccountingSchemaVersion)
 		requireTokenBreakdown(t, payload, coreusage.TokenAccountingQualityComplete, 30)
 		requireTokensBoolField(t, payload, "cache_read_tokens_present", true)
