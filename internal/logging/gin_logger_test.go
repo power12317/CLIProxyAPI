@@ -165,9 +165,10 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 	engine.Use(GinLogrusLogger())
 	engine.POST("/v1/responses", func(c *gin.Context) {
 		SetCodexTurnStateLogFields(c, CodexTurnStateLogFields{
-			Email:                "user@example.com",
+			AuthFile:             "codex-user-windows.json",
 			SessionID:            "session-1",
 			TurnID:               "turn-1",
+			RequestTurnStateLen:  7,
 			ResponseTurnStateLen: 42,
 		})
 		c.Status(http.StatusBadRequest)
@@ -183,10 +184,7 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 	message := entries[0].Message
 	for _, want := range []string{
 		`POST    "/v1/responses"`,
-		"email=user@example.com",
-		"session_id=session-1",
-		"turn_id=turn-1",
-		"response_turn_state_len=42",
+		"{ 42 }",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("access log = %q, missing %q", message, want)

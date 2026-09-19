@@ -107,11 +107,18 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 		}
 	}
 
+	prefix := fmt.Sprintf("[%s] [%s]", timestamp, reqID)
+	for _, key := range []string{"auth_file", "session_id", "turn_id"} {
+		if value, ok := entry.Data[key].(string); ok && strings.TrimSpace(value) != "" {
+			prefix += fmt.Sprintf(" [%s]", value)
+		}
+	}
+
 	var formatted string
 	if entry.Caller != nil {
-		formatted = fmt.Sprintf("[%s] [%s] [%s] [%s:%d] %s%s\n", timestamp, reqID, levelStr, filepath.Base(entry.Caller.File), entry.Caller.Line, message, fieldsStr)
+		formatted = fmt.Sprintf("%s [%s] [%s:%d] %s%s\n", prefix, levelStr, filepath.Base(entry.Caller.File), entry.Caller.Line, message, fieldsStr)
 	} else {
-		formatted = fmt.Sprintf("[%s] [%s] [%s] %s%s\n", timestamp, reqID, levelStr, message, fieldsStr)
+		formatted = fmt.Sprintf("%s [%s] %s%s\n", prefix, levelStr, message, fieldsStr)
 	}
 	buffer.WriteString(formatted)
 

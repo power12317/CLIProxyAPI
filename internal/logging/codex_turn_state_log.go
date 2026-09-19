@@ -8,9 +8,10 @@ const codexTurnStateLogKey = "__codex_turn_state_log__"
 // for a Codex request. The request ID remains in the access log's standard ID
 // column.
 type CodexTurnStateLogFields struct {
-	Email                string
+	AuthFile             string
 	SessionID            string
 	TurnID               string
+	RequestTurnStateLen  int
 	ResponseTurnStateLen int
 }
 

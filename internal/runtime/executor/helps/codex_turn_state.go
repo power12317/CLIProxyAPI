@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -55,10 +56,11 @@ type CodexTurnState struct {
 	bucket      *codexTurnStateBucket
 	key         codexTurnStateKey
 	authID      string
-	email       string
+	authFile    string
 	sessionID   string
 	override    string
 	configured  bool
+	requestLen  int
 	responseLen int
 }
 
@@ -111,7 +113,10 @@ func (c *codexTurnStateCache) request(auth *cliproxyauth.Auth, target string, bo
 	}
 	if auth != nil {
 		state.authID = auth.ID
-		state.email, _ = auth.Metadata["email"].(string)
+		state.authFile = filepath.Base(strings.TrimSpace(auth.FileName))
+		if state.authFile == "." || state.authFile == "" {
+			state.authFile = filepath.Base(strings.TrimSpace(auth.ID))
+		}
 		state.key.accountID, _ = auth.Metadata["account_id"].(string)
 	}
 	if state.authID != "" && state.key.turnID != "" && state.key.origin != "" {
@@ -195,6 +200,9 @@ func (s *CodexTurnState) ApplyHeaders(headers http.Header) {
 	if s == nil || headers == nil || s.key.turnID == "" {
 		return
 	}
+	if existing := codexTurnHeaderValue(headers, codexTurnStateHeader); existing != "" {
+		s.requestLen = len(existing)
+	}
 	value, found := s.cached()
 	if s.configured {
 		value, found = s.override, true
@@ -206,6 +214,7 @@ func (s *CodexTurnState) ApplyHeaders(headers http.Header) {
 			}
 		}
 		headers.Set(codexTurnStateHeader, value)
+		s.requestLen = len(value)
 	}
 }
 
@@ -222,6 +231,7 @@ func (s *CodexTurnState) ApplyWebsocketBody(body []byte) []byte {
 	if !found {
 		return body
 	}
+	s.requestLen = len(value)
 	updated, errSet := sjson.SetBytes(body, "client_metadata.x-codex-turn-state", value)
 	if errSet != nil {
 		return body
@@ -286,12 +296,12 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 		return
 	}
 	ginCtx := ginContextFrom(ctx)
-	requestID := logging.GetRequestID(ctx)
 	if ginCtx != nil {
 		logging.SetCodexTurnStateLogFields(ginCtx, logging.CodexTurnStateLogFields{
-			Email:                s.email,
+			AuthFile:             s.authFile,
 			SessionID:            s.sessionID,
 			TurnID:               s.key.turnID,
+			RequestTurnStateLen:  s.requestLen,
 			ResponseTurnStateLen: s.responseLen,
 		})
 	}
@@ -301,7 +311,7 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 	if ginCtx == nil {
 		return
 	}
-	fields := []byte(fmt.Sprintf("\nrequest_id: %q\nemail: %q\nsession_id: %q\nturn_id: %q\nresponse_turn_state_len: %d\n\n", requestID, s.email, s.sessionID, s.key.turnID, s.responseLen))
+	fields := []byte(fmt.Sprintf("\nauth_file: %q\nsession_id: %q\nturn_id: %q\nrequest_turn_state_len: %d\nresponse_turn_state_len: %d\n\n", s.authFile, s.sessionID, s.key.turnID, s.requestLen, s.responseLen))
 	if websocket {
 		appendAPIWebsocketTimeline(ginCtx, fields)
 		return

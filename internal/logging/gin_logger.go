@@ -84,9 +84,17 @@ func GinLogrusLogger() gin.HandlerFunc {
 		if requestID == "" {
 			requestID = "--------"
 		}
+		entryFields := log.Fields{"request_id": requestID}
 		logLine := fmt.Sprintf("%3d | %13v | %15s | %-7s \"%s\"", statusCode, latency, clientIP, method, path)
 		if turnState, ok := codexTurnStateLogFields(c); ok {
-			logLine += fmt.Sprintf(" email=%s session_id=%s turn_id=%s response_turn_state_len=%d", turnState.Email, turnState.SessionID, turnState.TurnID, turnState.ResponseTurnStateLen)
+			turnStateLen := turnState.ResponseTurnStateLen
+			if turnStateLen == 0 {
+				turnStateLen = turnState.RequestTurnStateLen
+			}
+			logLine = fmt.Sprintf("%3d | %13v | { %d } | %15s | %-7s \"%s\"", statusCode, latency, turnStateLen, clientIP, method, path)
+			entryFields["auth_file"] = turnState.AuthFile
+			entryFields["session_id"] = turnState.SessionID
+			entryFields["turn_id"] = turnState.TurnID
 		}
 		if creditsUsed(c) {
 			logLine += " [credits]"
@@ -95,7 +103,7 @@ func GinLogrusLogger() gin.HandlerFunc {
 			logLine = logLine + " | " + errorMessage
 		}
 
-		entry := log.WithField("request_id", requestID)
+		entry := log.WithFields(entryFields)
 
 		switch {
 		case statusCode >= http.StatusInternalServerError:

@@ -122,3 +122,27 @@ func TestLogFormatterOmitsGenericPathField(t *testing.T) {
 		}
 	}
 }
+
+func TestLogFormatterPrintsCodexCredentialAndTurnIdentityPrefix(t *testing.T) {
+	entry := log.NewEntry(log.New())
+	entry.Time = time.Date(2026, 9, 19, 20, 58, 48, 0, time.Local)
+	entry.Level = log.InfoLevel
+	entry.Message = `200 |       19.892s | { 42 } |      172.20.0.1 | POST    "/v1/responses"`
+	entry.Data["request_id"] = "2edd80ee"
+	entry.Data["auth_file"] = "codex-user-windows.json"
+	entry.Data["session_id"] = "session-1"
+	entry.Data["turn_id"] = "turn-1"
+
+	formatted, errFormat := (&LogFormatter{}).Format(entry)
+	if errFormat != nil {
+		t.Fatalf("Format() error = %v", errFormat)
+	}
+	got := string(formatted)
+	wantPrefix := "[2edd80ee] [codex-user-windows.json] [session-1] [turn-1] [info ]"
+	if !strings.Contains(got, wantPrefix) {
+		t.Fatalf("formatted line %q missing prefix %q", got, wantPrefix)
+	}
+	if !strings.Contains(got, "{ 42 }") {
+		t.Fatalf("formatted line %q missing selected turn-state length", got)
+	}
+}
