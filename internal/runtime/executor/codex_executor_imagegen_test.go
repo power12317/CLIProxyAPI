@@ -58,6 +58,70 @@ func TestCodexExecutorExecuteResponsesLiteHeaderDoesNotInjectImageGenerationTool
 	}
 }
 
+func TestCodexOfficialRequestReconstructsMissingLiteHeaderFromTools(t *testing.T) {
+	var gotHeaders http.Header
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n"))
+	}))
+	defer server.Close()
+
+	executor := NewCodexExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
+	payload := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"tools":[{"type":"function","name":"exec","parameters":{}}]}`)
+	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{Model: "gpt-5.6-sol", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := gotHeaders.Get(codexResponsesLiteHeader); got != "true" {
+		t.Fatalf("Lite header = %q, want true", got)
+	}
+	if got := gjson.GetBytes(gotBody, "tools.0.type").String(); got != "function" {
+		t.Fatalf("tool type = %q, want function; body=%s", got, gotBody)
+	}
+}
+
+func TestCodexOfficialRequestDoesNotInjectImageToolWhenEnabled(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"input":[]}`)
+	got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", true)
+	if gjson.GetBytes(got, "tools").Exists() {
+		t.Fatalf("official Codex request gained tools: %s", got)
+	}
+}
+
+func TestDisableImageGenerationRemovesLiteAdditionalTool(t *testing.T) {
+	body := []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"image_generation"},{"type":"function","name":"exec"}]}],"tool_choice":{"type":"image_generation"}}`)
+	got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}}, nil, "/v1/responses", true)
+	if gjson.GetBytes(got, "input.0.tools.0.type").String() != "function" {
+		t.Fatalf("remaining tool = %s, want function; body=%s", gjson.GetBytes(got, "input.0.tools.0.type").Raw, got)
+	}
+	if gjson.GetBytes(got, "tool_choice").Exists() {
+		t.Fatalf("image tool choice was not removed: %s", got)
+	}
+}
+
+func TestCodexLiteHeaderIsPreservedWhenToolShapeIsNotLite(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set(codexResponsesLiteHeader, "true")
+	body := []byte(`{"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"tools":[{"type":"image_generation"}]}`)
+	ensureCodexResponsesLiteHeader(headers, body, true)
+	if got := headers.Get(codexResponsesLiteHeader); got != "true" {
+		t.Fatalf("Lite header = %q, want existing true header preserved", got)
+	}
+}
+
+func TestPassthroughImageGenerationPolicyKeepsPayload(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"image_generation"}],"tool_choice":{"type":"image_generation"}}`)
+	cfg := &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationPassthrough}}
+	got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, cfg, nil, "/v1/responses", true)
+	if string(got) != string(body) {
+		t.Fatalf("passthrough changed body: got %s want %s", got, body)
+	}
+}
+
 func TestCodexExecutorExecuteStreamResponsesLiteHeaderForcesParallelToolCallsFalse(t *testing.T) {
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

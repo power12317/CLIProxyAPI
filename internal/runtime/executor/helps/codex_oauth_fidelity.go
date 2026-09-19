@@ -182,7 +182,6 @@ func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, mo
 	headers.Set("User-Agent", ua)
 	headers.Set("Version", "0.154.0")
 	headers.Set("X-Codex-Beta-Features", beta)
-	headers.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
 	headers.Set("X-Codex-Routing-Hint", "model="+strings.TrimSpace(model))
 	headers.Set("X-Codex-Window-Id", identity.WindowID)
 	headers.Set("X-Codex-Turn-Metadata", identity.TurnMetadataJSON)

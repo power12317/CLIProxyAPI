@@ -493,8 +493,9 @@ func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth
 	return body
 }
 
-func normalizeCodexParallelToolCalls(body []byte, headers http.Header) []byte {
-	if util.IsCodexResponsesLiteRequest(body, headers) {
+func normalizeCodexParallelToolCalls(body []byte, headers http.Header, official ...bool) []byte {
+	isOfficial := len(official) > 0 && official[0]
+	if codexResponsesLiteBodyMode(body, isOfficial, headers) {
 		body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
 		return body
 	}

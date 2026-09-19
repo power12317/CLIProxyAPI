@@ -16,5 +16,8 @@ func IsNativeCodexRequest(body []byte, opts cliproxyexecutor.Options) bool {
 			return false
 		}
 	}
+	if IsOfficialCodexRequest(body) {
+		return true
+	}
 	return util.IsCodexResponsesLiteRequest(body, opts.Headers)
 }
