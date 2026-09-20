@@ -1,9 +1,10 @@
 # Codex `x-codex-turn-state` 门票
 
 CLIProxyAPI 可以主动获取 ChatGPT Codex OAuth 账号使用的、有效期约一小时的
-`x-codex-turn-state` 值。此功能默认关闭。启用后，后台 harvester 会通过
-`codex.turn-state-ticket.harvest-proxy-url`，为每个处于活动状态的 Codex OAuth
-凭据和配置模型发送探测请求。正常业务请求仍然使用每个账号自身配置的代理。
+`x-codex-turn-state` 值。此功能默认关闭。启用后，后台 harvester 会为每个处于活动状态的
+Codex OAuth 凭据和配置模型发送探测请求。配置了
+`codex.turn-state-ticket.harvest-proxy-url` 时使用该代理；留空时直接请求。正常业务请求仍然
+使用每个账号自身配置的代理。
 
 ## 配置示例
 
@@ -28,8 +29,8 @@ codex:
 - 门票目标长度不再由全局配置决定，而是按账号属性严格选择：Personal（`free`、`plus`、`pro`）使用 `292`，Team/Business（`team`、`business`）使用 `332`。未知属性按 Personal 的 `292` 处理。
 - `ttl-seconds`：门票在本地保存的有效期，默认是 `3600` 秒。
 - `refresh-before-seconds`：距离过期少于此秒数时重新探测，默认是 `600` 秒。
-- `harvest-proxy-url`：专门用于获取门票的 HTTP、HTTPS、SOCKS5 或 SOCKS5H 代理。
-  业务请求不会改用这个代理。
+- `harvest-proxy-url`：可选的门票获取代理，支持 HTTP、HTTPS、SOCKS5 或 SOCKS5H。
+  留空时直接探测；业务请求不会改用这个代理。
 - `probe-interval-seconds`：两轮后台探测之间的间隔，默认是 `6` 秒。
 - `attempt-timeout-seconds`：单次探测的最长时间，默认是 `25` 秒。
 - `fail-closed`：没有有效门票时是否阻断对应模型请求。默认是 `true`。
@@ -50,8 +51,11 @@ codex:
 过期时间和长度。后台 harvester 会跳过仍然有效且没有进入续期窗口的门票；进入续期
 窗口后才会重新探测。
 
-探测失败不会删除上一张仍然有效的门票。这样可以避免一次临时的网络问题立即影响
-正常请求。没有门票时，系统会继续在下一轮探测中重试。
+正常 Codex 请求返回目标长度的门票时，系统会直接按账号和模型保存并复用这个值：Personal
+保存 292，Team/Business 保存 332。它会一直复用到距离本地过期少于 10 分钟，或者 Personal
+主动门票请求收到 312 值而被立即失效。返回其他长度的响应不会提升为主动门票，当前 turn
+仍沿用原有按 `turn_id` 的被动缓存；只有后续探测或正常响应再次拿到目标长度，才会持久替换。
+探测失败不会删除上一张仍然有效的门票。没有有效门票时，后台会继续按探测间隔重试。
 
 ## `fail-closed` 行为
 
@@ -59,11 +63,10 @@ codex:
 当前选中的账号没有门票，executor 会返回可重试的“门票不可用”错误，账号调度器可以
 继续尝试其他符合条件的凭据。
 
-当 `fail-closed: false` 时，没有门票的请求仍然会继续发送。此时系统不会主动注入
-门票；对于已经配置主动门票的模型，请求会同时绕过旧的按 `turn_id` 缓存，因此新的
-`turn_id` 不会选择另一个 turn-state 值。只要获取到符合账号属性的有效门票（Personal 为 292，Team/Business 为 332），即使
-`fail-closed` 是 `false`，也仍然会强制使用这张门票替换请求中的 turn-state。没有有效
-门票时，该模型会在不携带 turn-state 的情况下继续发送请求。
+当 `fail-closed: false` 时，没有有效主动门票的请求仍然会继续发送，并沿用当前请求已有的
+按 `turn_id` 被动缓存。只要获取到符合账号属性的有效门票（Personal 为 292，Team/Business
+为 332），即使 `fail-closed` 是 `false`，也仍然会强制使用这张门票替换请求中的 turn-state，
+并独立于 `turn_id` 持续复用。没有有效门票时不会把非目标长度的响应持久化成主动门票。
 
 如果 ChatGPT 在有效的 Personal 292 门票请求后返回长度为 312 的 `x-codex-turn-state`，CPA
 会立即让对应账号和模型的门票失效，删除本地持久化值，并启动一次新的主动探测。下
@@ -121,9 +124,9 @@ client_metadata.x-codex-turn-state
 这样同一条复用连接上的后续请求也能携带正确的门票。`responses/compact` 同样使用
 相同的账号、模型和有效期规则。
 
-系统原有的被动 turn-state 缓存仍然保留。没有配置主动门票的模型，以及主动门票关闭
-时的兼容请求，继续按照原有响应观察和回放流程处理。配置了主动门票的模型则完全
-按照“账号 + 模型”的门票处理，不再根据 `turn_id` 选择门票。
+系统原有的被动 turn-state 缓存仍然保留。没有配置主动门票的模型，以及尚未获得目标长度
+门票时的请求，继续按照原有响应观察和回放流程处理。配置了有效主动门票的模型则按照
+“账号 + 模型”的门票处理，后续请求不再根据 `turn_id` 选择另一个主动门票值。
 
 ## 前端管理位置
 

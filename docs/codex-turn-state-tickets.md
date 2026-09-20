@@ -4,9 +4,10 @@
 
 CLIProxyAPI can proactively obtain the one-hour `x-codex-turn-state` value used by
 ChatGPT Codex OAuth accounts. The feature is disabled by default. When enabled,
-the harvester probes each active Codex OAuth credential and configured model
-through `codex.turn-state-ticket.harvest-proxy-url`. Normal business requests
-continue to use the credential's own proxy.
+the harvester probes each active Codex OAuth credential and configured model.
+When `codex.turn-state-ticket.harvest-proxy-url` is configured it is used for
+the probe; when empty, the probe uses the direct transport. Normal business
+requests continue to use the credential's own proxy.
 
 ```yaml
 codex:
@@ -27,12 +28,17 @@ seconds. A failed probe leaves the previous valid ticket untouched.
 
 When `fail-closed` is true, a configured model is not sent upstream without a
 valid ticket. The request returns a retryable executor error so the auth manager
-can try another credential. When it is false, the request proceeds without the
-proactive header. A valid account-specific ticket (292 for Personal, 332 for
-Team/Business) still always replaces the request's turn-state value, and a
-configured model bypasses the older turn-id cache so a new `turn_id` cannot
-select a different value. When fail-open has no valid
-ticket, the request proceeds without a turn-state value for that model.
+can try another credential. When it is false, the request proceeds using the
+existing turn-id-scoped passive cache until a target-length ticket is observed.
+A valid account-specific ticket (292 for Personal, 332 for Team/Business) still
+always replaces the request's turn-state value, and then remains authoritative
+independently of `turn_id`.
+
+Normal responses with the account's target length are stored immediately as the
+account/model ticket and reused. Other response lengths, including 312, are not
+promoted to the proactive ticket; the current turn continues to use the existing
+passive cache. A Personal 312 response invalidates an active 292 ticket and
+starts a fresh probe.
 
 If ChatGPT returns a 312-byte `x-codex-turn-state` while a valid Personal 292 ticket is
 active, CPA immediately invalidates and removes that account/model ticket and
