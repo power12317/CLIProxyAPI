@@ -253,6 +253,30 @@ func TestCodexExecutorCacheHelper_IdentityConfuseRemapsBodyAndHeaders(t *testing
 	}
 }
 
+func TestCodexIdentityConfusePreservesInstallationWhenDeviceConvergenceDisabled(t *testing.T) {
+	disabled := false
+	cfg := &config.Config{
+		Routing: config.RoutingConfig{Strategy: "fill-first"},
+		Codex: config.CodexConfig{
+			IdentityConfuse:   true,
+			DeviceConvergence: &disabled,
+		},
+	}
+	auth := &cliproxyauth.Auth{ID: "auth-device-pass-through", Provider: "codex"}
+	clientBody := []byte(`{"prompt_cache_key":"cache-1","client_metadata":{"x-codex-installation-id":"install-original"}}`)
+
+	updated, state := applyCodexIdentityConfuseBody(cfg, auth, clientBody, clientBody)
+	if !state.enabled {
+		t.Fatal("identity confuse should remain enabled for non-device identifiers")
+	}
+	if got := gjson.GetBytes(updated, "prompt_cache_key").String(); got == "cache-1" {
+		t.Fatal("prompt_cache_key was not confused")
+	}
+	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != "install-original" {
+		t.Fatalf("installation identity = %q, want pass-through", got)
+	}
+}
+
 func TestApplyCodexHeadersUsesAccountHeaderForOAuth(t *testing.T) {
 	httpReq := httptest.NewRequest("POST", "https://example.com/responses", nil)
 	auth := &cliproxyauth.Auth{

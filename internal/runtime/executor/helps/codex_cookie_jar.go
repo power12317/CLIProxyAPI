@@ -179,16 +179,22 @@ func CodexOAuthUserAgent(auth *cliproxyauth.Auth) string {
 			}
 		}
 	}
-	system := "mac"
-	if auth != nil && auth.Metadata != nil {
-		if value, ok := auth.Metadata["codex_client_system"].(string); ok && strings.EqualFold(strings.TrimSpace(value), "windows") {
-			system = "windows"
-		}
-	}
+	system := CodexOAuthClientSystem(auth)
 	if system == "windows" {
 		return "codex-tui/0.154.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.154.0)"
 	}
 	return "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.154.0)"
+}
+
+// CodexOAuthClientSystem returns the system assigned to an OAuth credential.
+// Missing or legacy metadata is intentionally treated as macOS.
+func CodexOAuthClientSystem(auth *cliproxyauth.Auth) string {
+	if auth != nil && auth.Metadata != nil {
+		if value, ok := auth.Metadata["codex_client_system"].(string); ok && strings.EqualFold(strings.TrimSpace(value), "windows") {
+			return "windows"
+		}
+	}
+	return "mac"
 }
 
 // IsCodexChatGPTUsageURL reports whether rawURL targets the first-party usage endpoint.

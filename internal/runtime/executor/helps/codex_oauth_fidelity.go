@@ -39,7 +39,7 @@ func IsOfficialCodexRequest(body []byte) bool {
 
 // ApplyCodexOAuthFidelity reconstructs the official Codex OAuth body. It is
 // only called after IsOfficialCodexRequest succeeds.
-func ApplyCodexOAuthFidelity(body []byte, accountID string) ([]byte, CodexOAuthIdentity, bool) {
+func ApplyCodexOAuthFidelity(body []byte, accountID, credentialSystem string, deviceConvergence bool) ([]byte, CodexOAuthIdentity, bool) {
 	identity := CodexOAuthIdentity{}
 	var document map[string]any
 	if errUnmarshal := json.Unmarshal(body, &document); errUnmarshal != nil || document == nil {
@@ -54,7 +54,10 @@ func ApplyCodexOAuthFidelity(body []byte, accountID string) ([]byte, CodexOAuthI
 		turnMetadata = make(map[string]any)
 	}
 
-	identity.System = detectCodexSystem(document, turnMetadata)
+	identity.System = normalizeCodexSystem(credentialSystem)
+	if strings.TrimSpace(credentialSystem) == "" {
+		identity.System = detectCodexSystem(document, turnMetadata)
+	}
 	identity.SessionID = firstString(
 		stringValue(document["prompt_cache_key"]),
 		stringValue(clientMetadata["session_id"]),
@@ -70,18 +73,29 @@ func ApplyCodexOAuthFidelity(body []byte, accountID string) ([]byte, CodexOAuthI
 	}
 	identity.WindowID = firstString(stringValue(clientMetadata["x-codex-window-id"]), stringValue(turnMetadata["window_id"]), identity.SessionID+":0")
 	identity.ClientRequestID = identity.SessionID
-	identity.InstallationID = codexInstallationUUID(accountID, identity.System)
+	if deviceConvergence {
+		identity.InstallationID = codexInstallationUUID(accountID, identity.System)
+	} else {
+		identity.InstallationID = firstString(
+			stringValue(clientMetadata["x-codex-installation-id"]),
+			stringValue(turnMetadata["installation_id"]),
+		)
+	}
 
 	clientMetadata["session_id"] = identity.SessionID
 	clientMetadata["thread_id"] = identity.ThreadID
 	clientMetadata["turn_id"] = identity.TurnID
 	clientMetadata["x-codex-window-id"] = identity.WindowID
-	clientMetadata["x-codex-installation-id"] = identity.InstallationID
+	if deviceConvergence {
+		clientMetadata["x-codex-installation-id"] = identity.InstallationID
+	}
 	turnMetadata["session_id"] = identity.SessionID
 	turnMetadata["thread_id"] = identity.ThreadID
 	turnMetadata["turn_id"] = identity.TurnID
 	turnMetadata["window_id"] = identity.WindowID
-	turnMetadata["installation_id"] = identity.InstallationID
+	if deviceConvergence {
+		turnMetadata["installation_id"] = identity.InstallationID
+	}
 	rewriteTimezoneMetadata(turnMetadata)
 	rewriteTimezoneMetadata(clientMetadata)
 	clientMetadata["x-codex-turn-metadata"] = turnMetadata
@@ -106,7 +120,10 @@ func ApplyCodexOAuthFidelity(body []byte, accountID string) ([]byte, CodexOAuthI
 // ApplyCodexInstallationIdentity fixes an installation identity whenever the
 // request already carries one, including generic compatibility requests. It
 // does not add an installation marker to requests that did not have one.
-func ApplyCodexInstallationIdentity(body []byte, accountID string) ([]byte, string, string, bool) {
+func ApplyCodexInstallationIdentity(body []byte, accountID, credentialSystem string, deviceConvergence bool) ([]byte, string, string, bool) {
+	if !deviceConvergence {
+		return body, "", "", false
+	}
 	var document map[string]any
 	if errUnmarshal := json.Unmarshal(body, &document); errUnmarshal != nil || document == nil {
 		return body, "", "", false
@@ -124,7 +141,10 @@ func ApplyCodexInstallationIdentity(body []byte, accountID string) ([]byte, stri
 	if outerInstallation == "" && nestedInstallation == "" {
 		return body, "", "", false
 	}
-	system := detectCodexSystem(document, turnMetadata)
+	system := normalizeCodexSystem(credentialSystem)
+	if strings.TrimSpace(credentialSystem) == "" {
+		system = detectCodexSystem(document, turnMetadata)
+	}
 	installationID := codexInstallationUUID(accountID, system)
 	clientMetadata["x-codex-installation-id"] = installationID
 	turnJSON := ""
@@ -199,6 +219,13 @@ func codexInstallationUUID(accountID, system string) string {
 	sum := md5.Sum([]byte(strings.TrimSpace(accountID) + ":" + strings.ToLower(strings.TrimSpace(system))))
 	hexValue := hex.EncodeToString(sum[:])
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hexValue[:8], hexValue[8:12], hexValue[12:16], hexValue[16:20], hexValue[20:])
+}
+
+func normalizeCodexSystem(system string) string {
+	if strings.EqualFold(strings.TrimSpace(system), "windows") {
+		return "windows"
+	}
+	return "mac"
 }
 
 func detectCodexSystem(document map[string]any, turnMetadata map[string]any) string {

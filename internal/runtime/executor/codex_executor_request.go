@@ -170,7 +170,7 @@ func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, 
 		state.promptCacheKey = codexIdentityConfuseUUID(auth.ID, "prompt-cache", promptCacheKey)
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", state.promptCacheKey)
 	}
-	if installationID := strings.TrimSpace(gjson.GetBytes(userPayload, "client_metadata.x-codex-installation-id").String()); installationID != "" {
+	if installationID := strings.TrimSpace(gjson.GetBytes(userPayload, "client_metadata.x-codex-installation-id").String()); installationID != "" && codexDeviceConvergenceEnabled(cfg) {
 		rawJSON, _ = sjson.SetBytes(rawJSON, "client_metadata.x-codex-installation-id", codexIdentityConfuseUUID(auth.ID, "installation", installationID))
 	}
 	if turnMetadata := strings.TrimSpace(gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").String()); turnMetadata != "" {
@@ -274,6 +274,17 @@ func codexIdentityConfuseEnabled(cfg *config.Config) bool {
 	}
 	strategy := strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy))
 	return cfg.Routing.SessionAffinity || strategy == "fill-first" || strategy == "fillfirst" || strategy == "ff"
+}
+
+func codexDeviceConvergenceEnabled(cfg *config.Config) bool {
+	return cfg == nil || cfg.Codex.DeviceConvergenceEnabled()
+}
+
+func codexInstallationCredentialSystem(auth *cliproxyauth.Auth) string {
+	if !helps.CodexAuthUsesOAuthCookieJar(auth) {
+		return ""
+	}
+	return helps.CodexOAuthClientSystem(auth)
 }
 
 func codexIdentityConfuseUUID(authID string, kind string, value string) string {

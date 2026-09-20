@@ -85,7 +85,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	officialOAuthRequest := false
 	var fixedInstallationID string
 	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
-		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth))
+		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 		if officialOAuthRequest && codexResponsesLiteModelEnabled(baseModel) {
 			body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
 		}
@@ -100,7 +100,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	turnStateBody := upstreamBody
 	if !officialOAuthRequest {
-		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth))
+		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 		replaceCodexRequestBody(httpReq, upstreamBody)
 	} else {
 		encodedBody, errEncode := helps.EncodeCodexOAuthBody(upstreamBody)

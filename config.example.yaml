@@ -264,8 +264,13 @@ routing:
 
 # Codex provider behavior.
 codex:
+  # When true (default), replace Codex installation identity with a stable UUID derived
+  # from the selected OAuth account and credential system. Set false to preserve the
+  # installation identity supplied by the client without adding a missing value.
+  device-convergence: true
   # When true, and routing.strategy is fill-first or routing.session-affinity is true,
-  # remap Codex prompt_cache_key and installation identity per selected auth.
+  # remap Codex prompt_cache_key and turn identity per selected auth. Installation
+  # identity is also remapped only while device-convergence remains enabled.
   # Some superstitious users believe request tracking identifiers can be used
   # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
   identity-confuse: false

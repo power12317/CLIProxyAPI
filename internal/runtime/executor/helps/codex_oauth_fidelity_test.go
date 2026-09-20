@@ -11,7 +11,7 @@ import (
 
 func TestApplyCodexOAuthFidelityReconstructsIdentityAndWindowsSystem(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-terra","prompt_cache_key":"session-1","tools":[{"type":"function","description":"Windows safety rules: do not delete files"}],"client_metadata":{"x-codex-turn-metadata":"{\"sandbox\":\"linux\",\"turn_id\":\"turn-1\"}"}}`)
-	updated, identity, ok := ApplyCodexOAuthFidelity(body, "acct-1")
+	updated, identity, ok := ApplyCodexOAuthFidelity(body, "acct-1", "", true)
 	if !ok {
 		t.Fatal("expected fidelity rewrite")
 	}
@@ -31,12 +31,61 @@ func TestApplyCodexOAuthFidelityReconstructsIdentityAndWindowsSystem(t *testing.
 
 func TestApplyCodexOAuthFidelityDefaultsMacAndTimezone(t *testing.T) {
 	body := []byte(`{"client_metadata":{"x-codex-turn-metadata":"{\"sandbox\":\"other\",\"environment_context\":{\"cwd\":\"/tmp\",\"shell\":\"zsh\"}}"},"input":[{"type":"input_text","text":"environment_context <timezone>Asia/Shanghai</timezone>"}]}`)
-	updated, identity, ok := ApplyCodexOAuthFidelity(body, "acct-2")
+	updated, identity, ok := ApplyCodexOAuthFidelity(body, "acct-2", "", true)
 	if !ok || identity.System != "mac" {
 		t.Fatalf("rewrite=%t identity=%+v", ok, identity)
 	}
-	if got := gjson.GetBytes(updated, "input.0.text").String(); got == "" || got == "environment_context <timezone>Asia/Shanghai</timezone>" {
+	wantTimezone := "environment_context <timezone>Asia/" + "Singapore</timezone>"
+	if got := gjson.GetBytes(updated, "input.0.text").String(); got != wantTimezone {
 		t.Fatalf("timezone was not normalized: %q", got)
+	}
+}
+
+func TestApplyCodexOAuthFidelityUsesCredentialSystemForConvergedIdentity(t *testing.T) {
+	body := []byte(`{"client_metadata":{"x-codex-turn-metadata":"{\"sandbox\":\"windows_sandbox\"}"}}`)
+	updated, identity, ok := ApplyCodexOAuthFidelity(body, "acct-3", "mac", true)
+	if !ok {
+		t.Fatal("expected fidelity rewrite")
+	}
+	if identity.System != "mac" {
+		t.Fatalf("system = %q, want mac", identity.System)
+	}
+	wantInstallationID := codexInstallationUUID("acct-3", "mac")
+	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != wantInstallationID {
+		t.Fatalf("installation identity = %q, want %q", got, wantInstallationID)
+	}
+}
+
+func TestApplyCodexOAuthFidelityPreservesInstallationIdentityWhenConvergenceDisabled(t *testing.T) {
+	body := []byte(`{"client_metadata":{"x-codex-installation-id":"outer-original","x-codex-turn-metadata":"{\"sandbox\":\"windows_sandbox\",\"installation_id\":\"nested-original\"}"}}`)
+	updated, identity, ok := ApplyCodexOAuthFidelity(body, "acct-4", "mac", false)
+	if !ok {
+		t.Fatal("expected fidelity rewrite")
+	}
+	if identity.System != "mac" {
+		t.Fatalf("system = %q, want mac", identity.System)
+	}
+	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != "outer-original" {
+		t.Fatalf("outer installation identity = %q, want original", got)
+	}
+	turnMetadata := gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String()
+	if got := gjson.Get(turnMetadata, "installation_id").String(); got != "nested-original" {
+		t.Fatalf("nested installation identity = %q, want original", got)
+	}
+}
+
+func TestApplyCodexOAuthFidelityDoesNotAddInstallationIdentityWhenConvergenceDisabled(t *testing.T) {
+	body := []byte(`{"client_metadata":{"x-codex-turn-metadata":"{\"sandbox\":\"windows_sandbox\"}"}}`)
+	updated, _, ok := ApplyCodexOAuthFidelity(body, "acct-5", "windows", false)
+	if !ok {
+		t.Fatal("expected fidelity rewrite")
+	}
+	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id"); got.Exists() {
+		t.Fatalf("unexpected outer installation identity: %s", got.Raw)
+	}
+	turnMetadata := gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String()
+	if got := gjson.Get(turnMetadata, "installation_id"); got.Exists() {
+		t.Fatalf("unexpected nested installation identity: %s", got.Raw)
 	}
 }
 

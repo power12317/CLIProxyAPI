@@ -76,13 +76,17 @@ func isBuiltInSelector(selector Selector) bool {
 type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
-const codexClientSystemMetadataKey = "cliproxy.codex.client_system"
+const (
+	codexClientSystemMetadataKey         = "cliproxy.codex.client_system"
+	codexPairedSystemAccountsMetadataKey = "cliproxy.codex.paired_system_accounts"
+)
 
 type authSelectionEligibility struct {
-	requiredKind      string
-	credentialPolicy  string
-	disallowFreeAuth  bool
-	codexClientSystem string
+	requiredKind              string
+	credentialPolicy          string
+	disallowFreeAuth          bool
+	codexClientSystem         string
+	codexPairedSystemAccounts map[string]struct{}
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -107,6 +111,9 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 		if value, ok := opts.Metadata[codexClientSystemMetadataKey].(string); ok {
 			eligibility.codexClientSystem = strings.TrimSpace(strings.ToLower(value))
 		}
+		if value, ok := opts.Metadata[codexPairedSystemAccountsMetadataKey].(map[string]struct{}); ok {
+			eligibility.codexPairedSystemAccounts = value
+		}
 	}
 	if ctx != nil {
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
@@ -125,12 +132,79 @@ func (e authSelectionEligibility) allows(auth *Auth) bool {
 	if e.credentialPolicy != "" && !credentialPolicyAllows(e.credentialPolicy, auth) {
 		return false
 	}
-	if e.codexClientSystem != "" {
-		if auth.AuthKind() != AuthKindOAuth || codexClientSystemForAuth(auth) != e.codexClientSystem {
+	if e.codexClientSystem != "" && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		if auth.AuthKind() != AuthKindOAuth {
+			return false
+		}
+		accountKey := codexSystemRoutingAccountKey(auth)
+		if _, paired := e.codexPairedSystemAccounts[accountKey]; paired && codexClientSystemForAuth(auth) != e.codexClientSystem {
 			return false
 		}
 	}
 	return !e.disallowFreeAuth || !isFreeCodexAuth(auth)
+}
+
+func codexSystemScopedOAuthAuth(auth *Auth) bool {
+	return auth != nil && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.AuthKind() == AuthKindOAuth
+}
+
+func codexSystemRoutingAccountKey(auth *Auth) string {
+	if !codexSystemScopedOAuthAuth(auth) || auth.Metadata == nil {
+		return ""
+	}
+	if value, ok := auth.Metadata["account_id"].(string); ok {
+		if accountID := strings.ToLower(strings.TrimSpace(value)); accountID != "" {
+			return "account:" + accountID
+		}
+	}
+	if value, ok := auth.Metadata["email"].(string); ok {
+		if email := strings.ToLower(strings.TrimSpace(value)); email != "" {
+			return "email:" + email
+		}
+	}
+	return ""
+}
+
+// withCodexSystemPairMetadata records which active OAuth accounts currently have
+// both macOS and Windows credentials. System filtering is applied only to those accounts.
+func (m *Manager) withCodexSystemPairMetadata(opts *cliproxyexecutor.Options) {
+	if m == nil || opts == nil || opts.Metadata == nil {
+		return
+	}
+	if system, _ := opts.Metadata[codexClientSystemMetadataKey].(string); strings.TrimSpace(system) == "" {
+		delete(opts.Metadata, codexPairedSystemAccountsMetadataKey)
+		return
+	}
+
+	const (
+		codexMacSystemBit = 1 << iota
+		codexWindowsSystemBit
+	)
+	accountSystems := make(map[string]int)
+	m.mu.RLock()
+	for _, candidate := range m.auths {
+		if candidate == nil || candidate.Disabled || candidate.Status == StatusDisabled || !codexSystemScopedOAuthAuth(candidate) {
+			continue
+		}
+		accountKey := codexSystemRoutingAccountKey(candidate)
+		if accountKey == "" {
+			continue
+		}
+		if codexClientSystemForAuth(candidate) == "windows" {
+			accountSystems[accountKey] |= codexWindowsSystemBit
+		} else {
+			accountSystems[accountKey] |= codexMacSystemBit
+		}
+	}
+	m.mu.RUnlock()
+
+	paired := make(map[string]struct{})
+	for accountKey, systems := range accountSystems {
+		if systems == codexMacSystemBit|codexWindowsSystemBit {
+			paired[accountKey] = struct{}{}
+		}
+	}
+	opts.Metadata[codexPairedSystemAccountsMetadataKey] = paired
 }
 
 func codexClientSystemForAuth(auth *Auth) string {

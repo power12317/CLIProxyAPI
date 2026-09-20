@@ -63,6 +63,26 @@ codex:
 	}
 }
 
+func TestParseConfigBytesCodexDeviceConvergenceDefaultsEnabled(t *testing.T) {
+	cfg, errParse := ParseConfigBytes([]byte(`{}`))
+	if errParse != nil {
+		t.Fatalf("ParseConfigBytes() error = %v", errParse)
+	}
+	if !cfg.Codex.DeviceConvergenceEnabled() {
+		t.Fatal("DeviceConvergenceEnabled() = false, want default true")
+	}
+}
+
+func TestParseConfigBytesCodexDeviceConvergenceCanBeDisabled(t *testing.T) {
+	cfg, errParse := ParseConfigBytes([]byte("codex:\n  device-convergence: false\n"))
+	if errParse != nil {
+		t.Fatalf("ParseConfigBytes() error = %v", errParse)
+	}
+	if cfg.Codex.DeviceConvergenceEnabled() {
+		t.Fatal("DeviceConvergenceEnabled() = true, want false")
+	}
+}
+
 func TestLoadConfigOptional_CodexModelLevelCooling(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
