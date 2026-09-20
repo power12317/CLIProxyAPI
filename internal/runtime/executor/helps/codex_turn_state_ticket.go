@@ -36,6 +36,11 @@ var codexTurnStateTicketInvalidator struct {
 	fn func(string, string)
 }
 
+var codexTurnStateTicketRecorder struct {
+	sync.RWMutex
+	fn func(*cliproxyauth.Auth, CodexTurnStateTicket)
+}
+
 // SetCodexTurnStateTicketInvalidator installs the service-owned callback used
 // when ChatGPT returns the degraded 312-byte turn state for a proactive ticket.
 func SetCodexTurnStateTicketInvalidator(fn func(string, string)) {
@@ -50,6 +55,23 @@ func notifyCodexTurnStateTicketInvalidator(authID, model string) {
 	codexTurnStateTicketInvalidator.RUnlock()
 	if fn != nil {
 		fn(strings.TrimSpace(authID), strings.TrimSpace(model))
+	}
+}
+
+// SetCodexTurnStateTicketRecorder installs the service-owned callback used to
+// persist a valid 292/332 value observed on a normal upstream response.
+func SetCodexTurnStateTicketRecorder(fn func(*cliproxyauth.Auth, CodexTurnStateTicket)) {
+	codexTurnStateTicketRecorder.Lock()
+	codexTurnStateTicketRecorder.fn = fn
+	codexTurnStateTicketRecorder.Unlock()
+}
+
+func notifyCodexTurnStateTicketRecorder(auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) {
+	codexTurnStateTicketRecorder.RLock()
+	fn := codexTurnStateTicketRecorder.fn
+	codexTurnStateTicketRecorder.RUnlock()
+	if fn != nil {
+		fn(auth, ticket)
 	}
 }
 
@@ -171,9 +193,11 @@ func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnS
 		}
 		status := CodexTurnStateTicketStatus{Model: model, TargetLength: targetLength}
 		ticket := codexTurnStateTicketForAuth(auth, model)
+		if ticket != nil {
+			status.Length = ticket.Length
+		}
 		if ticket.valid(now, targetLength) {
 			status.Ready = true
-			status.Length = ticket.Length
 			status.RemainingSeconds = int64(ticket.ExpiresAt.Sub(now) / time.Second)
 			if status.RemainingSeconds < 0 {
 				status.RemainingSeconds = 0
@@ -199,9 +223,9 @@ func ApplyCodexTurnStateTicket(auth *cliproxyauth.Auth, cfg config.CodexTurnStat
 	if model == "" || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
 		return nil
 	}
-	clearCodexTurnStateHeader(headers)
 	ticket := codexTurnStateTicketForAuth(auth, model)
 	if ticket.valid(time.Now(), CodexTurnStateTicketTargetLength(auth)) {
+		clearCodexTurnStateHeader(headers)
 		headers.Set(CodexTurnStateTicketHeader, ticket.State)
 		return nil
 	}
@@ -216,11 +240,11 @@ func ApplyCodexTurnStateTicketBody(auth *cliproxyauth.Auth, cfg config.CodexTurn
 	if !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, strings.TrimSpace(model)) {
 		return body
 	}
-	body, _ = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
 	ticket := codexTurnStateTicketForAuth(auth, model)
 	if !ticket.valid(time.Now(), CodexTurnStateTicketTargetLength(auth)) {
 		return body
 	}
+	body, _ = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
 	updated, errSet := sjson.SetBytes(body, "client_metadata.x-codex-turn-state", ticket.State)
 	if errSet != nil {
 		return body
@@ -236,14 +260,18 @@ func clearCodexTurnStateHeader(headers http.Header) {
 	}
 }
 
-// InvalidateCodexTurnStateTicketOnResponse invalidates a still-valid 292 ticket
-// when the upstream returns the known degraded 312-byte state. The harvester
-// callback removes the persisted value and starts a fresh probe immediately.
+// InvalidateCodexTurnStateTicketOnResponse records a valid 292/332 value from
+// a normal response and invalidates a Personal ticket when the upstream
+// returns the known degraded 312-byte state. Non-target lengths remain under
+// the existing turn_id-scoped passive cache.
 func InvalidateCodexTurnStateTicketOnResponse(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model string, resp *http.Response) bool {
 	if resp == nil || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
 		return false
 	}
 	value := strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader))
+	if recordCodexTurnStateTicketValue(auth, cfg, model, value) {
+		return false
+	}
 	return invalidateCodexTurnStateTicketOnValue(auth, cfg, model, value)
 }
 
@@ -266,15 +294,37 @@ func InvalidateCodexTurnStateTicketOnEvent(auth *cliproxyauth.Auth, cfg config.C
 		}
 		return true
 	})
+	if recordCodexTurnStateTicketValue(auth, cfg, model, value) {
+		return false
+	}
 	return invalidateCodexTurnStateTicketOnValue(auth, cfg, model, value)
+}
+
+func recordCodexTurnStateTicketValue(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model, value string) bool {
+	targetLength := CodexTurnStateTicketTargetLength(auth)
+	if len(value) != targetLength || !strings.HasPrefix(value, codexTurnStateTicketStatePrefix) {
+		return false
+	}
+	now := time.Now()
+	ticket := CodexTurnStateTicket{
+		AccountID:  auth.ID,
+		Model:      strings.TrimSpace(model),
+		State:      value,
+		Length:     len(value),
+		CapturedAt: now,
+		ExpiresAt:  now.Add(time.Duration(cfg.TTLSeconds) * time.Second),
+		Attempts:   1,
+	}
+	if cfg.TTLSeconds <= 0 {
+		ticket.ExpiresAt = now.Add(time.Duration(config.DefaultCodexTurnStateTicketTTLSeconds) * time.Second)
+	}
+	StoreCodexTurnStateTicket(auth, ticket)
+	notifyCodexTurnStateTicketRecorder(auth, ticket)
+	return true
 }
 
 func invalidateCodexTurnStateTicketOnValue(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model, value string) bool {
 	if CodexTurnStateTicketTargetLength(auth) != config.DefaultCodexTurnStateTicketPersonalTargetLength || len(value) != 312 {
-		return false
-	}
-	ticket := codexTurnStateTicketForAuth(auth, model)
-	if !ticket.valid(time.Now(), CodexTurnStateTicketTargetLength(auth)) {
 		return false
 	}
 	notifyCodexTurnStateTicketInvalidator(auth.ID, model)
@@ -307,9 +357,9 @@ func StoreCodexTurnStateTicket(auth *cliproxyauth.Auth, ticket CodexTurnStateTic
 	auth.Metadata[CodexTurnStateTicketMetadataKey(ticket.Model)] = ticket
 }
 
-// HarvestCodexTurnStateTicket performs one bounded probe using the dedicated
-// harvest proxy. It only reads the response header; the response body is never
-// used as a source of ticket material.
+// HarvestCodexTurnStateTicket performs one bounded probe using the optional
+// harvest proxy. An empty proxy URL uses the normal direct transport; it only
+// reads the response header and never uses the response body as ticket data.
 func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, harvestProxyURL string) (CodexTurnStateTicket, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -319,8 +369,8 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	if !isCodexTurnStateTicketAccount(auth) {
 		return CodexTurnStateTicket{}, 0, nil
 	}
-	if model == "" || harvestProxyURL == "" {
-		return CodexTurnStateTicket{}, 0, errors.New("codex ticket harvest requires a model and harvest proxy")
+	if model == "" {
+		return CodexTurnStateTicket{}, 0, errors.New("codex ticket harvest requires a model")
 	}
 	token, _ := auth.Metadata["access_token"].(string)
 	token = strings.TrimSpace(token)
@@ -446,7 +496,7 @@ func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 		return
 	}
 	policy := cfg.Codex.EffectiveTurnStateTicket()
-	if !policy.Enabled || !codexTurnStateTicketModelConfigured(policy.Models, model) || strings.TrimSpace(policy.HarvestProxyURL) == "" {
+	if !policy.Enabled || !codexTurnStateTicketModelConfigured(policy.Models, model) {
 		return
 	}
 	for _, auth := range h.listFn() {
@@ -505,6 +555,7 @@ func (h *CodexTurnStateTicketHarvester) Stop() {
 		<-done
 	}
 	SetCodexTurnStateTicketInvalidator(nil)
+	SetCodexTurnStateTicketRecorder(nil)
 }
 
 func (h *CodexTurnStateTicketHarvester) loop(ctx context.Context) {
@@ -544,12 +595,14 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 		return
 	}
 	policy := cfg.Codex.EffectiveTurnStateTicket()
-	if !policy.Enabled || strings.TrimSpace(policy.HarvestProxyURL) == "" {
+	if !policy.Enabled {
 		return
 	}
-	if errProxy := ValidateCodexTurnStateTicketHarvestProxyURL(policy.HarvestProxyURL); errProxy != nil {
-		log.WithError(errProxy).Warn("codex turn-state ticket harvester disabled by invalid harvest proxy")
-		return
+	if strings.TrimSpace(policy.HarvestProxyURL) != "" {
+		if errProxy := ValidateCodexTurnStateTicketHarvestProxyURL(policy.HarvestProxyURL); errProxy != nil {
+			log.WithError(errProxy).Warn("codex turn-state ticket harvester disabled by invalid harvest proxy")
+			return
+		}
 	}
 	now := time.Now()
 	refreshBefore := time.Duration(policy.RefreshBeforeSeconds) * time.Second
@@ -568,6 +621,18 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 			}
 			h.probe(ctx, cfg, auth, model, policy.HarvestProxyURL)
 		}
+	}
+}
+
+// Record persists a valid ticket observed by a normal upstream request.
+func (h *CodexTurnStateTicketHarvester) Record(auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) {
+	if h == nil || auth == nil || h.updateFn == nil || strings.TrimSpace(ticket.Model) == "" {
+		return
+	}
+	updated := auth.Clone()
+	StoreCodexTurnStateTicket(updated, ticket)
+	if errUpdate := h.updateFn(context.Background(), updated); errUpdate != nil {
+		log.WithFields(log.Fields{"auth_id": auth.ID, "model": ticket.Model}).Warnf("codex turn-state ticket response persistence failed: %v", errUpdate)
 	}
 }
 

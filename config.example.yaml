@@ -355,9 +355,9 @@ codex:
   # Default: false
   model-level-cooling: false
   # Proactively harvest one-hour x-codex-turn-state tickets for Codex OAuth
-  # accounts. Harvest traffic uses harvest-proxy-url while normal requests keep
-  # each account's configured proxy. Leave disabled unless a dedicated proxy is
-  # available; when fail-closed is true, configured models wait for a ticket.
+  # accounts. Harvest traffic uses harvest-proxy-url when it is configured;
+  # an empty value probes directly. Normal requests keep each account's
+  # configured proxy. When fail-closed is true, configured models wait for a ticket.
   turn-state-ticket:
     enabled: false
     # Ticket length is derived from the OAuth account plan:

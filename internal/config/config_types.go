@@ -219,8 +219,8 @@ type CodexConfig struct {
 	// rather than cooling down the entire credential across all sibling models.
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
 	// TurnStateTicket configures the optional one-hour x-codex-turn-state ticket
-	// harvester used by Codex OAuth credentials. Tickets are harvested through a
-	// dedicated proxy and injected only for the configured models.
+	// harvester used by Codex OAuth credentials. Tickets are harvested through
+	// the optional proxy and injected only for the configured models.
 	TurnStateTicket CodexTurnStateTicketConfig `yaml:"turn-state-ticket" json:"turn-state-ticket"`
 	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
