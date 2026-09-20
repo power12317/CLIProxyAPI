@@ -97,6 +97,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, errTicket
 	}
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
+	turnState.ObserveRequest(wsHeaders, upstreamBody)
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {

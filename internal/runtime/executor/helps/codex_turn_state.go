@@ -253,6 +253,23 @@ func (s *CodexTurnState) ApplyWebsocketBody(body []byte) []byte {
 	return updated
 }
 
+// ObserveRequest records the final outbound state after all ticket overrides.
+// Websocket frames take precedence because reused connections have no new handshake.
+// This updates statistics only; it does not write to the passive cache.
+func (s *CodexTurnState) ObserveRequest(headers http.Header, websocketBody []byte) {
+	if s == nil {
+		return
+	}
+	value := codexTurnHeaderValue(headers, codexTurnStateHeader)
+	if frameState := gjson.GetBytes(websocketBody, "client_metadata.x-codex-turn-state"); frameState.Type == gjson.String {
+		value = frameState.String()
+	}
+	s.fieldsMu.Lock()
+	s.requestLen = len(value)
+	s.fieldsMu.Unlock()
+	s.updateLogFields()
+}
+
 func (s *CodexTurnState) observe(value string) {
 	if s == nil {
 		return

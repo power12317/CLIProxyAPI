@@ -135,6 +135,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return nil, errTicket
 	}
+	turnState.ObserveRequest(httpReq.Header, nil)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
