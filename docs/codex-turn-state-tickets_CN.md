@@ -15,7 +15,7 @@ codex:
     ttl-seconds: 3600
     refresh-before-seconds: 600
     harvest-proxy-url: "socks5://user:password@residential.example:1080"
-    probe-interval-seconds: 6
+    probe-interval-seconds: 60
     attempt-timeout-seconds: 25
     fail-closed: true
     models:
@@ -31,7 +31,7 @@ codex:
 - `refresh-before-seconds`：距离过期少于此秒数时重新探测，默认是 `600` 秒。
 - `harvest-proxy-url`：可选的门票获取代理，支持 HTTP、HTTPS、SOCKS5 或 SOCKS5H。
   留空时直接探测；业务请求不会改用这个代理。
-- `probe-interval-seconds`：两轮后台探测之间的间隔，默认是 `6` 秒。
+- `probe-interval-seconds`：两轮后台探测之间的间隔，默认是 `60` 秒（1 分钟）。省略或设置为非正数时使用默认值；已经显式配置的正数继续生效，旧配置中的 `6` 需要改为 `60` 才会按分钟探测。
 - `attempt-timeout-seconds`：单次探测的最长时间，默认是 `25` 秒。
 - `fail-closed`：没有有效门票时是否阻断对应模型请求。默认是 `true`。
 - `models`：需要主动获取门票的模型列表。默认是 `gpt-6-astra` 和 `gpt-5.6-sol`。

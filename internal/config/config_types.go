@@ -248,7 +248,7 @@ const (
 	DefaultCodexTurnStateTicketTargetLength          = DefaultCodexTurnStateTicketPersonalTargetLength
 	DefaultCodexTurnStateTicketTTLSeconds            = 3600
 	DefaultCodexTurnStateTicketRefreshBeforeSeconds  = 600
-	DefaultCodexTurnStateTicketProbeIntervalSeconds  = 6
+	DefaultCodexTurnStateTicketProbeIntervalSeconds  = 60
 	DefaultCodexTurnStateTicketAttemptTimeoutSeconds = 25
 )
 

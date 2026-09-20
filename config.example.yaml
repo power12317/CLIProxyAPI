@@ -365,7 +365,7 @@ codex:
     ttl-seconds: 3600
     refresh-before-seconds: 600
     harvest-proxy-url: ""
-    probe-interval-seconds: 6
+    probe-interval-seconds: 60
     attempt-timeout-seconds: 25
     fail-closed: true
     models:

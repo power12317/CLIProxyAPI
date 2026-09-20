@@ -14,6 +14,7 @@ codex:
   turn-state-ticket:
     enabled: true
     harvest-proxy-url: "socks5://user:password@residential.example:1080"
+    probe-interval-seconds: 60
     models: [gpt-6-astra, gpt-5.6-sol]
     fail-closed: true
 ```
@@ -25,6 +26,10 @@ model in the auth metadata, expires after one hour, and is refreshed ten minutes
 before expiry. The state blob is never returned by management APIs or auth-file
 downloads; management responses expose only readiness, length, and remaining
 seconds. A failed probe leaves the previous valid ticket untouched.
+
+The background probe interval defaults to 60 seconds (one minute) when omitted
+or non-positive. Explicit positive intervals are preserved; change an existing
+`probe-interval-seconds: 6` to `60` to use the one-minute interval.
 
 When `fail-closed` is true, a configured model is not sent upstream without a
 valid ticket. The request returns a retryable executor error so the auth manager
