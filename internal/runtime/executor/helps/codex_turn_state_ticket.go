@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -29,6 +30,28 @@ const (
 // ErrCodexTurnStateTicketUnavailable is returned when fail-closed is enabled
 // but the selected OAuth credential has no valid ticket for the requested model.
 var ErrCodexTurnStateTicketUnavailable = errors.New("codex turn-state ticket unavailable")
+
+var codexTurnStateTicketInvalidator struct {
+	sync.RWMutex
+	fn func(string, string)
+}
+
+// SetCodexTurnStateTicketInvalidator installs the service-owned callback used
+// when ChatGPT returns the degraded 312-byte turn state for a proactive ticket.
+func SetCodexTurnStateTicketInvalidator(fn func(string, string)) {
+	codexTurnStateTicketInvalidator.Lock()
+	codexTurnStateTicketInvalidator.fn = fn
+	codexTurnStateTicketInvalidator.Unlock()
+}
+
+func notifyCodexTurnStateTicketInvalidator(authID, model string) {
+	codexTurnStateTicketInvalidator.RLock()
+	fn := codexTurnStateTicketInvalidator.fn
+	codexTurnStateTicketInvalidator.RUnlock()
+	if fn != nil {
+		fn(strings.TrimSpace(authID), strings.TrimSpace(model))
+	}
+}
 
 // CodexTurnStateTicket is the persisted, account/model-scoped ticket summary.
 // The state value is intentionally kept out of logs and management responses.
@@ -155,6 +178,7 @@ func ApplyCodexTurnStateTicket(auth *cliproxyauth.Auth, cfg config.CodexTurnStat
 	if model == "" || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
 		return nil
 	}
+	clearCodexTurnStateHeader(headers)
 	ticket := codexTurnStateTicketForAuth(auth, model)
 	if ticket.valid(time.Now(), cfg.TargetLength) {
 		headers.Set(CodexTurnStateTicketHeader, ticket.State)
@@ -171,6 +195,7 @@ func ApplyCodexTurnStateTicketBody(auth *cliproxyauth.Auth, cfg config.CodexTurn
 	if !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, strings.TrimSpace(model)) {
 		return body
 	}
+	body, _ = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
 	ticket := codexTurnStateTicketForAuth(auth, model)
 	if !ticket.valid(time.Now(), cfg.TargetLength) {
 		return body
@@ -180,6 +205,59 @@ func ApplyCodexTurnStateTicketBody(auth *cliproxyauth.Auth, cfg config.CodexTurn
 		return body
 	}
 	return updated
+}
+
+func clearCodexTurnStateHeader(headers http.Header) {
+	for key := range headers {
+		if strings.EqualFold(key, CodexTurnStateTicketHeader) {
+			delete(headers, key)
+		}
+	}
+}
+
+// InvalidateCodexTurnStateTicketOnResponse invalidates a still-valid 292 ticket
+// when the upstream returns the known degraded 312-byte state. The harvester
+// callback removes the persisted value and starts a fresh probe immediately.
+func InvalidateCodexTurnStateTicketOnResponse(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model string, resp *http.Response) bool {
+	if resp == nil || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
+		return false
+	}
+	value := strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader))
+	return invalidateCodexTurnStateTicketOnValue(auth, cfg, model, value)
+}
+
+// InvalidateCodexTurnStateTicketOnEvent is the WebSocket equivalent. Only
+// response metadata headers are inspected; generated text is never treated as
+// ticket material.
+func InvalidateCodexTurnStateTicketOnEvent(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model string, payload []byte) bool {
+	if len(payload) == 0 || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
+		return false
+	}
+	kind := gjson.GetBytes(payload, "type").String()
+	if kind != "response.metadata" && kind != "codex.response.metadata" {
+		return false
+	}
+	value := ""
+	gjson.GetBytes(payload, "headers").ForEach(func(key, item gjson.Result) bool {
+		if strings.EqualFold(key.String(), CodexTurnStateTicketHeader) && item.Type == gjson.String {
+			value = strings.TrimSpace(item.String())
+			return false
+		}
+		return true
+	})
+	return invalidateCodexTurnStateTicketOnValue(auth, cfg, model, value)
+}
+
+func invalidateCodexTurnStateTicketOnValue(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model, value string) bool {
+	if len(value) != 312 {
+		return false
+	}
+	ticket := codexTurnStateTicketForAuth(auth, model)
+	if !ticket.valid(time.Now(), cfg.TargetLength) {
+		return false
+	}
+	notifyCodexTurnStateTicketInvalidator(auth.ID, model)
+	return true
 }
 
 func codexTurnStateTicketModelConfigured(models []string, model string) bool {
@@ -336,6 +414,38 @@ func NewCodexTurnStateTicketHarvester(opts CodexTurnStateTicketHarvesterOptions)
 	return &CodexTurnStateTicketHarvester{cfgFn: opts.Config, listFn: opts.List, updateFn: opts.Update, flights: make(map[string]struct{})}
 }
 
+// Invalidate removes the current ticket for an account/model pair and starts a
+// replacement probe without waiting for the next periodic sweep.
+func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
+	if h == nil || strings.TrimSpace(authID) == "" || strings.TrimSpace(model) == "" || h.listFn == nil || h.updateFn == nil {
+		return
+	}
+	cfg := h.currentConfig()
+	if cfg == nil {
+		return
+	}
+	policy := cfg.Codex.EffectiveTurnStateTicket()
+	if !policy.Enabled || !codexTurnStateTicketModelConfigured(policy.Models, model) || strings.TrimSpace(policy.HarvestProxyURL) == "" {
+		return
+	}
+	for _, auth := range h.listFn() {
+		if auth == nil || strings.TrimSpace(auth.ID) != strings.TrimSpace(authID) || !isCodexTurnStateTicketAccount(auth) {
+			continue
+		}
+		updated := auth.Clone()
+		if updated.Metadata != nil {
+			delete(updated.Metadata, CodexTurnStateTicketMetadataKey(model))
+		}
+		if errUpdate := h.updateFn(context.Background(), updated); errUpdate != nil {
+			log.WithFields(log.Fields{"auth_id": authID, "model": model}).Warnf("codex turn-state ticket invalidation persistence failed: %v", errUpdate)
+		}
+		// The persisted ticket is invalidated before the request returns; only
+		// the replacement network probe runs asynchronously.
+		h.probe(context.Background(), cfg, updated, strings.TrimSpace(model), policy.HarvestProxyURL)
+		return
+	}
+}
+
 func (h *CodexTurnStateTicketHarvester) Start(parent context.Context) {
 	if h == nil {
 		return
@@ -373,6 +483,7 @@ func (h *CodexTurnStateTicketHarvester) Stop() {
 	if done != nil {
 		<-done
 	}
+	SetCodexTurnStateTicketInvalidator(nil)
 }
 
 func (h *CodexTurnStateTicketHarvester) loop(ctx context.Context) {

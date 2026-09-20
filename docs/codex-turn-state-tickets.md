@@ -27,7 +27,15 @@ seconds. A failed probe leaves the previous valid ticket untouched.
 When `fail-closed` is true, a configured model is not sent upstream without a
 valid ticket. The request returns a retryable executor error so the auth manager
 can try another credential. When it is false, the request proceeds without the
-proactive header and the existing passive turn-state cache remains active.
+proactive header. A valid 292 ticket still always replaces the request's
+turn-state value, and a configured model bypasses the older turn-id cache so a
+new `turn_id` cannot select a different value. When fail-open has no valid
+ticket, the request proceeds without a turn-state value for that model.
+
+If ChatGPT returns a 312-byte `x-codex-turn-state` while a valid 292 ticket is
+active, CPA immediately invalidates and removes that account/model ticket and
+starts a fresh harvest probe. The next request therefore waits for the new
+ticket when fail-closed is enabled.
 
 The management API exposes `GET /v0/management/codex-turn-state-ticket` and
 `PUT`/`PATCH` on the same path. The proxy URL is masked in responses; sending
@@ -39,4 +47,5 @@ HTTP, SSE, and WebSocket Codex transports all apply the ticket after ordinary
 header construction. WebSocket request bodies mirror it into
 `client_metadata.x-codex-turn-state` because a reused socket has no new HTTP
 handshake. The existing response-observed turn-state cache is retained for
-models outside the proactive policy and for passive fallback behavior.
+models outside the proactive policy. For a model inside the proactive policy,
+the account/model ticket is authoritative and is independent of `turn_id`.
