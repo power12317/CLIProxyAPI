@@ -96,6 +96,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.coreManager != nil {
 		helps.StartCodexCookieRefreshLoop(ctx, s.cfg, s.coreManager.List)
 		helps.StartCodexTurnStateCleanup(ctx)
+		s.startCodexTicketHarvester(ctx)
 	}
 
 	if !homeEnabled {
@@ -236,6 +237,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErr error
 	s.shutdownOnce.Do(func() {
+		s.stopCodexTicketHarvester()
 		if ctx == nil {
 			ctx = context.Background()
 		}
