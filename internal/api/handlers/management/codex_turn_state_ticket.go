@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 )
 
@@ -19,7 +20,9 @@ func (h *Handler) GetCodexTurnStateTicket(c *gin.Context) {
 	policy := h.cfg.Codex.EffectiveTurnStateTicket()
 	response := gin.H{
 		"enabled":                  policy.Enabled,
-		"target_length":            policy.TargetLength,
+		"target_length":            config.DefaultCodexTurnStateTicketPersonalTargetLength,
+		"personal_target_length":   config.DefaultCodexTurnStateTicketPersonalTargetLength,
+		"team_target_length":       config.DefaultCodexTurnStateTicketTeamTargetLength,
 		"ttl_seconds":              policy.TTLSeconds,
 		"refresh_before_seconds":   policy.RefreshBeforeSeconds,
 		"probe_interval_seconds":   policy.ProbeIntervalSeconds,
@@ -72,8 +75,9 @@ func (h *Handler) PutCodexTurnStateTicket(c *gin.Context) {
 	if req.Enabled != nil {
 		policy.Enabled = *req.Enabled
 	}
-	if req.TargetLength != nil {
-		policy.TargetLength = *req.TargetLength
+	if req.TargetLength != nil && *req.TargetLength != config.DefaultCodexTurnStateTicketPersonalTargetLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_length is derived from the account plan: Personal=292, Team/Business=332"})
+		return
 	}
 	if req.TTLSeconds != nil {
 		policy.TTLSeconds = *req.TTLSeconds

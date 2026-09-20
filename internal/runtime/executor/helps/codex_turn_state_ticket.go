@@ -68,6 +68,7 @@ type CodexTurnStateTicket struct {
 // CodexTurnStateTicketStatus is safe to expose through the management API.
 type CodexTurnStateTicketStatus struct {
 	Model            string     `json:"model"`
+	TargetLength     int        `json:"target_length"`
 	Length           int        `json:"length,omitempty"`
 	Ready            bool       `json:"ready"`
 	RemainingSeconds int64      `json:"remaining_seconds"`
@@ -93,6 +94,28 @@ func (t *CodexTurnStateTicket) valid(now time.Time, targetLength int) bool {
 	return len(strings.TrimSpace(t.State)) == targetLength && t.Length == targetLength &&
 		strings.HasPrefix(strings.TrimSpace(t.State), codexTurnStateTicketStatePrefix) &&
 		!t.ExpiresAt.IsZero() && now.Before(t.ExpiresAt)
+}
+
+// CodexTurnStateTicketTargetLength derives the expected ticket shape from the
+// OAuth account plan. Personal plans use the 292-byte shape; Team and Business
+// accounts use the 332-byte shape. Unknown plans retain the personal default.
+func CodexTurnStateTicketTargetLength(auth *cliproxyauth.Auth) int {
+	if auth != nil {
+		planType := ""
+		if auth.Attributes != nil {
+			planType = strings.TrimSpace(auth.Attributes["plan_type"])
+		}
+		if planType == "" && auth.Metadata != nil {
+			if value, ok := auth.Metadata["plan_type"].(string); ok {
+				planType = strings.TrimSpace(value)
+			}
+		}
+		switch strings.ToLower(planType) {
+		case "team", "business":
+			return config.DefaultCodexTurnStateTicketTeamTargetLength
+		}
+	}
+	return config.DefaultCodexTurnStateTicketPersonalTargetLength
 }
 
 func (t *CodexTurnStateTicket) needsRefresh(now time.Time, before time.Duration) bool {
@@ -136,21 +159,19 @@ func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnS
 	if now.IsZero() {
 		now = time.Now()
 	}
-	if cfg.TargetLength <= 0 {
-		cfg.TargetLength = config.DefaultCodexTurnStateTicketTargetLength
-	}
 	if len(cfg.Models) == 0 {
 		cfg.Models = []string{"gpt-6-astra", "gpt-5.6-sol"}
 	}
 	out := make([]CodexTurnStateTicketStatus, 0, len(cfg.Models))
+	targetLength := CodexTurnStateTicketTargetLength(auth)
 	for _, model := range cfg.Models {
 		model = strings.TrimSpace(model)
 		if model == "" {
 			continue
 		}
-		status := CodexTurnStateTicketStatus{Model: model}
+		status := CodexTurnStateTicketStatus{Model: model, TargetLength: targetLength}
 		ticket := codexTurnStateTicketForAuth(auth, model)
-		if ticket.valid(now, cfg.TargetLength) {
+		if ticket.valid(now, targetLength) {
 			status.Ready = true
 			status.Length = ticket.Length
 			status.RemainingSeconds = int64(ticket.ExpiresAt.Sub(now) / time.Second)
@@ -180,7 +201,7 @@ func ApplyCodexTurnStateTicket(auth *cliproxyauth.Auth, cfg config.CodexTurnStat
 	}
 	clearCodexTurnStateHeader(headers)
 	ticket := codexTurnStateTicketForAuth(auth, model)
-	if ticket.valid(time.Now(), cfg.TargetLength) {
+	if ticket.valid(time.Now(), CodexTurnStateTicketTargetLength(auth)) {
 		headers.Set(CodexTurnStateTicketHeader, ticket.State)
 		return nil
 	}
@@ -197,7 +218,7 @@ func ApplyCodexTurnStateTicketBody(auth *cliproxyauth.Auth, cfg config.CodexTurn
 	}
 	body, _ = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
 	ticket := codexTurnStateTicketForAuth(auth, model)
-	if !ticket.valid(time.Now(), cfg.TargetLength) {
+	if !ticket.valid(time.Now(), CodexTurnStateTicketTargetLength(auth)) {
 		return body
 	}
 	updated, errSet := sjson.SetBytes(body, "client_metadata.x-codex-turn-state", ticket.State)
@@ -249,11 +270,11 @@ func InvalidateCodexTurnStateTicketOnEvent(auth *cliproxyauth.Auth, cfg config.C
 }
 
 func invalidateCodexTurnStateTicketOnValue(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model, value string) bool {
-	if len(value) != 312 {
+	if CodexTurnStateTicketTargetLength(auth) != config.DefaultCodexTurnStateTicketPersonalTargetLength || len(value) != 312 {
 		return false
 	}
 	ticket := codexTurnStateTicketForAuth(auth, model)
-	if !ticket.valid(time.Now(), cfg.TargetLength) {
+	if !ticket.valid(time.Now(), CodexTurnStateTicketTargetLength(auth)) {
 		return false
 	}
 	notifyCodexTurnStateTicketInvalidator(auth.ID, model)
@@ -381,7 +402,7 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 		}
 	}()
 	state := strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader))
-	targetLength := effective.TargetLength
+	targetLength := CodexTurnStateTicketTargetLength(auth)
 	if resp.StatusCode != http.StatusOK || len(state) != targetLength || !strings.HasPrefix(state, codexTurnStateTicketStatePrefix) {
 		return CodexTurnStateTicket{}, resp.StatusCode, nil
 	}
@@ -541,7 +562,8 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 			if model == "" {
 				continue
 			}
-			if ticket := codexTurnStateTicketForAuth(auth, model); ticket.valid(now, policy.TargetLength) && !ticket.needsRefresh(now, refreshBefore) {
+			targetLength := CodexTurnStateTicketTargetLength(auth)
+			if ticket := codexTurnStateTicketForAuth(auth, model); ticket.valid(now, targetLength) && !ticket.needsRefresh(now, refreshBefore) {
 				continue
 			}
 			h.probe(ctx, cfg, auth, model, policy.HarvestProxyURL)

@@ -238,7 +238,11 @@ type CodexTurnStateTicketConfig struct {
 }
 
 const (
-	DefaultCodexTurnStateTicketTargetLength          = 292
+	DefaultCodexTurnStateTicketPersonalTargetLength = 292
+	DefaultCodexTurnStateTicketTeamTargetLength     = 332
+	// DefaultCodexTurnStateTicketTargetLength remains for API compatibility;
+	// ticket length is now derived from the OAuth account plan.
+	DefaultCodexTurnStateTicketTargetLength          = DefaultCodexTurnStateTicketPersonalTargetLength
 	DefaultCodexTurnStateTicketTTLSeconds            = 3600
 	DefaultCodexTurnStateTicketRefreshBeforeSeconds  = 600
 	DefaultCodexTurnStateTicketProbeIntervalSeconds  = 6
@@ -253,9 +257,9 @@ func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
 	if c != nil {
 		out = c.TurnStateTicket
 	}
-	if out.TargetLength <= 0 {
-		out.TargetLength = DefaultCodexTurnStateTicketTargetLength
-	}
+	// TargetLength is retained for compatibility with existing config/API
+	// clients. The effective length is derived per account from plan_type.
+	out.TargetLength = DefaultCodexTurnStateTicketPersonalTargetLength
 	if out.TTLSeconds <= 0 {
 		out.TTLSeconds = DefaultCodexTurnStateTicketTTLSeconds
 	}

@@ -355,7 +355,8 @@ codex:
   # available; when fail-closed is true, configured models wait for a ticket.
   turn-state-ticket:
     enabled: false
-    target-length: 292
+    # Ticket length is derived from the OAuth account plan:
+    # Personal (free/plus/pro) = 292; Team/Business = 332.
     ttl-seconds: 3600
     refresh-before-seconds: 600
     harvest-proxy-url: ""

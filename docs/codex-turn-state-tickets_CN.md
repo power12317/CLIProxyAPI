@@ -11,7 +11,6 @@ CLIProxyAPI 可以主动获取 ChatGPT Codex OAuth 账号使用的、有效期�
 codex:
   turn-state-ticket:
     enabled: true
-    target-length: 292
     ttl-seconds: 3600
     refresh-before-seconds: 600
     harvest-proxy-url: "socks5://user:password@residential.example:1080"
@@ -26,7 +25,7 @@ codex:
 参数含义如下：
 
 - `enabled`：是否启用主动获取门票。默认是 `false`。
-- `target-length`：接受的门票长度。默认是 `292`。
+- 门票目标长度不再由全局配置决定，而是按账号属性严格选择：Personal（`free`、`plus`、`pro`）使用 `292`，Team/Business（`team`、`business`）使用 `332`。未知属性按 Personal 的 `292` 处理。
 - `ttl-seconds`：门票在本地保存的有效期，默认是 `3600` 秒。
 - `refresh-before-seconds`：距离过期少于此秒数时重新探测，默认是 `600` 秒。
 - `harvest-proxy-url`：专门用于获取门票的 HTTP、HTTPS、SOCKS5 或 SOCKS5H 代理。
@@ -45,9 +44,9 @@ codex:
 
 - HTTP 状态码是 `200`。
 - 响应头中的 `X-Codex-Turn-State` 值以 `gAAAAA` 开头。
-- 值的长度等于 `target-length`，默认是 `292`。
+- Personal 账号的值长度是 `292`，Team/Business 账号的值长度是 `332`。
 
-门票按照“账号 ID + 模型”分别保存到 auth metadata 中。每张门票都会记录获取时间、
+门票按照“账号 ID + 模型”分别保存到 auth metadata 中。账号的 `plan_type` 决定该账号的目标长度。每张门票都会记录获取时间、
 过期时间和长度。后台 harvester 会跳过仍然有效且没有进入续期窗口的门票；进入续期
 窗口后才会重新探测。
 
@@ -62,14 +61,14 @@ codex:
 
 当 `fail-closed: false` 时，没有门票的请求仍然会继续发送。此时系统不会主动注入
 门票；对于已经配置主动门票的模型，请求会同时绕过旧的按 `turn_id` 缓存，因此新的
-`turn_id` 不会选择另一个 turn-state 值。只要获取到有效的 292 门票，即使
+`turn_id` 不会选择另一个 turn-state 值。只要获取到符合账号属性的有效门票（Personal 为 292，Team/Business 为 332），即使
 `fail-closed` 是 `false`，也仍然会强制使用这张门票替换请求中的 turn-state。没有有效
 门票时，该模型会在不携带 turn-state 的情况下继续发送请求。
 
-如果 ChatGPT 在有效的 292 门票请求后返回长度为 312 的 `x-codex-turn-state`，CPA
+如果 ChatGPT 在有效的 Personal 292 门票请求后返回长度为 312 的 `x-codex-turn-state`，CPA
 会立即让对应账号和模型的门票失效，删除本地持久化值，并启动一次新的主动探测。下
 一个请求在 `fail-closed: true` 时会等待新的有效门票；在 `fail-closed: false` 时会
-继续发送，但不会使用旧的 292 门票。
+继续发送，但不会使用旧的 Personal 292 门票。
 
 ## 管理 API
 
@@ -84,12 +83,12 @@ PATCH /v0/management/codex-turn-state-ticket
 `GET` 返回当前策略和账号级状态，包括：
 
 - 是否启用。
-- 门票长度、有效期和提前续期时间。
+- Personal/Team/Business 对应的门票目标长度、有效期和提前续期时间。
 - 探测间隔和单次探测超时。
 - `fail-closed` 状态。
 - 目标模型列表。
 - harvest proxy 是否已配置，以及已脱敏的代理地址。
-- 每个 Codex OAuth 账号、模型的 `ready`、长度、剩余秒数、过期时间和阻断状态。
+- 每个 Codex OAuth 账号、模型的目标长度、实际长度、`ready`、剩余秒数、过期时间和阻断状态。
 
 `PUT` 和 `PATCH` 可以更新这些策略。提交管理 API 返回的脱敏代理地址时，系统会
 保留服务端已经保存的代理密码；提交新的完整代理 URL 时，系统会先校验协议、主机、
