@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,6 +164,38 @@ func TestCodexTurnStateInvalidationDropsCredentialBucket(t *testing.T) {
 	reader.ApplyHeaders(headers)
 	if got := headers.Get(codexTurnStateHeader); got != "" {
 		t.Fatalf("invalidated credential received state %q", got)
+	}
+}
+
+func TestCodexTurnStateObserveRequestOnlyChangesStatistics(t *testing.T) {
+	now := time.Unix(700, 0)
+	cache := newCodexTurnStateCache(func() time.Time { return now })
+	auth := &cliproxyauth.Auth{ID: "auth-final-length"}
+	state := cache.request(auth, "https://chatgpt.com/backend-api/codex/responses", turnStateBody("turn-1"), nil)
+	state.observe(strings.Repeat("p", 312))
+	initial := state.bucket.entries[state.key]
+
+	for _, tc := range []struct {
+		name    string
+		headers http.Header
+		body    string
+		want    int
+	}{
+		{name: "final header", headers: http.Header{"x-codex-turn-state": {strings.Repeat("h", 292)}}, want: 292},
+		{name: "websocket frame overrides handshake", headers: http.Header{codexTurnStateHeader: {strings.Repeat("h", 292)}}, body: `{"client_metadata":{"x-codex-turn-state":"` + strings.Repeat("b", 332) + `"}}`, want: 332},
+		{name: "explicit empty frame", headers: http.Header{codexTurnStateHeader: {strings.Repeat("h", 292)}}, body: `{"client_metadata":{"x-codex-turn-state":""}}`, want: 0},
+		{name: "absent state clears old length", want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state.ObserveRequest(tc.headers, []byte(tc.body))
+			requestLen, responseLen := state.turnStateLengths()
+			if requestLen != tc.want || responseLen != 312 {
+				t.Fatalf("lengths = %d/%d, want %d/312", requestLen, responseLen, tc.want)
+			}
+			if current := state.bucket.entries[state.key]; current != initial {
+				t.Fatal("recording the request modified the passive cache or its expiry")
+			}
+		})
 	}
 }
 

@@ -127,6 +127,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return resp, errTicket
 	}
+	turnState.ObserveRequest(httpReq.Header, nil)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -315,6 +316,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return resp, errTicket
 	}
+	turnState.ObserveRequest(httpReq.Header, nil)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID

@@ -96,6 +96,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, errTicket
 	}
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
+	turnState.ObserveRequest(wsHeaders, upstreamBody)
 	logTurnStateOnReturn := false
 	defer func() {
 		if logTurnStateOnReturn {
