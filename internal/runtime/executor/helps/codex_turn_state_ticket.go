@@ -318,8 +318,9 @@ func recordCodexTurnStateTicketValue(auth *cliproxyauth.Auth, cfg config.CodexTu
 	if cfg.TTLSeconds <= 0 {
 		ticket.ExpiresAt = now.Add(time.Duration(config.DefaultCodexTurnStateTicketTTLSeconds) * time.Second)
 	}
-	StoreCodexTurnStateTicket(auth, ticket)
+	// Keep the request snapshot unchanged until persistence computes its delta.
 	notifyCodexTurnStateTicketRecorder(auth, ticket)
+	StoreCodexTurnStateTicket(auth, ticket)
 	return true
 }
 
@@ -468,7 +469,7 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 type CodexTurnStateTicketHarvester struct {
 	cfgFn    func() *config.Config
 	listFn   func() []*cliproxyauth.Auth
-	updateFn func(context.Context, *cliproxyauth.Auth) error
+	updateFn func(context.Context, *cliproxyauth.Auth, *cliproxyauth.Auth) error
 
 	lifecycleMu sync.Mutex
 	cancel      context.CancelFunc
@@ -480,7 +481,8 @@ type CodexTurnStateTicketHarvester struct {
 type CodexTurnStateTicketHarvesterOptions struct {
 	Config func() *config.Config
 	List   func() []*cliproxyauth.Auth
-	Update func(context.Context, *cliproxyauth.Auth) error
+	// Update merges changes from base to updated into the latest credential.
+	Update func(ctx context.Context, base, updated *cliproxyauth.Auth) error
 }
 
 func NewCodexTurnStateTicketHarvester(opts CodexTurnStateTicketHarvesterOptions) *CodexTurnStateTicketHarvester {
@@ -509,7 +511,7 @@ func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 		if updated.Metadata != nil {
 			delete(updated.Metadata, CodexTurnStateTicketMetadataKey(model))
 		}
-		if errUpdate := h.updateFn(context.Background(), updated); errUpdate != nil {
+		if errUpdate := h.updateFn(context.Background(), auth, updated); errUpdate != nil {
 			log.WithFields(log.Fields{"auth_id": authID, "model": model}).Warnf("codex turn-state ticket invalidation persistence failed: %v", errUpdate)
 		}
 		// The persisted ticket is invalidated before the request returns; only
@@ -633,7 +635,7 @@ func (h *CodexTurnStateTicketHarvester) Record(auth *cliproxyauth.Auth, ticket C
 	}
 	updated := auth.Clone()
 	StoreCodexTurnStateTicket(updated, ticket)
-	if errUpdate := h.updateFn(context.Background(), updated); errUpdate != nil {
+	if errUpdate := h.updateFn(context.Background(), auth, updated); errUpdate != nil {
 		log.WithFields(log.Fields{"auth_id": auth.ID, "model": ticket.Model}).Warnf("codex turn-state ticket response persistence failed: %v", errUpdate)
 	}
 }
@@ -662,7 +664,7 @@ func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.C
 		}
 		updated := auth.Clone()
 		StoreCodexTurnStateTicket(updated, ticket)
-		if errUpdate := h.updateFn(ctx, updated); errUpdate != nil {
+		if errUpdate := h.updateFn(ctx, auth, updated); errUpdate != nil {
 			log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Warnf("codex turn-state ticket persistence failed: %v", errUpdate)
 			return
 		}

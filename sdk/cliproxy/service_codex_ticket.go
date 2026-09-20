@@ -20,8 +20,8 @@ func (s *Service) startCodexTicketHarvester(ctx context.Context) {
 			return cfg
 		},
 		List: s.coreManager.List,
-		Update: func(updateCtx context.Context, auth *coreauth.Auth) error {
-			_, errUpdate := s.coreManager.Update(updateCtx, auth)
+		Update: func(updateCtx context.Context, base, updated *coreauth.Auth) error {
+			_, errUpdate := s.coreManager.UpdatePreparedAuth(updateCtx, base, updated)
 			return errUpdate
 		},
 	})
