@@ -1,12 +1,42 @@
 package logging
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
+
+func TestLogFormatterTicketProbeUsesExactCompactFormat(t *testing.T) {
+	entry := log.NewEntry(log.New())
+	entry.Time = time.Date(2026, 9, 20, 18, 2, 0, 0, time.Local)
+	entry.Level = log.InfoLevel
+	entry.Caller = &runtime.Frame{File: "/src/codex_turn_state_ticket_log.go", Line: 42}
+	entry.Message = `200 | 1.420s | gpt-5.6-astra/- | 0/332 | POST "/backend-api/codex/responses"`
+	entry.Data = log.Fields{
+		CodexTicketProbeLogField: true,
+		"request_id":             "a1b2c3d6", "auth_file": "codex-user-team-windows.json",
+		"session_id": "7a120003", "turn_id": "8b230003",
+	}
+	formatted, errFormat := (&LogFormatter{}).Format(entry)
+	if errFormat != nil {
+		t.Fatal(errFormat)
+	}
+	want := "[2026-09-20 18:02:00] [a1b2c3d6] [codex-user-team-windows.json] [7a120003] [8b230003] [info ] [TICKET-PROBE] 200 | 1.420s | gpt-5.6-astra/- | 0/332 | POST \"/backend-api/codex/responses\"\n"
+	if string(formatted) != want {
+		t.Fatalf("probe log = %q, want %q", formatted, want)
+	}
+	delete(entry.Data, CodexTicketProbeLogField)
+	formatted, errFormat = (&LogFormatter{}).Format(entry)
+	if errFormat != nil {
+		t.Fatal(errFormat)
+	}
+	if !strings.Contains(string(formatted), "[codex_turn_state_ticket_log.go:42]") {
+		t.Fatalf("ordinary log lost source location: %s", formatted)
+	}
+}
 
 func TestLogFormatterPrintsVersionField(t *testing.T) {
 	entry := log.NewEntry(log.New())

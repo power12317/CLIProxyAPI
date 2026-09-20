@@ -439,7 +439,9 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	req.Header.Set("X-Client-Request-Id", uuid.NewString())
 	req.Header.Set("Thread-Id", sessionID)
 	client := NewUtlsHTTPClient(attemptCtx, cfg, probeAuth, timeout)
+	started := time.Now()
 	resp, errDo := client.Do(req)
+	logCodexTurnStateTicketProbe(auth, req, model, sessionID, turnID, resp, time.Since(started), errDo)
 	if errDo != nil {
 		return CodexTurnStateTicket{}, 0, errDo
 	}
@@ -653,11 +655,9 @@ func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.C
 		}()
 		ticket, status, errHarvest := HarvestCodexTurnStateTicket(ctx, cfg, auth, model, proxyURL)
 		if errHarvest != nil {
-			log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Debugf("codex turn-state ticket probe failed: %v", errHarvest)
 			return
 		}
 		if status != http.StatusOK || strings.TrimSpace(ticket.State) == "" {
-			log.WithFields(log.Fields{"auth_id": auth.ID, "model": model, "http_status": status}).Debug("codex turn-state ticket probe did not return a ticket")
 			return
 		}
 		updated := auth.Clone()
@@ -666,7 +666,6 @@ func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.C
 			log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Warnf("codex turn-state ticket persistence failed: %v", errUpdate)
 			return
 		}
-		log.WithFields(log.Fields{"auth_id": auth.ID, "model": model, "length": ticket.Length}).Info("codex turn-state ticket harvested")
 	}()
 }
 

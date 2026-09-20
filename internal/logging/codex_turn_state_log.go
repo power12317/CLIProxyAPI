@@ -8,6 +8,9 @@ import (
 
 const codexTurnStateLogKey = "__codex_turn_state_log__"
 
+// CodexTicketProbeLogField selects the ticket probe marker instead of a source location.
+const CodexTicketProbeLogField = "codex_ticket_probe"
+
 // CodexTurnStateLogFields contains the fields appended to the Gin access log
 // for a Codex request. The request ID remains in the access log's standard ID
 // column.
