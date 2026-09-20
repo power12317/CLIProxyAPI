@@ -78,3 +78,27 @@ func TestCodexExecutorCompactAddsDefaultInstructionsWithoutInjectingImageTool(t 
 		})
 	}
 }
+
+func TestCodexExecutorCompactOnlyAutoAddsLiteHeaderForFinalLiteBody(t *testing.T) {
+	var gotHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response.compaction","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	executor := NewCodexExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{"base_url": server.URL, "api_key": "test"}}
+	payload := []byte(`{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"input":[]}`)
+	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{Model: "gpt-5.6-luna", Payload: payload}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai-response"),
+		Alt:          "responses/compact",
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if got := gotHeaders.Get(codexResponsesLiteHeader); got != "true" {
+		t.Fatalf("Lite header = %q, want true", got)
+	}
+}

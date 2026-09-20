@@ -58,7 +58,7 @@ func TestCodexExecutorExecuteResponsesLiteHeaderDoesNotInjectImageGenerationTool
 	}
 }
 
-func TestCodexOfficialRequestReconstructsMissingLiteHeaderFromModelMetadata(t *testing.T) {
+func TestCodexOfficialRequestDoesNotReconstructLiteHeaderWhenFinalBodyIsNotLite(t *testing.T) {
 	var gotHeaders http.Header
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,13 +71,19 @@ func TestCodexOfficialRequestReconstructsMissingLiteHeaderFromModelMetadata(t *t
 
 	executor := NewCodexExecutor(&config.Config{})
 	auth := &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "test", "base_url": server.URL}}
-	payload := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"tools":[{"type":"function","name":"exec","parameters":{}}]}`)
+	payload := []byte(`{"model":"gpt-5.6-sol","reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"tools":[{"type":"function","name":"exec","parameters":{}}]}`)
 	_, err := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{Model: "gpt-5.6-sol", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("openai-response")})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if got := gotHeaders.Get(codexResponsesLiteHeader); got != "true" {
-		t.Fatalf("Lite header = %q, want true", got)
+	if got := gotHeaders.Get(codexResponsesLiteHeader); got != "" {
+		t.Fatalf("Lite header = %q, want no auto header; body=%s", got, gotBody)
+	}
+	if got := gjson.GetBytes(gotBody, "reasoning.context").String(); got != "all_turns" {
+		t.Fatalf("reasoning.context = %q, want all_turns", got)
+	}
+	if got := gjson.GetBytes(gotBody, "parallel_tool_calls"); got.Type != gjson.True {
+		t.Fatalf("parallel_tool_calls = %s, want final true fixture", got.Raw)
 	}
 	if got := gjson.GetBytes(gotBody, "tools.0.type").String(); got != "function" {
 		t.Fatalf("tool type = %q, want function; body=%s", got, gotBody)
@@ -90,6 +96,42 @@ func TestCodexOfficialRequestDoesNotReconstructLiteHeaderForNonLiteModel(t *test
 	ensureCodexResponsesLiteHeader(headers, body, "gpt-5.5", true)
 	if got := headers.Get(codexResponsesLiteHeader); got != "" {
 		t.Fatalf("Lite header = %q, want no reconstructed header", got)
+	}
+}
+
+func TestCodexResponsesLiteAutoConditionRequiresExactBodyFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "valid", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"},"parallel_tool_calls":false}`, want: true},
+		{name: "missing context", body: `{"model":"gpt-5.6-luna","parallel_tool_calls":false}`, want: false},
+		{name: "null context", body: `{"model":"gpt-5.6-luna","reasoning":{"context":null},"parallel_tool_calls":false}`, want: false},
+		{name: "wrong context", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"false"},"parallel_tool_calls":false}`, want: false},
+		{name: "missing parallel", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"}}`, want: false},
+		{name: "null parallel", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"},"parallel_tool_calls":null}`, want: false},
+		{name: "string parallel", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"},"parallel_tool_calls":"false"}`, want: false},
+		{name: "number parallel", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"},"parallel_tool_calls":0}`, want: false},
+		{name: "true parallel", body: `{"model":"gpt-5.6-luna","reasoning":{"context":"all_turns"},"parallel_tool_calls":true}`, want: false},
+		{name: "model capability false", body: `{"model":"gpt-5.5","reasoning":{"context":"all_turns"},"parallel_tool_calls":false}`, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(test.body)
+			model := gjson.GetBytes(body, "model").String()
+			headers := make(http.Header)
+			ensureCodexResponsesLiteHeader(headers, body, model, true)
+			gotHeader := headers.Get(codexResponsesLiteHeader) == "true"
+			if gotHeader != test.want {
+				t.Fatalf("header enabled = %t, want %t", gotHeader, test.want)
+			}
+			mirrored := ensureCodexResponsesLiteMirror(body, model, true)
+			gotMirror := gjson.GetBytes(mirrored, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() == "true"
+			if gotMirror != test.want {
+				t.Fatalf("mirror enabled = %t, want %t; body=%s", gotMirror, test.want, mirrored)
+			}
+		})
 	}
 }
 
@@ -119,6 +161,14 @@ func TestCodexLiteHeaderIsPreservedWhenToolShapeIsNotLite(t *testing.T) {
 	ensureCodexResponsesLiteHeader(headers, body, "gpt-5.6-luna", true)
 	if got := headers.Get(codexResponsesLiteHeader); got != "true" {
 		t.Fatalf("Lite header = %q, want existing true header preserved", got)
+	}
+}
+
+func TestCodexLiteMirrorIsPreservedWhenAlreadyPresent(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-luna","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"false"}}`)
+	got := ensureCodexResponsesLiteMirror(body, "gpt-5.6-luna", true)
+	if value := gjson.GetBytes(got, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String(); value != "false" {
+		t.Fatalf("existing mirror = %q, want false", value)
 	}
 }
 

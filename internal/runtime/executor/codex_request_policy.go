@@ -20,7 +20,7 @@ func codexOfficialRequest(originalPayload, payload []byte) bool {
 
 func codexResponsesLiteBodyMode(body []byte, official bool, headers http.Header) bool {
 	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	if official && registry.CodexModelUsesResponsesLite(model) {
+	if codexResponsesLiteAutoEnabled(body, model, official) {
 		return true
 	}
 	return util.IsCodexResponsesLiteRequest(body, headers)
@@ -30,19 +30,32 @@ func codexResponsesLiteModelEnabled(model string) bool {
 	return registry.CodexModelUsesResponsesLite(model)
 }
 
+func codexResponsesLiteBodyFieldsSatisfied(body []byte) bool {
+	contextValue := gjson.GetBytes(body, "reasoning.context")
+	if contextValue.Type != gjson.String || contextValue.String() != "all_turns" {
+		return false
+	}
+	parallelValue := gjson.GetBytes(body, "parallel_tool_calls")
+	return parallelValue.Type == gjson.False
+}
+
+func codexResponsesLiteAutoEnabled(body []byte, model string, official bool) bool {
+	return official && codexResponsesLiteModelEnabled(model) && codexResponsesLiteBodyFieldsSatisfied(body)
+}
+
 // ensureCodexResponsesLiteHeader only reconstructs a missing header for an
 // official Codex body. Existing client or configured headers are preserved.
 func ensureCodexResponsesLiteHeader(headers http.Header, body []byte, model string, official bool) {
 	if headers == nil || headers.Get(codexResponsesLiteHeader) != "" {
 		return
 	}
-	if official && registry.CodexModelUsesResponsesLite(model) {
+	if codexResponsesLiteAutoEnabled(body, model, official) {
 		headers.Set(codexResponsesLiteHeader, "true")
 	}
 }
 
 func ensureCodexResponsesLiteMirror(body []byte, model string, official bool) []byte {
-	if !official || !registry.CodexModelUsesResponsesLite(model) {
+	if !codexResponsesLiteAutoEnabled(body, model, official) {
 		return body
 	}
 	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {

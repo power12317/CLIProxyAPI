@@ -181,6 +181,9 @@ type AntigravityConnectionPoolConfig struct {
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
+	// DeviceConvergence controls whether Codex installation identities are rewritten to a
+	// stable account-and-system identity. A nil value defaults to enabled.
+	DeviceConvergence *bool `yaml:"device-convergence,omitempty" json:"device-convergence,omitempty"`
 	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
 	// StreamBootstrapBuffering holds back the frames that arrive before generation starts, none of
@@ -291,6 +294,12 @@ func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
 	out.Models = models
 	out.HarvestProxyURL = strings.TrimSpace(out.HarvestProxyURL)
 	return out
+}
+
+// DeviceConvergenceEnabled reports whether Codex installation identity convergence is enabled.
+// It defaults to true so existing installations keep the current OAuth fidelity behavior.
+func (c CodexConfig) DeviceConvergenceEnabled() bool {
+	return c.DeviceConvergence == nil || *c.DeviceConvergence
 }
 
 // DefaultCodexStreamBootstrapTimeout is the default maximum duration to buffer bootstrap events.

@@ -224,7 +224,7 @@ func TestCodexWebsocketsExecuteResponsesLiteDoesNotInjectImageGenerationTool(t *
 	}
 	req := cliproxyexecutor.Request{
 		Model:   "gpt-5.6-sol",
-		Payload: []byte(`{"model":"gpt-5.6-sol","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec"}]},{"role":"user","content":"hello"}],"parallel_tool_calls":true,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`),
+		Payload: []byte(`{"model":"gpt-5.6-sol","reasoning":{"context":"all_turns"},"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec"}]},{"role":"user","content":"hello"}],"parallel_tool_calls":false,"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"}}`),
 	}
 	opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("codex")}
 
