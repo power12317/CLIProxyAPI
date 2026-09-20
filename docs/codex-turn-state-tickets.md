@@ -1,5 +1,7 @@
 # Codex turn-state tickets
 
+简体中文版本：[codex-turn-state-tickets_CN.md](codex-turn-state-tickets_CN.md)
+
 CLIProxyAPI can proactively obtain the one-hour `x-codex-turn-state` value used by
 ChatGPT Codex OAuth accounts. The feature is disabled by default. When enabled,
 the harvester probes each active Codex OAuth credential and configured model
