@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -362,21 +363,26 @@ func StoreCodexTurnStateTicket(auth *cliproxyauth.Auth, ticket CodexTurnStateTic
 // harvest proxy. An empty proxy URL uses the normal direct transport; it only
 // reads the response header and never uses the response body as ticket data.
 func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, harvestProxyURL string) (CodexTurnStateTicket, int, error) {
+	ticket, status, _, errHarvest := harvestCodexTurnStateTicket(ctx, cfg, auth, model, harvestProxyURL)
+	return ticket, status, errHarvest
+}
+
+func harvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, harvestProxyURL string) (CodexTurnStateTicket, int, int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	model = strings.TrimSpace(model)
 	harvestProxyURL = strings.TrimSpace(harvestProxyURL)
 	if !isCodexTurnStateTicketAccount(auth) {
-		return CodexTurnStateTicket{}, 0, nil
+		return CodexTurnStateTicket{}, 0, 0, nil
 	}
 	if model == "" {
-		return CodexTurnStateTicket{}, 0, errors.New("codex ticket harvest requires a model")
+		return CodexTurnStateTicket{}, 0, 0, errors.New("codex ticket harvest requires a model")
 	}
 	token, _ := auth.Metadata["access_token"].(string)
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return CodexTurnStateTicket{}, 0, errors.New("codex OAuth access token is unavailable")
+		return CodexTurnStateTicket{}, 0, 0, errors.New("codex OAuth access token is unavailable")
 	}
 	var effective config.CodexTurnStateTicketConfig
 	if cfg != nil {
@@ -417,11 +423,11 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	}
 	body, errMarshalBody := json.Marshal(probeDocument)
 	if errMarshalBody != nil {
-		return CodexTurnStateTicket{}, 0, errMarshalBody
+		return CodexTurnStateTicket{}, 0, 0, errMarshalBody
 	}
 	req, errRequest := http.NewRequestWithContext(attemptCtx, http.MethodPost, codexTurnStateTicketProbeURL, bytes.NewReader(body))
 	if errRequest != nil {
-		return CodexTurnStateTicket{}, 0, errRequest
+		return CodexTurnStateTicket{}, 0, 0, errRequest
 	}
 	req.Host = "chatgpt.com"
 	req.Close = true
@@ -450,10 +456,10 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	resp, errDo := client.Do(req)
 	logCodexTurnStateTicketProbe(auth, req, model, sessionID, turnID, resp, time.Since(started), errDo)
 	if errDo != nil {
-		return CodexTurnStateTicket{}, 0, errDo
+		return CodexTurnStateTicket{}, 0, 0, errDo
 	}
 	if resp == nil {
-		return CodexTurnStateTicket{}, 0, errors.New("codex ticket probe returned no response")
+		return CodexTurnStateTicket{}, 0, 0, errors.New("codex ticket probe returned no response")
 	}
 	defer func() {
 		if resp.Body != nil {
@@ -463,10 +469,10 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	state := strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader))
 	targetLength := CodexTurnStateTicketTargetLength(auth)
 	if resp.StatusCode != http.StatusOK || len(state) != targetLength || !strings.HasPrefix(state, codexTurnStateTicketStatePrefix) {
-		return CodexTurnStateTicket{}, resp.StatusCode, nil
+		return CodexTurnStateTicket{}, resp.StatusCode, len(state), nil
 	}
 	now := time.Now()
-	return CodexTurnStateTicket{AccountID: auth.ID, Model: model, State: state, Length: len(state), CapturedAt: now, ExpiresAt: now.Add(time.Duration(effective.TTLSeconds) * time.Second), Attempts: 1}, resp.StatusCode, nil
+	return CodexTurnStateTicket{AccountID: auth.ID, Model: model, State: state, Length: len(state), CapturedAt: now, ExpiresAt: now.Add(time.Duration(effective.TTLSeconds) * time.Second), Attempts: 1}, resp.StatusCode, len(state), nil
 }
 
 // CodexTurnStateTicketHarvester continuously refreshes tickets in the
@@ -480,8 +486,18 @@ type CodexTurnStateTicketHarvester struct {
 	lifecycleMu sync.Mutex
 	cancel      context.CancelFunc
 	done        chan struct{}
-	flightMu    sync.Mutex
-	flights     map[string]struct{}
+	pendingMu   sync.Mutex
+	wake        chan struct{}
+	enabled     bool
+	refreshAll  bool
+	pending     map[codexTicketProbeKey]struct{}
+	// Only the worker accesses account pause deadlines.
+	pausedUntil map[string]time.Time
+}
+
+type codexTicketProbeKey struct {
+	authID string
+	model  string
 }
 
 type CodexTurnStateTicketHarvesterOptions struct {
@@ -492,11 +508,51 @@ type CodexTurnStateTicketHarvesterOptions struct {
 }
 
 func NewCodexTurnStateTicketHarvester(opts CodexTurnStateTicketHarvesterOptions) *CodexTurnStateTicketHarvester {
-	return &CodexTurnStateTicketHarvester{cfgFn: opts.Config, listFn: opts.List, updateFn: opts.Update, flights: make(map[string]struct{})}
+	h := &CodexTurnStateTicketHarvester{
+		cfgFn: opts.Config, listFn: opts.List, updateFn: opts.Update,
+		wake: make(chan struct{}, 1), pending: make(map[codexTicketProbeKey]struct{}), pausedUntil: make(map[string]time.Time),
+	}
+	if cfg := h.currentConfig(); cfg != nil {
+		h.enabled = cfg.Codex.EffectiveTurnStateTicket().Enabled
+	}
+	return h
 }
 
-// Invalidate removes the current ticket for an account/model pair and starts a
-// replacement probe without waiting for the next periodic sweep.
+// ConfigChanged immediately wakes the worker when ticket harvesting is enabled.
+// Repeated reloads while enabled do not cause extra probes or bypass account pauses.
+func (h *CodexTurnStateTicketHarvester) ConfigChanged() {
+	if h == nil {
+		return
+	}
+	h.pendingMu.Lock()
+	defer h.pendingMu.Unlock()
+	cfg := h.currentConfig()
+	enabled := cfg != nil && cfg.Codex.EffectiveTurnStateTicket().Enabled
+	if enabled && !h.enabled {
+		h.refreshAll = true
+		h.signal()
+	}
+	h.enabled = enabled
+}
+
+func (h *CodexTurnStateTicketHarvester) signal() {
+	select {
+	case h.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (h *CodexTurnStateTicketHarvester) takePending() (bool, map[codexTicketProbeKey]struct{}) {
+	h.pendingMu.Lock()
+	defer h.pendingMu.Unlock()
+	all, pending := h.refreshAll, h.pending
+	h.refreshAll = false
+	h.pending = make(map[codexTicketProbeKey]struct{})
+	return all, pending
+}
+
+// Invalidate removes the current ticket for a credential/model pair and queues
+// a replacement on the same sequential worker, respecting account pauses.
 func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 	if h == nil || strings.TrimSpace(authID) == "" || strings.TrimSpace(model) == "" || h.listFn == nil || h.updateFn == nil {
 		return
@@ -520,9 +576,11 @@ func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 		if errUpdate := h.updateFn(context.Background(), auth, updated); errUpdate != nil {
 			log.WithFields(log.Fields{"auth_id": authID, "model": model}).Warnf("codex turn-state ticket invalidation persistence failed: %v", errUpdate)
 		}
-		// The persisted ticket is invalidated before the request returns; only
-		// the replacement network probe runs asynchronously.
-		h.probe(context.Background(), cfg, updated, strings.TrimSpace(model), policy.HarvestProxyURL)
+		// Persistence completes before returning; network work belongs to the worker.
+		h.pendingMu.Lock()
+		h.pending[codexTicketProbeKey{strings.TrimSpace(authID), strings.TrimSpace(model)}] = struct{}{}
+		h.pendingMu.Unlock()
+		h.signal()
 		return
 	}
 }
@@ -576,17 +634,26 @@ func (h *CodexTurnStateTicketHarvester) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			h.refresh(ctx)
-			interval := config.DefaultCodexTurnStateTicketProbeIntervalSeconds
-			if cfg := h.currentConfig(); cfg != nil {
-				interval = cfg.Codex.EffectiveTurnStateTicket().ProbeIntervalSeconds
+			h.takePending()
+			h.refresh(ctx, nil)
+			timer.Reset(h.interval())
+		case <-h.wake:
+			all, pending := h.takePending()
+			if all {
+				h.refresh(ctx, nil)
+				timer.Reset(h.interval())
+			} else if len(pending) > 0 {
+				h.refresh(ctx, pending)
 			}
-			if interval <= 0 {
-				interval = config.DefaultCodexTurnStateTicketProbeIntervalSeconds
-			}
-			timer.Reset(time.Duration(interval) * time.Second)
 		}
 	}
+}
+
+func (h *CodexTurnStateTicketHarvester) interval() time.Duration {
+	if cfg := h.currentConfig(); cfg != nil {
+		return time.Duration(cfg.Codex.EffectiveTurnStateTicket().ProbeIntervalSeconds) * time.Second
+	}
+	return time.Duration(config.DefaultCodexTurnStateTicketProbeIntervalSeconds) * time.Second
 }
 
 func (h *CodexTurnStateTicketHarvester) currentConfig() *config.Config {
@@ -596,7 +663,7 @@ func (h *CodexTurnStateTicketHarvester) currentConfig() *config.Config {
 	return h.cfgFn()
 }
 
-func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
+func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context, requested map[codexTicketProbeKey]struct{}) {
 	if h == nil || h.listFn == nil || h.updateFn == nil || ctx.Err() != nil {
 		return
 	}
@@ -614,9 +681,20 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 			return
 		}
 	}
-	now := time.Now()
-	refreshBefore := time.Duration(policy.RefreshBeforeSeconds) * time.Second
-	for _, auth := range h.listFn() {
+	roundStarted := time.Now()
+	for key, until := range h.pausedUntil {
+		if !roundStarted.Before(until) {
+			delete(h.pausedUntil, key)
+		}
+	}
+	auths := h.listFn()
+	sort.SliceStable(auths, func(i, j int) bool {
+		if auths[i] == nil || auths[j] == nil {
+			return auths[i] != nil
+		}
+		return auths[i].ID < auths[j].ID
+	})
+	for _, auth := range auths {
 		if ctx.Err() != nil || !isCodexTurnStateTicketAccount(auth) || auth.Disabled || (auth.Status != "" && auth.Status != cliproxyauth.StatusActive) {
 			continue
 		}
@@ -625,11 +703,101 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 			if model == "" {
 				continue
 			}
-			targetLength := CodexTurnStateTicketTargetLength(auth)
-			if ticket := codexTurnStateTicketForAuth(auth, model); ticket.valid(now, targetLength) && !ticket.needsRefresh(now, refreshBefore) {
+			if requested != nil {
+				if _, ok := requested[codexTicketProbeKey{auth.ID, model}]; !ok {
+					continue
+				}
+			}
+			// Recheck configuration and credential state after each preceding network request.
+			cfg = h.currentConfig()
+			if ctx.Err() != nil || cfg == nil || !cfg.Codex.EffectiveTurnStateTicket().Enabled {
+				return
+			}
+			currentPolicy := cfg.Codex.EffectiveTurnStateTicket()
+			if !codexTurnStateTicketModelConfigured(currentPolicy.Models, model) {
 				continue
 			}
-			h.probe(ctx, cfg, auth, model, policy.HarvestProxyURL)
+			current := h.findAuth(auth.ID)
+			if current == nil || !isCodexTurnStateTicketAccount(current) || current.Disabled || (current.Status != "" && current.Status != cliproxyauth.StatusActive) {
+				break
+			}
+			now := time.Now()
+			if h.accountPaused(current, roundStarted) {
+				break
+			}
+			targetLength := CodexTurnStateTicketTargetLength(current)
+			if ticket := codexTurnStateTicketForAuth(current, model); ticket.valid(now, targetLength) && !ticket.needsRefresh(now, time.Duration(currentPolicy.RefreshBeforeSeconds)*time.Second) {
+				continue
+			}
+			if h.probe(ctx, cfg, current, model, currentPolicy.HarvestProxyURL) == 312 {
+				h.pauseAccount(current, h.listFn(), time.Now().Add(h.interval()))
+				break
+			}
+		}
+	}
+}
+
+func (h *CodexTurnStateTicketHarvester) findAuth(authID string) *cliproxyauth.Auth {
+	for _, auth := range h.listFn() {
+		if auth != nil && auth.ID == authID {
+			return auth
+		}
+	}
+	return nil
+}
+
+func codexTicketProbeAccountKeys(auth *cliproxyauth.Auth) []string {
+	keys := make([]string, 0, 2)
+	for _, field := range []string{"email", "account_id"} {
+		if value, ok := auth.Metadata[field].(string); ok && strings.TrimSpace(value) != "" {
+			keys = append(keys, field+":"+strings.ToLower(strings.TrimSpace(value)))
+		}
+	}
+	if len(keys) == 0 {
+		keys = append(keys, "credential:"+auth.ID)
+	}
+	return keys
+}
+
+func (h *CodexTurnStateTicketHarvester) accountPaused(auth *cliproxyauth.Auth, now time.Time) bool {
+	for _, key := range codexTicketProbeAccountKeys(auth) {
+		if now.Before(h.pausedUntil[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+// Pause every alias connected by either email or account ID, including credentials
+// which contain only one of those fields. Ticket storage remains credential-scoped.
+func (h *CodexTurnStateTicketHarvester) pauseAccount(auth *cliproxyauth.Auth, auths []*cliproxyauth.Auth, until time.Time) {
+	keys := make(map[string]bool)
+	for _, key := range codexTicketProbeAccountKeys(auth) {
+		keys[key] = true
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, candidate := range auths {
+			if !isCodexTurnStateTicketAccount(candidate) {
+				continue
+			}
+			aliases := codexTicketProbeAccountKeys(candidate)
+			matches := false
+			for _, key := range aliases {
+				matches = matches || keys[key]
+			}
+			if matches {
+				for _, key := range aliases {
+					if !keys[key] {
+						keys[key], changed = true, true
+					}
+				}
+			}
+		}
+	}
+	for key := range keys {
+		if until.After(h.pausedUntil[key]) {
+			h.pausedUntil[key] = until
 		}
 	}
 }
@@ -646,35 +814,17 @@ func (h *CodexTurnStateTicketHarvester) Record(auth *cliproxyauth.Auth, ticket C
 	}
 }
 
-func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, proxyURL string) {
-	key := strings.TrimSpace(auth.ID) + "\x00" + strings.TrimSpace(model)
-	h.flightMu.Lock()
-	if _, exists := h.flights[key]; exists {
-		h.flightMu.Unlock()
-		return
+func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, proxyURL string) int {
+	ticket, status, responseLength, errHarvest := harvestCodexTurnStateTicket(ctx, cfg, auth, model, proxyURL)
+	if errHarvest != nil || status != http.StatusOK || strings.TrimSpace(ticket.State) == "" {
+		return responseLength
 	}
-	h.flights[key] = struct{}{}
-	h.flightMu.Unlock()
-	go func() {
-		defer func() {
-			h.flightMu.Lock()
-			delete(h.flights, key)
-			h.flightMu.Unlock()
-		}()
-		ticket, status, errHarvest := HarvestCodexTurnStateTicket(ctx, cfg, auth, model, proxyURL)
-		if errHarvest != nil {
-			return
-		}
-		if status != http.StatusOK || strings.TrimSpace(ticket.State) == "" {
-			return
-		}
-		updated := auth.Clone()
-		StoreCodexTurnStateTicket(updated, ticket)
-		if errUpdate := h.updateFn(ctx, auth, updated); errUpdate != nil {
-			log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Warnf("codex turn-state ticket persistence failed: %v", errUpdate)
-			return
-		}
-	}()
+	updated := auth.Clone()
+	StoreCodexTurnStateTicket(updated, ticket)
+	if errUpdate := h.updateFn(ctx, auth, updated); errUpdate != nil {
+		log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Warnf("codex turn-state ticket persistence failed: %v", errUpdate)
+	}
+	return responseLength
 }
 
 // ValidateCodexTurnStateTicketHarvestProxyURL validates syntax without making

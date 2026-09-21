@@ -12,6 +12,11 @@ func (s *Service) startCodexTicketHarvester(ctx context.Context) {
 	if s == nil || s.coreManager == nil {
 		return
 	}
+	s.codexTicketMu.Lock()
+	defer s.codexTicketMu.Unlock()
+	if s.codexTicketHarvester != nil {
+		return
+	}
 	harvester := helps.NewCodexTurnStateTicketHarvester(helps.CodexTurnStateTicketHarvesterOptions{
 		Config: func() *config.Config {
 			s.cfgMu.RLock()
@@ -32,9 +37,25 @@ func (s *Service) startCodexTicketHarvester(ctx context.Context) {
 }
 
 func (s *Service) stopCodexTicketHarvester() {
-	if s == nil || s.codexTicketHarvester == nil {
+	if s == nil {
+		return
+	}
+	s.codexTicketMu.Lock()
+	defer s.codexTicketMu.Unlock()
+	if s.codexTicketHarvester == nil {
 		return
 	}
 	s.codexTicketHarvester.Stop()
 	s.codexTicketHarvester = nil
+}
+
+func (s *Service) notifyCodexTicketConfigChanged() {
+	if s == nil {
+		return
+	}
+	s.codexTicketMu.Lock()
+	defer s.codexTicketMu.Unlock()
+	if s.codexTicketHarvester != nil {
+		s.codexTicketHarvester.ConfigChanged()
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -89,7 +90,7 @@ func assertTicketModelsReady(t *testing.T, service *Service, auth *coreauth.Auth
 	}
 }
 
-func TestCodexTicketConcurrentProbesPreserveBothModels(t *testing.T) {
+func TestCodexTicketSequentialProbesPreserveBothModels(t *testing.T) {
 	for _, expired := range []bool{false, true} {
 		for _, first := range []string{"gpt-5.6-sol", "gpt-6-astra"} {
 			name := "missing/" + first
@@ -98,6 +99,11 @@ func TestCodexTicketConcurrentProbesPreserveBothModels(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				service, store, auth := newTicketTestService(t, expired)
+				second := "gpt-6-astra"
+				if first == second {
+					second = "gpt-5.6-sol"
+				}
+				service.cfg.Codex.TurnStateTicket.Models = []string{first, second}
 				releases := map[string]chan struct{}{"gpt-6-astra": make(chan struct{}), "gpt-5.6-sol": make(chan struct{})}
 				started := make(chan string, 2)
 				rt := ticketTestTransport(func(req *http.Request) (*http.Response, error) {
@@ -117,15 +123,13 @@ func TestCodexTicketConcurrentProbesPreserveBothModels(t *testing.T) {
 				ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))
 				service.startCodexTicketHarvester(ctx)
 				defer service.stopCodexTicketHarvester()
-				seen := map[string]bool{ticketTestWait(t, started): true, ticketTestWait(t, started): true}
-				if len(seen) != 2 {
-					t.Fatalf("started probes = %v", seen)
+				if got := ticketTestWait(t, started); got != first {
+					t.Fatalf("first probe = %s, want %s", got, first)
 				}
 				close(releases[first])
 				ticketTestWait(t, store.saved)
-				second := "gpt-6-astra"
-				if first == second {
-					second = "gpt-5.6-sol"
+				if got := ticketTestWait(t, started); got != second {
+					t.Fatalf("second probe = %s, want %s", got, second)
 				}
 				close(releases[second])
 				ticketTestWait(t, store.saved)
@@ -168,6 +172,43 @@ func TestCodexTicketConcurrentProbesPreserveBothModels(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestCodexTicketConfigCommitImmediatelyStartsEnabledProbes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := coreauth.NewManager(nil, nil, nil)
+		auth := &coreauth.Auth{ID: "config-wakeup", Provider: "codex", Metadata: map[string]any{"access_token": "test-token"}}
+		if _, errRegister := manager.Register(t.Context(), auth); errRegister != nil {
+			t.Fatal(errRegister)
+		}
+		cfg := &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{ProbeIntervalSeconds: 3600, Models: []string{"gpt-6-astra"}}}}
+		service := &Service{coreManager: manager, cfg: cfg}
+		calls := 0
+		rt := ticketTestTransport(func(req *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+		})
+		ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))
+		service.startCodexTicketHarvester(ctx)
+		defer service.stopCodexTicketHarvester()
+		synctest.Wait()
+		if calls != 0 {
+			t.Fatal("disabled service sent a probe")
+		}
+		started := time.Now()
+		updated := *cfg
+		updated.Codex.TurnStateTicket.Enabled = true
+		service.commitConfigUpdate(&updated)
+		synctest.Wait()
+		if calls != 1 || !time.Now().Equal(started) {
+			t.Fatalf("enable did not probe immediately: calls=%d elapsed=%s", calls, time.Since(started))
+		}
+		service.commitConfigUpdate(&updated)
+		synctest.Wait()
+		if calls != 1 {
+			t.Fatal("unchanged config caused an extra probe")
+		}
+	})
 }
 
 func TestCodexTicketNormalResponsesPreserveOtherModelsAndCredentials(t *testing.T) {

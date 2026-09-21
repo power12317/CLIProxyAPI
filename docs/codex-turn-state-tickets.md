@@ -31,6 +31,20 @@ The background probe interval defaults to 60 seconds (one minute) when omitted
 or non-positive. Explicit positive intervals are preserved; change an existing
 `probe-interval-seconds: 6` to `60` to use the one-minute interval.
 
+Startup with harvesting enabled and a disabled-to-enabled config change both
+start a sweep immediately. Fresh tickets outside the refresh window are skipped.
+All probes run sequentially in credential-ID and configured-model order, including
+replacement probes requested by normal traffic. The next periodic sweep starts
+one configured interval after the previous sweep finishes.
+
+A probe response with a 312-byte turn-state pauses the rest of that account's
+probes for the current sweep and for at least one configured interval after the
+response. Credentials sharing an email or account ID share this pause, including
+linked credentials with only one of those fields; matching trims whitespace and
+ignores case. Credentials without either field fall back to their own credential
+ID. Other accounts continue. Reloads, re-enabling, and replacement requests cannot
+bypass an active pause. Ticket storage remains separate per credential and model.
+
 When `fail-closed` is true, a configured model is not sent upstream without a
 valid ticket. The request returns a retryable executor error so the auth manager
 can try another credential. When it is false, the request proceeds using the
@@ -43,11 +57,11 @@ Normal responses with the account's target length are stored immediately as the
 account/model ticket and reused. Other response lengths, including 312, are not
 promoted to the proactive ticket; the current turn continues to use the existing
 passive cache. A Personal 312 response invalidates an active 292 ticket and
-starts a fresh probe.
+queues a fresh probe on the sequential worker, subject to an active account pause.
 
 If ChatGPT returns a 312-byte `x-codex-turn-state` while a valid Personal 292 ticket is
 active, CPA immediately invalidates and removes that account/model ticket and
-starts a fresh harvest probe. The next request therefore waits for the new
+queues a fresh harvest probe, subject to an active account pause. The next request therefore waits for the new
 ticket when fail-closed is enabled.
 
 The management API exposes `GET /v0/management/codex-turn-state-ticket` and

@@ -104,6 +104,7 @@ type Service struct {
 	pluginHost *pluginhost.Host
 
 	// codexTicketHarvester proactively obtains one-hour Codex turn-state tickets.
+	codexTicketMu        sync.Mutex
 	codexTicketHarvester *helps.CodexTurnStateTicketHarvester
 
 	// shutdownOnce ensures shutdown is called only once.
