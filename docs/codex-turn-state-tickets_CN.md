@@ -39,6 +39,46 @@ codex:
 如果代理包含用户名和密码，请确保密码已经正确 URL 编码。不要把带有真实密码的
 配置文件提交到代码仓库或发送给其他人。
 
+## 探测请求的设备标识和输入
+
+探测向 `https://chatgpt.com/backend-api/codex/responses` 发送 `POST` 请求，使用当前凭据的
+access token。输入文本为 `hey`，请求体结构如下（标识符为占位示例）：
+
+```json
+{
+  "model": "gpt-6-astra",
+  "store": false,
+  "stream": true,
+  "instructions": "Reply with exactly: pong",
+  "input": [
+    {
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "hey" }]
+    }
+  ],
+  "client_metadata": {
+    "session_id": "本次探测的会话 UUID",
+    "x-codex-installation-id": "固定设备 UUID",
+    "x-codex-turn-metadata": "{\"installation_id\":\"固定设备 UUID\",\"session_id\":\"本次探测的会话 UUID\",\"turn_id\":\"本次探测的轮次 UUID\"}"
+  }
+}
+```
+
+开启 **Codex 设备固定**（`codex.device-convergence: true`，省略时默认开启）后，探测和正常
+对话使用相同的设备 ID 生成规则：以凭据的 `account_id` 和 `codex_client_system` 为依据，
+缺少账号 ID 时回退到凭据自身 ID；系统属性缺省按 Mac 处理。同一凭据探测不同模型、
+重复探测或重启服务时，设备 ID 均保持一致；同一账号的 Mac 和 Windows 凭据使用不同的设备 ID。
+设备 ID 不改变门票按“凭据 ID + 模型”独立保存的规则。
+
+固定设备 ID 同时写入 `client_metadata.x-codex-installation-id` 和
+`client_metadata.x-codex-turn-metadata` 内的 `installation_id`。
+HTTP 请求头 `X-Codex-Turn-Metadata` 与请求体里的这份 JSON 字符串完全一致。
+每次探测的 `session_id` 和 `turn_id` 仍分别生成新的 UUID。
+
+关闭设备固定时，探测不添加上述两个设备 ID 字段。输入 `hey` 和请求头、请求体之间的
+turn metadata 同步继续生效。响应指令仍为 `Reply with exactly: pong`；探测只读取响应头
+中的票据，不等待或读取模型生成的回答。
+
 ## 获取和续期规则
 
 只有同时满足以下条件的上游响应才会被接受为门票：

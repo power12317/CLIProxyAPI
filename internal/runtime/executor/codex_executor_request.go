@@ -396,13 +396,7 @@ func replaceCodexRequestBody(r *http.Request, body []byte) {
 }
 
 func codexInstallationAccountID(auth *cliproxyauth.Auth) string {
-	if accountID := helps.CodexOAuthAccountID(auth); accountID != "" {
-		return accountID
-	}
-	if auth != nil {
-		return strings.TrimSpace(auth.ID)
-	}
-	return ""
+	return helps.CodexInstallationAccountID(auth)
 }
 
 func applyCodexConfiguredHeaderOverrides(r *http.Request, auth *cliproxyauth.Auth, clientHeaders http.Header) {

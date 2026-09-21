@@ -140,6 +140,88 @@ func TestHarvestCodexTurnStateTicketWithoutProxy(t *testing.T) {
 	}
 }
 
+func TestHarvestCodexTurnStateTicketMatchesConversationInstallation(t *testing.T) {
+	enabled, disabled := true, false
+	for _, tc := range []struct {
+		name       string
+		system     string
+		accountID  string
+		wantSystem string
+		cfg        *config.Config
+		wantFixed  bool
+	}{
+		{name: "mac enabled", system: "mac", accountID: "shared-account", wantSystem: "mac", cfg: &config.Config{Codex: config.CodexConfig{DeviceConvergence: &enabled}}, wantFixed: true},
+		{name: "windows enabled", system: "windows", accountID: "shared-account", wantSystem: "windows", cfg: &config.Config{Codex: config.CodexConfig{DeviceConvergence: &enabled}}, wantFixed: true},
+		{name: "legacy default", accountID: "shared-account", wantSystem: "mac", cfg: &config.Config{}, wantFixed: true},
+		{name: "nil config", system: "windows", accountID: "shared-account", wantSystem: "windows", wantFixed: true},
+		{name: "credential fallback", system: "windows", accountID: "  ", wantSystem: "windows", cfg: &config.Config{}, wantFixed: true},
+		{name: "disabled", system: "windows", accountID: "shared-account", wantSystem: "windows", cfg: &config.Config{Codex: config.CodexConfig{DeviceConvergence: &disabled}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := &cliproxyauth.Auth{
+				ID: "probe-identity/" + tc.name, Provider: "codex",
+				Attributes: map[string]string{cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth},
+				Metadata: map[string]any{
+					"access_token": "test-token", "account_id": tc.accountID, "codex_client_system": tc.system,
+				},
+			}
+			t.Cleanup(func() { InvalidateCodexCookieJar(auth.ID) })
+			accountID := strings.TrimSpace(tc.accountID)
+			if accountID == "" {
+				accountID = auth.ID
+			}
+			conversation := []byte(`{"client_metadata":{"x-codex-turn-metadata":"{}"}}`)
+			_, identity, ok := ApplyCodexOAuthFidelity(conversation, accountID, tc.wantSystem, tc.wantFixed)
+			if !ok || (tc.wantFixed && identity.InstallationID == "") {
+				t.Fatal("failed to prepare normal conversation identity")
+			}
+			sessions, turns := make(map[string]bool), make(map[string]bool)
+			state := testTicketState(292)
+			roundTripper := codexRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body, errRead := io.ReadAll(req.Body)
+				if errRead != nil {
+					t.Fatal(errRead)
+				}
+				if got := gjson.GetBytes(body, "input.0.content.0.text").String(); got != "hey" {
+					t.Errorf("probe input = %q, want hey", got)
+				}
+				metadata := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()
+				if got := req.Header.Get("X-Codex-Turn-Metadata"); got != metadata || got == "" {
+					t.Errorf("turn metadata header = %q, want body metadata %q", got, metadata)
+				}
+				outerID := gjson.GetBytes(body, "client_metadata.x-codex-installation-id")
+				nestedID := gjson.Get(metadata, "installation_id")
+				if tc.wantFixed {
+					if outerID.String() != identity.InstallationID || nestedID.String() != identity.InstallationID {
+						t.Errorf("probe installation IDs = %q/%q, normal conversation = %q", outerID.String(), nestedID.String(), identity.InstallationID)
+					}
+				} else if outerID.Exists() || nestedID.Exists() {
+					t.Errorf("disabled convergence added installation IDs: %s/%s", outerID.Raw, nestedID.Raw)
+				}
+				sessionID, turnID := gjson.Get(metadata, "session_id").String(), gjson.Get(metadata, "turn_id").String()
+				if sessionID == "" || turnID == "" || sessions[sessionID] || turns[turnID] {
+					t.Errorf("probe must use fresh session/turn IDs: %q/%q", sessionID, turnID)
+				}
+				sessions[sessionID], turns[turnID] = true, true
+				if sessionID != req.Header.Get("Session-Id") || sessionID != gjson.GetBytes(body, "client_metadata.session_id").String() {
+					t.Error("probe session ID differs between body and headers")
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{CodexTurnStateTicketHeader: {state}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+			})
+			ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(roundTripper))
+			for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-6-astra"} {
+				ticket, status, errHarvest := HarvestCodexTurnStateTicket(ctx, tc.cfg, auth, model, "")
+				if errHarvest != nil || status != http.StatusOK || ticket.State != state {
+					t.Fatalf("harvest status=%d ticket length=%d error=%v", status, ticket.Length, errHarvest)
+				}
+			}
+			if len(sessions) != 3 || len(turns) != 3 {
+				t.Fatalf("probe requests = %d sessions/%d turns, want 3", len(sessions), len(turns))
+			}
+		})
+	}
+}
+
 type codexRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f codexRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

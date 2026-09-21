@@ -392,7 +392,15 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	probeAuth.ProxyURL = harvestProxyURL
 	sessionID := uuid.NewString()
 	turnID := uuid.NewString()
-	turnMetadata, _ := json.Marshal(map[string]string{"turn_id": turnID, "session_id": sessionID})
+	turnMetadataFields := map[string]string{"turn_id": turnID, "session_id": sessionID}
+	clientMetadata := map[string]string{"session_id": sessionID}
+	if cfg == nil || cfg.Codex.DeviceConvergenceEnabled() {
+		installationID := codexInstallationUUID(CodexInstallationAccountID(auth), CodexOAuthClientSystem(auth))
+		turnMetadataFields["installation_id"] = installationID
+		clientMetadata["x-codex-installation-id"] = installationID
+	}
+	turnMetadata, _ := json.Marshal(turnMetadataFields)
+	clientMetadata["x-codex-turn-metadata"] = string(turnMetadata)
 	probeDocument := map[string]any{
 		"model":        model,
 		"store":        false,
@@ -402,13 +410,10 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 			"role": "user",
 			"content": []map[string]string{{
 				"type": "input_text",
-				"text": "ping",
+				"text": "hey",
 			}},
 		}},
-		"client_metadata": map[string]string{
-			"session_id":            sessionID,
-			"x-codex-turn-metadata": string(turnMetadata),
-		},
+		"client_metadata": clientMetadata,
 	}
 	body, errMarshalBody := json.Marshal(probeDocument)
 	if errMarshalBody != nil {
@@ -425,6 +430,7 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 	req.Header.Set("Session-Id", sessionID)
+	req.Header.Set("X-Codex-Turn-Metadata", string(turnMetadata))
 	if accountID, ok := auth.Metadata["account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
 		req.Header.Set("Chatgpt-Account-Id", strings.TrimSpace(accountID))
 	}

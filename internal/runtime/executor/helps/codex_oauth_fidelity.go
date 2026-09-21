@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
@@ -24,6 +25,18 @@ type CodexOAuthIdentity struct {
 	WindowID         string
 	ClientRequestID  string
 	TurnMetadataJSON string
+}
+
+// CodexInstallationAccountID returns the shared identity seed for normal
+// requests and ticket probes, falling back to the credential ID when needed.
+func CodexInstallationAccountID(auth *cliproxyauth.Auth) string {
+	if accountID := CodexOAuthAccountID(auth); accountID != "" {
+		return accountID
+	}
+	if auth != nil {
+		return strings.TrimSpace(auth.ID)
+	}
+	return ""
 }
 
 // IsOfficialCodexRequest reports the explicit body marker used by the Codex
