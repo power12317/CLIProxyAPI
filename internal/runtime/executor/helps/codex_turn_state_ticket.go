@@ -410,7 +410,7 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 			"role": "user",
 			"content": []map[string]string{{
 				"type": "input_text",
-				"text": "hey",
+				"text": "ping",
 			}},
 		}},
 		"client_metadata": clientMetadata,

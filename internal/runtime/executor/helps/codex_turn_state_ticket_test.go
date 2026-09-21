@@ -182,8 +182,8 @@ func TestHarvestCodexTurnStateTicketMatchesConversationInstallation(t *testing.T
 				if errRead != nil {
 					t.Fatal(errRead)
 				}
-				if got := gjson.GetBytes(body, "input.0.content.0.text").String(); got != "hey" {
-					t.Errorf("probe input = %q, want hey", got)
+				if got := gjson.GetBytes(body, "input.0.content.0.text").String(); got != "ping" {
+					t.Errorf("probe input = %q, want ping", got)
 				}
 				metadata := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()
 				if got := req.Header.Get("X-Codex-Turn-Metadata"); got != metadata || got == "" {

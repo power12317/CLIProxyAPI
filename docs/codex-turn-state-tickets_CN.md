@@ -42,7 +42,7 @@ codex:
 ## 探测请求的设备标识和输入
 
 探测向 `https://chatgpt.com/backend-api/codex/responses` 发送 `POST` 请求，使用当前凭据的
-access token。输入文本为 `hey`，请求体结构如下（标识符为占位示例）：
+access token。输入文本为 `ping`，请求体结构如下（标识符为占位示例）：
 
 ```json
 {
@@ -53,7 +53,7 @@ access token。输入文本为 `hey`，请求体结构如下（标识符为占�
   "input": [
     {
       "role": "user",
-      "content": [{ "type": "input_text", "text": "hey" }]
+      "content": [{ "type": "input_text", "text": "ping" }]
     }
   ],
   "client_metadata": {
@@ -75,7 +75,7 @@ access token。输入文本为 `hey`，请求体结构如下（标识符为占�
 HTTP 请求头 `X-Codex-Turn-Metadata` 与请求体里的这份 JSON 字符串完全一致。
 每次探测的 `session_id` 和 `turn_id` 仍分别生成新的 UUID。
 
-关闭设备固定时，探测不添加上述两个设备 ID 字段。输入 `hey` 和请求头、请求体之间的
+关闭设备固定时，探测不添加上述两个设备 ID 字段。输入 `ping` 和请求头、请求体之间的
 turn metadata 同步继续生效。响应指令仍为 `Reply with exactly: pong`；探测只读取响应头
 中的票据，不等待或读取模型生成的回答。
 
