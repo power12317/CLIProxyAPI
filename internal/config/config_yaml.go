@@ -318,6 +318,19 @@ func appendPath(path []string, key string) []string {
 // represents a known default value that should not be written to the config file.
 // This prevents non-zero defaults from polluting the config.
 func isKnownDefaultValue(path []string, node *yaml.Node) bool {
+	// Preserve the explicit default-on ticket policy and its parent mappings,
+	// including when false is the only configured value in a new section.
+	fullPath := strings.Join(path, ".")
+	if fullPath == "codex.turn-state-ticket.cache-all-models" && node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!bool" {
+		return false
+	}
+	if (fullPath == "codex" || fullPath == "codex.turn-state-ticket") && node != nil && node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if !isKnownDefaultValue(appendPath(path, node.Content[i].Value), node.Content[i+1]) {
+				return false
+			}
+		}
+	}
 	if isPluginConfigsSubtreePath(path) {
 		return false
 	}
@@ -350,8 +363,6 @@ func isKnownDefaultValue(path []string, node *yaml.Node) bool {
 	if len(path) == 0 {
 		return false
 	}
-
-	fullPath := strings.Join(path, ".")
 
 	// Check string defaults
 	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {

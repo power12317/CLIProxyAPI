@@ -48,6 +48,9 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 			{name: "replace-passive-312", model: "gpt-6-astra", ticketLen: 292, passiveLen: 312},
 			{name: "team-ticket", plan: "team", model: "gpt-5.6-sol", ticketLen: 332},
 			{name: "unconfigured-model", model: "gpt-5.6-luna", responseLen: 312},
+			{name: "luna-normal-response-ticket", model: "gpt-5.6-luna", responseLen: 292},
+			{name: "terra-normal-response-ticket", model: "gpt-5.6-terra", responseLen: 292},
+			{name: "team-normal-response-ticket", plan: "team", model: "gpt-5.6-luna", responseLen: 332},
 			{name: "passive-without-ticket", model: "gpt-6-astra", passiveLen: 312},
 			{name: "ticket-without-turn", model: "gpt-6-astra", ticketLen: 292, missingTurn: true},
 		} {
@@ -57,6 +60,10 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 				var handshakes atomic.Int32
 				response := `{"id":"resp_1","model":"` + tc.model + `","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 				completed := `{"type":"response.completed","response":` + response + `}`
+				responseState := strings.Repeat("r", tc.responseLen)
+				if tc.responseLen == 292 || tc.responseLen == 332 {
+					responseState = "gAAAAA" + strings.Repeat("r", tc.responseLen-6)
+				}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if isWebsocket {
 						handshakes.Add(1)
@@ -74,7 +81,7 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 							}
 							captured <- len(gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String())
 							if tc.responseLen > 0 {
-								metadata, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{"x-codex-turn-state": strings.Repeat("r", tc.responseLen)}})
+								metadata, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{"x-codex-turn-state": responseState}})
 								if errWrite := conn.WriteMessage(websocket.TextMessage, metadata); errWrite != nil {
 									t.Error(errWrite)
 									return
@@ -89,7 +96,7 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 					_, _ = io.Copy(io.Discard, r.Body)
 					captured <- len(r.Header.Get(helps.CodexTurnStateTicketHeader))
 					if tc.responseLen > 0 {
-						w.Header().Set(helps.CodexTurnStateTicketHeader, strings.Repeat("r", tc.responseLen))
+						w.Header().Set(helps.CodexTurnStateTicketHeader, responseState)
 					}
 					if transport == "compact" {
 						w.Header().Set("Content-Type", "application/json")
@@ -162,10 +169,13 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 					c.Status(http.StatusOK)
 				})
 				attempts := 1
-				if isWebsocket {
+				if isWebsocket || tc.responseLen == 292 || tc.responseLen == 332 {
 					attempts = 2
 				}
 				for attempt := 0; attempt < attempts; attempt++ {
+					if attempt > 0 && (tc.responseLen == 292 || tc.responseLen == 332) {
+						payload = []byte(strings.ReplaceAll(string(payload), "turn-1", "new-turn"))
+					}
 					hook.Reset()
 					recorder := httptest.NewRecorder()
 					engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))

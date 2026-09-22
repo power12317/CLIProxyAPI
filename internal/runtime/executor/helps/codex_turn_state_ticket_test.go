@@ -2,7 +2,9 @@ package helps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -18,7 +20,91 @@ func testTicketState(length int) string {
 	return "gAAAAA" + strings.Repeat("t", length-len("gAAAAA"))
 }
 
-func TestCodexTurnStateTicketAppliesOnlyToConfiguredOAuthModel(t *testing.T) {
+func TestCodexTicketCacheAllModelsCaptureAndOverrides(t *testing.T) {
+	disabled := false
+	for _, tc := range []struct {
+		name, model, plan string
+		enabled, capture  bool
+		cacheAll          *bool
+		length            int
+	}{
+		{name: "luna default", model: "gpt-5.6-luna", enabled: true, capture: true, length: 292},
+		{name: "terra default", model: "gpt-5.6-terra", enabled: true, capture: true, length: 292},
+		{name: "team", model: "gpt-5.6-luna", plan: "team", enabled: true, capture: true, length: 332},
+		{name: "team rejects personal", model: "gpt-5.6-luna", plan: "team", enabled: true, length: 292},
+		{name: "312 never captured", model: "gpt-5.6-luna", enabled: true, length: 312},
+		{name: "sub switch off", model: "gpt-5.6-luna", enabled: true, cacheAll: &disabled, length: 292},
+		{name: "master off", model: "gpt-5.6-luna", length: 292},
+		{name: "configured still captured", model: "gpt-6-astra", enabled: true, capture: true, cacheAll: &disabled, length: 292},
+	} {
+		for _, event := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/event=%v", tc.name, event), func(t *testing.T) {
+				auth := &cliproxyauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "test", "plan_type": tc.plan}}
+				cfg := config.CodexTurnStateTicketConfig{Enabled: tc.enabled, CacheAllModels: tc.cacheAll, Models: []string{"gpt-6-astra", "gpt-5.6-sol"}, FailClosed: true}
+				value := testTicketState(tc.length)
+				if event {
+					payload, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{CodexTurnStateTicketHeader: value}})
+					InvalidateCodexTurnStateTicketOnEvent(auth, cfg, tc.model, payload)
+				} else {
+					InvalidateCodexTurnStateTicketOnResponse(auth, cfg, tc.model, &http.Response{StatusCode: 200, Header: http.Header{CodexTurnStateTicketHeader: {value}}})
+				}
+				ticket := codexTurnStateTicketForAuth(auth, tc.model)
+				if (ticket != nil) != tc.capture {
+					t.Fatalf("captured = %v, want %v", ticket != nil, tc.capture)
+				}
+				if tc.capture && ticket.ExpiresAt.Sub(ticket.CapturedAt) != time.Hour {
+					t.Fatal("normal-response ticket must default to one hour")
+				}
+				headers := http.Header{CodexTurnStateTicketHeader: {"passive-312"}}
+				if errApply := ApplyCodexTurnStateTicket(auth, cfg, tc.model, headers); errApply != nil {
+					t.Fatal(errApply)
+				}
+				body := ApplyCodexTurnStateTicketBody(auth, cfg, tc.model, []byte(`{"client_metadata":{"turn_id":"new-turn","x-codex-turn-state":"passive-312"}}`))
+				want := "passive-312"
+				if tc.capture {
+					want = value
+				}
+				if headers.Get(CodexTurnStateTicketHeader) != want || gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != want {
+					t.Fatal("header/body ticket override did not follow capture policy")
+				}
+				if tc.capture && tc.model != "gpt-6-astra" {
+					cfg.CacheAllModels = &disabled
+					headers = http.Header{CodexTurnStateTicketHeader: {"original"}}
+					if errApply := ApplyCodexTurnStateTicket(auth, cfg, tc.model, headers); errApply != nil || headers.Get(CodexTurnStateTicketHeader) != "original" {
+						t.Fatal("disabled sub switch still injected an extra model ticket")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCodexTicketCacheAllModelsExpiryAndStatus(t *testing.T) {
+	now := time.Now()
+	auth := &cliproxyauth.Auth{ID: "all-models", Provider: "codex", Metadata: map[string]any{"access_token": "test"}}
+	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra", "gpt-5.6-sol"}, FailClosed: true}
+	for model, expiry := range map[string]time.Time{"gpt-5.6-luna": now.Add(5 * time.Minute), "gpt-5.6-terra": now.Add(-time.Minute)} {
+		StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: model, State: testTicketState(292), ExpiresAt: expiry})
+		headers := make(http.Header)
+		if errApply := ApplyCodexTurnStateTicket(auth, cfg, model, headers); errApply != nil {
+			t.Fatal("extra model must not be blocked by fail-closed", errApply)
+		}
+		if (headers.Get(CodexTurnStateTicketHeader) != "") != expiry.After(now) {
+			t.Fatal("extra ticket expiry differs from the one-hour ticket policy")
+		}
+	}
+	statuses := CodexTurnStateTicketStatuses(auth, cfg, now)
+	if len(statuses) != 4 || statuses[2].Model != "gpt-5.6-luna" || !statuses[2].Ready || statuses[2].RemainingSeconds != 300 || statuses[2].Blocked || statuses[3].Model != "gpt-5.6-terra" || statuses[3].Ready || statuses[3].Blocked {
+		t.Fatalf("extra model statuses = %+v", statuses)
+	}
+	disabled := false
+	cfg.CacheAllModels = &disabled
+	if statuses := CodexTurnStateTicketStatuses(auth, cfg, now); len(statuses) != 2 {
+		t.Fatalf("disabled sub switch returned %d statuses", len(statuses))
+	}
+}
+
+func TestCodexTurnStateTicketConfiguredModelInjection(t *testing.T) {
 	auth := &cliproxyauth.Auth{
 		ID:       "auth-1",
 		Provider: "codex",

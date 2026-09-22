@@ -143,6 +143,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Codex.DeviceConvergenceEnabled() != newCfg.Codex.DeviceConvergenceEnabled() {
 		changes = append(changes, fmt.Sprintf("codex.device-convergence: %t -> %t", oldCfg.Codex.DeviceConvergenceEnabled(), newCfg.Codex.DeviceConvergenceEnabled()))
 	}
+	if oldCfg.Codex.TurnStateTicket.CacheAllModelsEnabled() != newCfg.Codex.TurnStateTicket.CacheAllModelsEnabled() {
+		changes = append(changes, fmt.Sprintf("codex.turn-state-ticket.cache-all-models: %t -> %t", oldCfg.Codex.TurnStateTicket.CacheAllModelsEnabled(), newCfg.Codex.TurnStateTicket.CacheAllModelsEnabled()))
+	}
 	if oldCfg.Codex.DisableCodexCloaking != newCfg.Codex.DisableCodexCloaking {
 		changes = append(changes, fmt.Sprintf("codex.disable-codex-cloaking: %t -> %t", oldCfg.Codex.DisableCodexCloaking, newCfg.Codex.DisableCodexCloaking))
 	}

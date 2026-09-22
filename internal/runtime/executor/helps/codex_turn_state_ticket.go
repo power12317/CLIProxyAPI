@@ -185,9 +185,24 @@ func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnS
 	if len(cfg.Models) == 0 {
 		cfg.Models = []string{"gpt-6-astra", "gpt-5.6-sol"}
 	}
-	out := make([]CodexTurnStateTicketStatus, 0, len(cfg.Models))
+	models := append([]string(nil), cfg.Models...)
+	if cfg.CacheAllModelsEnabled() {
+		var learned []string
+		for key := range auth.Metadata {
+			if !IsCodexTurnStateTicketMetadataKey(key) {
+				continue
+			}
+			model := strings.TrimSpace(strings.TrimPrefix(key, CodexTurnStateTicketMetadataPrefix))
+			if model != "" && !codexTurnStateTicketModelConfigured(models, model) {
+				learned = append(learned, model)
+			}
+		}
+		sort.Strings(learned)
+		models = append(models, learned...)
+	}
+	out := make([]CodexTurnStateTicketStatus, 0, len(models))
 	targetLength := CodexTurnStateTicketTargetLength(auth)
-	for _, model := range cfg.Models {
+	for _, model := range models {
 		model = strings.TrimSpace(model)
 		if model == "" {
 			continue
@@ -206,7 +221,7 @@ func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnS
 			expires := ticket.ExpiresAt
 			status.ExpiresAt = &expires
 		}
-		status.Blocked = cfg.FailClosed && !status.Ready
+		status.Blocked = cfg.FailClosed && codexTurnStateTicketModelConfigured(cfg.Models, model) && !status.Ready
 		out = append(out, status)
 	}
 	return out
@@ -221,7 +236,7 @@ func ApplyCodexTurnStateTicket(auth *cliproxyauth.Auth, cfg config.CodexTurnStat
 		return nil
 	}
 	model = strings.TrimSpace(model)
-	if model == "" || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
+	if !codexTurnStateTicketModelManaged(cfg, model) {
 		return nil
 	}
 	ticket := codexTurnStateTicketForAuth(auth, model)
@@ -230,7 +245,7 @@ func ApplyCodexTurnStateTicket(auth *cliproxyauth.Auth, cfg config.CodexTurnStat
 		headers.Set(CodexTurnStateTicketHeader, ticket.State)
 		return nil
 	}
-	if cfg.FailClosed {
+	if cfg.FailClosed && codexTurnStateTicketModelConfigured(cfg.Models, model) {
 		return fmt.Errorf("%w: model=%s", ErrCodexTurnStateTicketUnavailable, model)
 	}
 	return nil
@@ -238,7 +253,7 @@ func ApplyCodexTurnStateTicket(auth *cliproxyauth.Auth, cfg config.CodexTurnStat
 
 // ApplyCodexTurnStateTicketBody mirrors a ticket into a websocket request body.
 func ApplyCodexTurnStateTicketBody(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model string, body []byte) []byte {
-	if !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, strings.TrimSpace(model)) {
+	if !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelManaged(cfg, model) {
 		return body
 	}
 	ticket := codexTurnStateTicketForAuth(auth, model)
@@ -266,7 +281,7 @@ func clearCodexTurnStateHeader(headers http.Header) {
 // returns the known degraded 312-byte state. Non-target lengths remain under
 // the existing turn_id-scoped passive cache.
 func InvalidateCodexTurnStateTicketOnResponse(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model string, resp *http.Response) bool {
-	if resp == nil || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
+	if resp == nil || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelManaged(cfg, model) {
 		return false
 	}
 	value := strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader))
@@ -280,7 +295,7 @@ func InvalidateCodexTurnStateTicketOnResponse(auth *cliproxyauth.Auth, cfg confi
 // response metadata headers are inspected; generated text is never treated as
 // ticket material.
 func InvalidateCodexTurnStateTicketOnEvent(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model string, payload []byte) bool {
-	if len(payload) == 0 || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelConfigured(cfg.Models, model) {
+	if len(payload) == 0 || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelManaged(cfg, model) {
 		return false
 	}
 	kind := gjson.GetBytes(payload, "type").String()
@@ -329,8 +344,16 @@ func invalidateCodexTurnStateTicketOnValue(auth *cliproxyauth.Auth, cfg config.C
 	if CodexTurnStateTicketTargetLength(auth) != config.DefaultCodexTurnStateTicketPersonalTargetLength || len(value) != 312 {
 		return false
 	}
+	if !codexTurnStateTicketModelConfigured(cfg.Models, model) && codexTurnStateTicketForAuth(auth, model) == nil {
+		return false
+	}
 	notifyCodexTurnStateTicketInvalidator(auth.ID, model)
+	delete(auth.Metadata, CodexTurnStateTicketMetadataKey(model))
 	return true
+}
+
+func codexTurnStateTicketModelManaged(cfg config.CodexTurnStateTicketConfig, model string) bool {
+	return strings.TrimSpace(model) != "" && (cfg.CacheAllModelsEnabled() || codexTurnStateTicketModelConfigured(cfg.Models, model))
 }
 
 func codexTurnStateTicketModelConfigured(models []string, model string) bool {
@@ -551,8 +574,8 @@ func (h *CodexTurnStateTicketHarvester) takePending() (bool, map[codexTicketProb
 	return all, pending
 }
 
-// Invalidate removes the current ticket for a credential/model pair and queues
-// a replacement on the same sequential worker, respecting account pauses.
+// Invalidate removes the current ticket for a credential/model pair. Only models
+// configured for probing queue a replacement on the sequential worker.
 func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 	if h == nil || strings.TrimSpace(authID) == "" || strings.TrimSpace(model) == "" || h.listFn == nil || h.updateFn == nil {
 		return
@@ -562,12 +585,16 @@ func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 		return
 	}
 	policy := cfg.Codex.EffectiveTurnStateTicket()
-	if !policy.Enabled || !codexTurnStateTicketModelConfigured(policy.Models, model) {
+	if !policy.Enabled || !codexTurnStateTicketModelManaged(policy, model) {
 		return
 	}
+	probeModel := codexTurnStateTicketModelConfigured(policy.Models, model)
 	for _, auth := range h.listFn() {
 		if auth == nil || strings.TrimSpace(auth.ID) != strings.TrimSpace(authID) || !isCodexTurnStateTicketAccount(auth) {
 			continue
+		}
+		if !probeModel && codexTurnStateTicketForAuth(auth, model) == nil {
+			return
 		}
 		updated := auth.Clone()
 		if updated.Metadata != nil {
@@ -575,6 +602,9 @@ func (h *CodexTurnStateTicketHarvester) Invalidate(authID, model string) {
 		}
 		if errUpdate := h.updateFn(context.Background(), auth, updated); errUpdate != nil {
 			log.WithFields(log.Fields{"auth_id": authID, "model": model}).Warnf("codex turn-state ticket invalidation persistence failed: %v", errUpdate)
+		}
+		if !probeModel {
+			return
 		}
 		// Persistence completes before returning; network work belongs to the worker.
 		h.pendingMu.Lock()

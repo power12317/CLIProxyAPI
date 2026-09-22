@@ -260,3 +260,63 @@ func TestCodexTicketHarvesterDisableStopsQueueAndStopCancelsProbe(t *testing.T) 
 		}
 	})
 }
+
+func TestCodexTicketCacheAllModelsNeverExpandsProbes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{Enabled: true, FailClosed: true}}}
+		var calls atomic.Int32
+		rt := codexRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			key := ticketProbeTestRequest(t, req)
+			if !strings.HasSuffix(key, "/gpt-6-astra") && !strings.HasSuffix(key, "/gpt-5.6-sol") {
+				t.Errorf("normal-response model was proactively probed: %s", key)
+			}
+			calls.Add(1)
+			return ticketProbeTestResponse(req, 200, 292), nil
+		})
+		h, manager, _ := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{
+			ticketProbeTestAuth("mac", "same@example.com", "account"),
+			ticketProbeTestAuth("windows", "same@example.com", "account"),
+		}, rt)
+		SetCodexTurnStateTicketRecorder(h.Record)
+		SetCodexTurnStateTicketInvalidator(h.Invalidate)
+		synctest.Wait()
+		if calls.Load() != 4 {
+			t.Fatalf("startup probes = %d, want exactly 4", calls.Load())
+		}
+		policy := cfg.Codex.EffectiveTurnStateTicket()
+		for _, auth := range manager.List() {
+			for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-terra"} {
+				InvalidateCodexTurnStateTicketOnResponse(auth, policy, model, ticketProbeTestResponse(nil, 200, 292))
+			}
+		}
+		mac, _ := manager.GetByID("mac")
+		InvalidateCodexTurnStateTicketOnResponse(mac, policy, "gpt-5.6-luna", ticketProbeTestResponse(nil, 200, 312))
+		synctest.Wait()
+		current, _ := manager.GetByID("mac")
+		if codexTurnStateTicketForAuth(current, "gpt-5.6-luna") != nil || codexTurnStateTicketForAuth(mac, "gpt-5.6-luna") != nil {
+			t.Fatal("312 did not invalidate persisted and request-local Luna tickets")
+		}
+		windows, _ := manager.GetByID("windows")
+		if !codexTurnStateTicketForAuth(windows, "gpt-5.6-luna").valid(time.Now(), 292) {
+			t.Fatal("Mac invalidation affected Windows ticket")
+		}
+		time.Sleep(5 * time.Minute) // synctest virtual time.
+		synctest.Wait()
+		if calls.Load() != 4 {
+			t.Fatalf("normal response or invalidation added probes: %d", calls.Load())
+		}
+		time.Sleep(55 * time.Minute) // Cross both the refresh window and ticket expiry.
+		synctest.Wait()
+		if calls.Load() != 8 {
+			t.Fatalf("only Astra/Sol should refresh: got %d total probes", calls.Load())
+		}
+		current, _ = manager.GetByID("mac")
+		if codexTurnStateTicketForAuth(current, "gpt-5.6-terra").valid(time.Now(), 292) {
+			t.Fatal("expired normal-response ticket was renewed by the harvester")
+		}
+		headers := http.Header{CodexTurnStateTicketHeader: {"passive-state"}}
+		if errApply := ApplyCodexTurnStateTicket(current, policy, "gpt-5.6-terra", headers); errApply != nil || headers.Get(CodexTurnStateTicketHeader) != "passive-state" {
+			t.Fatal("expired extra model must fall back without fail-closed blocking")
+		}
+	})
+}

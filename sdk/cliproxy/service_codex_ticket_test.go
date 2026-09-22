@@ -248,3 +248,60 @@ func TestCodexTicketNormalResponsesPreserveOtherModelsAndCredentials(t *testing.
 		}
 	}
 }
+
+func TestCodexTicketAllModelsPersistsReloadsAndReportsStatus(t *testing.T) {
+	service, store, auth := newTicketTestService(t, false)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	service.startCodexTicketHarvester(ctx)
+	defer service.stopCodexTicketHarvester()
+	policy := service.cfg.Codex.EffectiveTurnStateTicket()
+	states := map[string]string{
+		"gpt-5.6-luna":  "gAAAAA" + strings.Repeat("l", 286),
+		"gpt-5.6-terra": "gAAAAA" + strings.Repeat("t", 286),
+	}
+	for model, state := range states {
+		// Use the same original snapshot to also exercise per-model merge persistence.
+		helps.InvalidateCodexTurnStateTicketOnResponse(auth.Clone(), policy, model, &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {state}}})
+		ticketTestWait(t, store.saved)
+	}
+	path := auth.Attributes[coreauth.AttributePath]
+	data, errRead := os.ReadFile(path)
+	if errRead != nil {
+		t.Fatal(errRead)
+	}
+	parsed, errParse := synthesizer.SynthesizeAuthFile(&synthesizer.SynthesisContext{AuthDir: filepath.Dir(path), Config: service.cfg, Now: time.Now()}, path, data)
+	if errParse != nil || len(parsed) != 1 {
+		t.Fatalf("reload parse: %v", errParse)
+	}
+	for model, state := range states {
+		headers := make(http.Header)
+		if errApply := helps.ApplyCodexTurnStateTicket(parsed[0], policy, model, headers); errApply != nil || headers.Get(helps.CodexTurnStateTicketHeader) != state {
+			t.Fatalf("reloaded %s ticket was not independently reused: %v", model, errApply)
+		}
+	}
+	handler := management.NewHandler(service.cfg, "", service.coreManager)
+	for _, endpoint := range []struct {
+		handle gin.HandlerFunc
+		path   string
+	}{{handler.GetCodexTurnStateTicket, "accounts.0.tickets"}, {handler.ListAuthFiles, "files.0.codex_turn_tickets"}} {
+		recorder := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(recorder)
+		ginCtx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		endpoint.handle(ginCtx)
+		statuses := gjson.GetBytes(recorder.Body.Bytes(), endpoint.path).Array()
+		if recorder.Code != http.StatusOK || len(statuses) != 4 {
+			t.Fatalf("management returned %d statuses, want 4", len(statuses))
+		}
+		for _, status := range statuses {
+			if _, learned := states[status.Get("model").String()]; learned && (!status.Get("ready").Bool() || status.Get("blocked").Bool() || status.Get("remaining_seconds").Int() < 3500) {
+				t.Fatalf("normal-response status = %s", status.Raw)
+			}
+		}
+		for _, state := range states {
+			if strings.Contains(recorder.Body.String(), state) {
+				t.Fatal("management response exposed ticket contents")
+			}
+		}
+	}
+}

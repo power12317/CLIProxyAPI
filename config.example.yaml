@@ -360,6 +360,9 @@ codex:
   # configured proxy. When fail-closed is true, configured models wait for a ticket.
   turn-state-ticket:
     enabled: false
+    # Capture and reuse normal-response tickets for all models (default true).
+    # Only models listed below are actively probed or blocked by fail-closed.
+    cache-all-models: true
     # Ticket length is derived from the OAuth account plan:
     # Personal (free/plus/pro) = 292; Team/Business = 332.
     ttl-seconds: 3600

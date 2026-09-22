@@ -8,6 +8,20 @@ import (
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
+func TestCodexTicketCacheAllModelsConfigChangeDetails(t *testing.T) {
+	disabled, enabled := false, true
+	oldCfg := &config.Config{}
+	newCfg := &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{CacheAllModels: &disabled}}}
+	details := strings.Join(BuildConfigChangeDetails(oldCfg, newCfg), "\n")
+	if !strings.Contains(details, "codex.turn-state-ticket.cache-all-models: true -> false") {
+		t.Fatalf("missing sub-switch change: %s", details)
+	}
+	newCfg.Codex.TurnStateTicket.CacheAllModels = &enabled
+	if details = strings.Join(BuildConfigChangeDetails(oldCfg, newCfg), "\n"); strings.Contains(details, "cache-all-models") {
+		t.Fatalf("omitted and explicit true differ: %s", details)
+	}
+}
+
 func TestBuildConfigChangeDetails(t *testing.T) {
 	oldCfg := &config.Config{
 		Port:    8080,

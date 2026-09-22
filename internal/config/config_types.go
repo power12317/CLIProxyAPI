@@ -219,8 +219,8 @@ type CodexConfig struct {
 	// rather than cooling down the entire credential across all sibling models.
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
 	// TurnStateTicket configures the optional one-hour x-codex-turn-state ticket
-	// harvester used by Codex OAuth credentials. Tickets are harvested through
-	// the optional proxy and injected only for the configured models.
+	// harvester used by Codex OAuth credentials. Only configured models are probed;
+	// normal responses can also populate tickets for other models.
 	TurnStateTicket CodexTurnStateTicketConfig `yaml:"turn-state-ticket" json:"turn-state-ticket"`
 	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
@@ -229,6 +229,9 @@ type CodexConfig struct {
 // CodexTurnStateTicketConfig controls proactive Codex turn-state ticket harvest.
 // A ticket is a short-lived, account/model-scoped value returned by ChatGPT.
 type CodexTurnStateTicketConfig struct {
+	// CacheAllModels also captures and reuses normal-response tickets outside
+	// Models. Nil defaults to true; it never expands proactive probes or fail-closed.
+	CacheAllModels        *bool    `yaml:"cache-all-models,omitempty" json:"cache-all-models,omitempty"`
 	Enabled               bool     `yaml:"enabled" json:"enabled"`
 	TargetLength          int      `yaml:"target-length" json:"target-length"`
 	TTLSeconds            int      `yaml:"ttl-seconds" json:"ttl-seconds"`
@@ -238,6 +241,12 @@ type CodexTurnStateTicketConfig struct {
 	AttemptTimeoutSeconds int      `yaml:"attempt-timeout-seconds" json:"attempt-timeout-seconds"`
 	FailClosed            bool     `yaml:"fail-closed" json:"fail-closed"`
 	Models                []string `yaml:"models" json:"models"`
+}
+
+// CacheAllModelsEnabled reports the default-on normal-response capture policy.
+// Callers must separately check the master Enabled switch.
+func (c CodexTurnStateTicketConfig) CacheAllModelsEnabled() bool {
+	return c.CacheAllModels == nil || *c.CacheAllModels
 }
 
 const (
