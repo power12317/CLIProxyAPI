@@ -119,31 +119,34 @@ func codexImagesEndpointPath(requestPath string) bool {
 // from top-level and additional_tools arrays while preserving other namespace tools.
 func stripCodexImageGenerationTools(body []byte) []byte { return helps.StripCodexImageTools(body) }
 
-func applyCodexImageGenerationPolicy(body []byte, baseModel string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, requestPath string, official bool) []byte {
-	return applyCodexImageGenerationPolicyWithInjection(body, baseModel, auth, cfg, headers, requestPath, official, true)
+func applyCodexImageGenerationPolicy(body []byte, baseModel string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, requestPath string, official bool, originalRequests ...[]byte) ([]byte, error) {
+	return applyCodexImageGenerationPolicyWithInjection(body, baseModel, auth, cfg, headers, requestPath, official, true, originalRequests...)
 }
 
 func applyCodexImageGenerationPolicyWithoutInjection(body []byte, cfg *config.Config, requestPath string) []byte {
-	return applyCodexImageGenerationPolicyWithInjection(body, "", nil, cfg, nil, requestPath, false, false)
+	if codexShouldStripImageGeneration(cfg, requestPath) {
+		return stripCodexImageGenerationTools(body)
+	}
+	return body
 }
 
-func applyCodexImageGenerationPolicyWithInjection(body []byte, baseModel string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, requestPath string, official, allowInjection bool) []byte {
+func applyCodexImageGenerationPolicyWithInjection(body []byte, baseModel string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, requestPath string, official, allowInjection bool, originalRequests ...[]byte) ([]byte, error) {
 	if cfg != nil && cfg.DisableImageGeneration == config.DisableImageGenerationPassthrough {
-		return body
+		return body, nil
 	}
 	stripImages := codexShouldStripImageGeneration(cfg, requestPath)
 	if stripImages {
 		body = stripCodexImageGenerationTools(body)
 	}
 	if !allowInjection {
-		return body
+		return body, nil
 	}
 	injectImages := !stripImages && (cfg == nil || cfg.DisableImageGeneration == config.DisableImageGenerationOff) && !isCodexFreePlanAuth(auth) && !strings.HasSuffix(baseModel, "spark")
 	if codexResponsesLiteBodyMode(body, official, headers) {
-		return helps.NormalizeCodexLiteCompatibilityTools(body, injectImages)
+		return helps.NormalizeCodexLiteCompatibilityTools(body, injectImages, originalRequests...)
 	}
 	if !injectImages {
-		return body
+		return body, nil
 	}
-	return ensureImageGenerationTool(body, baseModel, auth)
+	return ensureImageGenerationTool(body, baseModel, auth), nil
 }

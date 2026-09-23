@@ -142,7 +142,7 @@ func TestCodexResponsesLiteAutoConditionRequiresExactBodyFields(t *testing.T) {
 
 func TestCodexOfficialRequestInjectsImageToolWhenEnabled(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"input":[]}`)
-	got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", true)
+	got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", true)
 	if gjson.GetBytes(got, "tools.0.type").String() != "image_generation" {
 		t.Fatalf("official Codex request missing image tool: %s", got)
 	}
@@ -150,7 +150,7 @@ func TestCodexOfficialRequestInjectsImageToolWhenEnabled(t *testing.T) {
 
 func TestDisableImageGenerationRemovesLiteAdditionalTool(t *testing.T) {
 	body := []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"image_generation"},{"type":"function","name":"exec"}]}],"tool_choice":{"type":"image_generation"}}`)
-	got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}}, nil, "/v1/responses", true)
+	got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}}, nil, "/v1/responses", true)
 	if gjson.GetBytes(got, "input.0.tools.0.type").String() != "function" {
 		t.Fatalf("remaining tool = %s, want function; body=%s", gjson.GetBytes(got, "input.0.tools.0.type").Raw, got)
 	}
@@ -180,7 +180,7 @@ func TestCodexLiteMirrorIsPreservedWhenAlreadyPresent(t *testing.T) {
 func TestPassthroughImageGenerationPolicyKeepsPayload(t *testing.T) {
 	body := []byte(`{"tools":[{"type":"image_generation"}],"tool_choice":{"type":"image_generation"}}`)
 	cfg := &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationPassthrough}}
-	got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, cfg, nil, "/v1/responses", true)
+	got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, cfg, nil, "/v1/responses", true)
 	if string(got) != string(body) {
 		t.Fatalf("passthrough changed body: got %s want %s", got, body)
 	}
@@ -235,7 +235,7 @@ func TestCodexExecutorExecuteStreamResponsesLiteHeaderForcesParallelToolCallsFal
 
 func TestCodexImagePolicy_ResponsesLiteMetadataInjectsFunction(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},"input":[{"role":"user","content":"hello"}]}`)
-	result := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", false)
+	result := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", false)
 
 	if !helps.HasCodexImageTool(result) || gjson.GetBytes(result, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(result) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("expected Lite image function in additional_tools: %s", result)
@@ -244,7 +244,7 @@ func TestCodexImagePolicy_ResponsesLiteMetadataInjectsFunction(t *testing.T) {
 
 func TestCodexImagePolicy_ResponsesLiteBooleanMetadataInjectsFunction(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":true},"input":[{"role":"user","content":"hello"}]}`)
-	result := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", false)
+	result := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", false)
 
 	if !helps.HasCodexImageTool(result) || util.ClassifyCodexResponsesLiteTools(result) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("expected Lite image function: %s", result)
@@ -255,7 +255,7 @@ func TestCodexImagePolicy_ResponsesLiteHeaderInjectsFunction(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"hello"}]}`)
 	headers := make(http.Header)
 	headers.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
-	result := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, &config.Config{}, headers, "/v1/responses", false)
+	result := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{}, headers, "/v1/responses", false)
 
 	if !helps.HasCodexImageTool(result) || util.ClassifyCodexResponsesLiteTools(result) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("expected Lite image function: %s", result)

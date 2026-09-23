@@ -13,6 +13,15 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func mustApplyCodexImagePolicy(t *testing.T, body []byte, model string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, path string, official bool) []byte {
+	t.Helper()
+	got, err := applyCodexImageGenerationPolicy(body, model, auth, cfg, headers, path, official)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func TestCodexUnifiedImagePolicy(t *testing.T) {
 	for _, official := range []bool{false, true} {
 		for _, lite := range []bool{false, true} {
@@ -27,7 +36,7 @@ func TestCodexUnifiedImagePolicy(t *testing.T) {
 							body, _ = sjson.SetRawBytes(body, "tool_choice", []byte(`{"type":"image_generation"}`))
 						}
 						cfg := &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: mode}}
-						got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", official)
+						got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", official)
 						if mode == config.DisableImageGenerationPassthrough {
 							if string(got) != string(body) {
 								t.Fatalf("passthrough changed tools: %s", got)
@@ -69,7 +78,7 @@ func TestCodexUnifiedImagePolicyRetainsExistingDeclarations(t *testing.T) {
 	} {
 		body := []byte(`{"model":"gpt-5.5","input":[{"id":"at-client","type":"additional_tools","tools":[]}],"tool_choice":"auto"}`)
 		body, _ = sjson.SetRawBytes(body, "input.0.tools.-1", []byte(declaration))
-		got := applyCodexImageGenerationPolicy(body, "gpt-5.5", nil, &config.Config{}, nil, "/v1/responses", true)
+		got := mustApplyCodexImagePolicy(t, body, "gpt-5.5", nil, &config.Config{}, nil, "/v1/responses", true)
 		if string(body) != string(got) {
 			t.Fatalf("existing additional_tools declaration changed: %s", got)
 		}
@@ -90,7 +99,7 @@ func TestCodexUnifiedImagePolicyRetainsFreeSparkAndCompactExclusions(t *testing.
 			{"gpt-5.6-sol", &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"plan_type": "free"}}},
 			{"gpt-5.3-codex-spark", nil},
 		} {
-			got := applyCodexImageGenerationPolicy([]byte(`{"input":[]}`), test.model, test.auth, &config.Config{}, source, "/v1/responses", true)
+			got := mustApplyCodexImagePolicy(t, []byte(`{"input":[]}`), test.model, test.auth, &config.Config{}, source, "/v1/responses", true)
 			if helps.HasCodexImageTool(got) {
 				t.Fatalf("excluded request gained image tool: %s", got)
 			}
@@ -108,7 +117,7 @@ func TestCodexToolPolicyUsesConfiguredLiteOverride(t *testing.T) {
 		source := http.Header{http.CanonicalHeaderKey(codexResponsesLiteHeader): {fmt.Sprint(!enabled)}}
 		auth := &cliproxyauth.Auth{Attributes: map[string]string{"header:" + codexResponsesLiteHeader: fmt.Sprint(enabled)}}
 		headers := codexToolPolicyHeaders(auth, source, "gpt-5.6-sol")
-		got := applyCodexImageGenerationPolicy(body, "gpt-5.6-sol", auth, &config.Config{}, headers, "/v1/responses", true)
+		got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", auth, &config.Config{}, headers, "/v1/responses", true)
 		if headers.Get(codexResponsesLiteHeader) != fmt.Sprint(enabled) || source.Get(codexResponsesLiteHeader) != fmt.Sprint(!enabled) {
 			t.Fatalf("incorrect override/source mutation: %v %v", headers, source)
 		}

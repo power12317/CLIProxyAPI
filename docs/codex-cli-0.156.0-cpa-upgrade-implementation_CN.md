@@ -79,3 +79,17 @@ Lite 的 image_gen.imagegen / web.run 由调用方现有执行器执行。CPA �
 按升级指南的完成等级：**A（协议与格式兼容）已完成并通过本地测试；B（真实客户端图片/搜索执行闭环）本次未执行**。测试使用本地 HTTP/WebSocket 测试服务，没有进行付费模型、图片或搜索调用。
 
 本次改造基于 main，随代码一起提交并通过新 tag 触发既有 Docker/Release 工作流。原升级指南仍保留在本地文档目录，本实施记录随代码发布。
+
+## 5. Lite 保留工具 schema 修复
+
+原先注入的图片与搜索模板来自升级指南中的手写示例，没有经过 CLI 最终 schema 解析和序列化。它们不能用作生产环境的保留函数定义。本节记录后续修复，原始升级指南保留原样。
+
+- 图片与搜索默认声明改为固定 `rust-v0.156.0` 源码实际导出的完整 namespace JSON，保留完整 description、parameters、strict 与字段缺省语义。
+- 导出在独立临时 Rust 工程中运行，使用原始 schema 生成代码、完整 parser/compaction 模块与 Lite serializer。所有发布依赖的版本和 checksum 均与官方 Cargo.lock 比对一致，最终执行 `cargo run --locked`。CPA 构建和运行均不依赖 Rust。
+- 使用到的 18 个源码文件的哈希已逐个与官方固定提交核对；产物、锁文件、哈希记录和可复现导出脚本保存在 `internal/runtime/executor/helps/codex_lite_fixtures/`。
+- 另外独立导出 0.154.0 的原生定义，避免将已知旧版原生图片声明误判为冲突；新注入仍使用 0.156.0。
+- 已有保留函数不再仅凭同名跳过。匹配已验证 CLI 定义时原样保留；完全匹配已知旧 CPA 模板且上下文确定是新建时替换为正确定义；未知同名定义返回明确的请求级 400。
+- 旧模板若关联 previous_response_id、已分配 ID 的 additional_tools 或助手/工具/推理历史，则返回 `codex_reserved_tool_schema_legacy_context`，要求新上下文或完整重建重放。不会在旧 item ID 下修改声明，也不会丢弃历史。HTTP 清理 previous_response_id 前的原请求同样参与检查。
+- 这些规则只作用于 Lite 保留函数。非 Lite hosted image_generation、普通自定义函数的长度/数值约束、禁图与 passthrough 设置保持既有语义。
+
+本地验收包含 gpt-6-astra / gpt-5.6-sol 的 HTTP、HTTP streaming、WebSocket、WebSocket streaming 最终出站声明与官方导出产物的完整结构比较。按用户要求，不进行真实上游模型调用，由用户部署后验收 gpt-6-astra。

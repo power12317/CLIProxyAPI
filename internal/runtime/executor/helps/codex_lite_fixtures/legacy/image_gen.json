@@ -1,0 +1,43 @@
+{
+  "type": "namespace",
+  "name": "image_gen",
+  "description": "Tools in the image_gen namespace.",
+  "tools": [
+    {
+      "type": "function",
+      "name": "imagegen",
+      "description": "Generate an image from a prompt. Image editing requires an executor that can resolve the supplied local references. Do not combine the two reference-selection options.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "referenced_image_paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5
+          },
+          "num_last_images_to_include": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 5
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

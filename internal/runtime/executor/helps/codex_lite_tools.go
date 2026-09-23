@@ -11,9 +11,6 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const codexLiteImageNamespace = `{"type":"namespace","name":"image_gen","description":"Tools in the image_gen namespace.","tools":[{"type":"function","name":"imagegen","description":"Generate an image from a prompt. Image editing requires an executor that can resolve the supplied local references. Do not combine the two reference-selection options.","strict":false,"parameters":{"type":"object","properties":{"prompt":{"type":"string"},"referenced_image_paths":{"type":["array","null"],"items":{"type":"string"},"maxItems":5},"num_last_images_to_include":{"type":["integer","null"],"minimum":1,"maximum":5}},"required":["prompt"],"additionalProperties":false}}]}`
-const codexLiteWebNamespace = `{"type":"namespace","name":"web","description":"Tools in the web namespace.","tools":[{"type":"function","name":"run","description":"Search the web for the supplied queries and return source information through the connected search executor.","strict":false,"parameters":{"type":"object","properties":{"search_query":{"type":"array","minItems":1,"items":{"type":"object","properties":{"q":{"type":"string"},"recency":{"type":"integer","minimum":0},"domains":{"type":"array","items":{"type":"string"}}},"required":["q"],"additionalProperties":false}},"response_length":{"type":"string","enum":["short","medium","long"]}},"required":["search_query"],"additionalProperties":false}}]}`
-
 // CodexImageTool recognizes hosted, flattened and namespaced image declarations.
 func CodexImageTool(tool gjson.Result, namespace string) bool {
 	name := tool.Get("name").String()
@@ -133,14 +130,19 @@ func normalizeCodexLiteToolChoice(body []byte) []byte {
 // NormalizeCodexLiteCompatibilityTools ensures the enabled image declaration and
 // converts existing hosted image/search tools for Lite. Search is never added unrequested.
 // Client schemas are retained; tool execution remains the caller's responsibility.
-func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool) []byte {
+func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, originalRequests ...[]byte) ([]byte, error) {
 	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
-		return body
+		return body, nil
 	}
 	for _, path := range []string{"input", "tools"} {
 		if value := gjson.GetBytes(body, path); value.Exists() && !value.IsArray() {
-			return body
+			return body, nil
 		}
+	}
+	var errReserved error
+	body, errReserved = normalizeCodexReservedDeclarations(body, originalRequests...)
+	if errReserved != nil {
+		return nil, errReserved
 	}
 	images := injectImages || codexHasHostedTool(body, "image_generation")
 	web := codexHasHostedTool(body, "web_search", "web_search_preview", "web_search_preview_2025_03_11")
@@ -247,7 +249,7 @@ func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool) []byte
 			}
 		}
 	}
-	return body
+	return body, nil
 }
 
 func mergeCodexLiteNamespaces(tools []json.RawMessage) []json.RawMessage {

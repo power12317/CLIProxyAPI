@@ -1,0 +1,31 @@
+{
+  "cli_tag": "rust-v0.156.0",
+  "cli_commit": "fe74a774532af67b5a4a3dec03ce9469e17f89af",
+  "method": "isolated Rust export of unchanged schema-producing source sections",
+  "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "source_sha256": {
+    "Cargo.lock": "a3f317c9b011d62e0df281f90a22ac27f470620e6c5edd522882e82793efe1ed",
+    "codex-api/src/search.rs": "a83fd7ddd41c86985cce2aa899a2907ca820c226d5e7337949cc7e47a35c5f4f",
+    "ext/image-generation/imagegen_description.md": "faff66103700c6f3251529ce71bc5ad076429e3e5c1b8177bae138a54246d7af",
+    "ext/image-generation/src/lib.rs": "c710abe1967cd3f7faaf78c0a35de0f5e6cc5c461f130b79d2b25d27ba8df9de",
+    "ext/image-generation/src/tool.rs": "66b992ca79053c7418c30230999d730bf85d0aa21208299facf45e2cd1674fe8",
+    "ext/web-search/src/schema.rs": "6371391751d2a5dddad546aa810a6c64f770498702cec8153df74d1d7dff6f9b",
+    "ext/web-search/src/tool.rs": "779bf921c096ca8cfad311342df1b76972790c497067e467064d01d58110a6d1",
+    "ext/web-search/web_run_description.md": "1f3879b44690eb7aad9ba97351acda16c4d0c26847bcb4af2964d5989404407e",
+    "protocol/src/tool_name.rs": "2d102304a638001c46ffd5bd31fba05960b88a870e3db5b163b87eb9652c65ac",
+    "rust-toolchain.toml": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64",
+    "tools/src/json_schema.rs": "86cec68e6537dfacdfee6bb928cd67802ebbf4abfb70a47643e86bd30404ac56",
+    "tools/src/json_schema/compaction.rs": "1702a3afb51beae0b75b570cbaf8e4a3d2b6c6b8d96d79f93d9380e5a66db5bc",
+    "tools/src/json_schema/traversal.rs": "fb24d4acb9476c6cd6ed4156ca439786e0315de0eb908f44d0190662a12ab4b6",
+    "tools/src/json_schema/types.rs": "af24f389784de3981928544abd5a32bbcb4571692ae1ca401c0d7de65807c4e6",
+    "tools/src/responses_api.rs": "3a3f80cbcb2ea2bb237f26a1458c6b1136614e3d6d5dc1be9752249a2bb19e40",
+    "tools/src/tool_spec.rs": "af8b5286fb6d2eb3574c484b25076f515bca2d4350ecb5059e436966ecdd519d",
+    "utils/absolute-path/src/absolutize.rs": "7a2c95d410b8503c2a26e37715bc403bd31496fcead7cdc4d95dc8e96ced77a7",
+    "utils/absolute-path/src/lib.rs": "8eccafe8d920745b23deab4df9883dcca1d71a0174d6f281c763bfab2f3530df"
+  },
+  "export_cargo_lock_sha256": "ed2cc4a6c886092e2a6164919ba52d457a819c230f0f1322e3709136be2e110d",
+  "fixtures_sha256": {
+    "image_gen.json": "6fed1c02dffe3154e016ef4d314c6c576cda8a0c198e0748408e150d8cf6f07a",
+    "web.json": "af77b7d8b9029821fbea90fb0f2497812e3eb3350a5d80cf4b3c2c5cd6696b81"
+  }
+}

@@ -14,6 +14,15 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func mustNormalizeCodexLiteTools(t *testing.T, body []byte, images bool) []byte {
+	t.Helper()
+	got, err := NormalizeCodexLiteCompatibilityTools(body, images)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func TestCodex156SeparatesSessionCacheThread(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		body := []byte(`{"prompt_cache_key":"cache","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"session\",\"thread_id\":\"thread\",\"turn_id\":\"turn\",\"analytics_enabled\":false,\"future\":{\"value\":7}}"}}`)
@@ -159,14 +168,14 @@ func TestCodex156ConnectionFingerprintIgnoresTurnButTracksCredentials(t *testing
 
 func TestCodex156LiteToolsIdempotentNamespaceMerge(t *testing.T) {
 	body := []byte(`{"prompt_cache_key":"s","instructions":"Guide","tools":[{"type":"web_search_preview"},{"type":"image_generation"}],"input":[{"type":"additional_tools","id":"at_old","role":"developer","tools":[{"type":"namespace","name":"web","description":"keep","tools":[{"type":"function","name":"open","parameters":{}}]}]},{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}`)
-	got := NormalizeCodexLiteCompatibilityTools(body, true)
+	got := mustNormalizeCodexLiteTools(t, body, true)
 	if util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible || gjson.GetBytes(got, "tools").Exists() || gjson.GetBytes(got, "instructions").Exists() {
 		t.Fatalf("invalid Lite: %s", got)
 	}
 	if !codexDeclaredFunction(got, "image_gen", "imagegen") || !codexDeclaredFunction(got, "web", "run") || !codexDeclaredFunction(got, "web", "open") {
 		t.Fatal(string(got))
 	}
-	second := NormalizeCodexLiteCompatibilityTools(got, true)
+	second := mustNormalizeCodexLiteTools(t, got, true)
 	if !bytes.Equal(got, second) {
 		t.Fatalf("duplicate/reidentified declarations: %s", second)
 	}
@@ -218,12 +227,13 @@ func TestCodex156TurnStateOwnerReplacementRejectsOldResponses(t *testing.T) {
 
 func TestCodex156LiteHistoryNamesAndClientSchemasPreserved(t *testing.T) {
 	body := []byte(`{"input":[{"type":"additional_tools","id":"at-client","tools":[{"type":"namespace","name":"web","tools":[{"type":"function","name":"run","description":"full client schema","parameters":{"properties":{"open":{"type":"array"}}}}]}]},{"type":"function_call","name":"image_gen__imagegen","call_id":"image","arguments":"{\"prompt\":\"test\"}"},{"type":"function_call_output","call_id":"image","output":"result"}]}`)
-	got := NormalizeCodexLiteCompatibilityTools(body, true)
+	body, _ = sjson.SetRawBytes(body, "input.0.tools.0", []byte(codexLiteWebNamespace))
+	got := mustNormalizeCodexLiteTools(t, body, true)
 	found := false
 	for _, item := range gjson.GetBytes(got, "input").Array() {
 		if item.Get("id").String() == "at-client" {
 			found = true
-			if item.Get("tools.0.tools.0.description").String() != "full client schema" {
+			if !codexToolJSONEqual(item.Get("tools.0").Raw, codexLiteWebNamespace) {
 				t.Fatal("schema overwritten")
 			}
 		}
@@ -240,8 +250,10 @@ func TestCodex156LiteHistoryNamesAndClientSchemasPreserved(t *testing.T) {
 
 func TestCodex156LiteFlatDeclarationsKeepFlatHistory(t *testing.T) {
 	body := []byte(`{"instructions":"","tools":[{"type":"function","name":"image_gen__imagegen","description":"client schema","parameters":{}}],"tool_choice":{"type":"image_generation"},"input":[{"type":"function_call","name":"image_gen__imagegen","call_id":"c","arguments":"{}"}]}`)
-	got := NormalizeCodexLiteCompatibilityTools(body, true)
-	if gjson.GetBytes(got, "input.0.tools.#").Int() != 1 || gjson.GetBytes(got, "input.0.tools.0.description").String() != "client schema" || gjson.GetBytes(got, "input.1.namespace").Exists() || gjson.GetBytes(got, "input.1.name").String() != "image_gen__imagegen" {
+	canonical, _ := sjson.Set(gjson.Parse(codexLiteImageNamespace).Get("tools.0").Raw, "name", "image_gen__imagegen")
+	body, _ = sjson.SetRawBytes(body, "tools.0", []byte(canonical))
+	got := mustNormalizeCodexLiteTools(t, body, true)
+	if gjson.GetBytes(got, "input.0.tools.#").Int() != 1 || !codexToolJSONEqual(gjson.GetBytes(got, "input.0.tools.0").Raw, canonical) || gjson.GetBytes(got, "input.1.namespace").Exists() || gjson.GetBytes(got, "input.1.name").String() != "image_gen__imagegen" {
 		t.Fatalf("flat declaration/history changed: %s", got)
 	}
 	if gjson.GetBytes(got, "tool_choice.name").String() != "image_gen__imagegen" || gjson.GetBytes(got, "tool_choice.namespace").Exists() {
@@ -255,7 +267,7 @@ func TestCodex156LiteNormalizationRetainsInvalidInput(t *testing.T) {
 		`{"instructions":"guide","input":{},"tools":[]}`,
 		`{"input":[],"tools":{}}`,
 	} {
-		if got := NormalizeCodexLiteCompatibilityTools([]byte(raw), false); string(got) != raw {
+		if got := mustNormalizeCodexLiteTools(t, []byte(raw), false); string(got) != raw {
 			t.Fatalf("invalid input silently discarded: %s", got)
 		}
 	}
@@ -263,7 +275,7 @@ func TestCodex156LiteNormalizationRetainsInvalidInput(t *testing.T) {
 
 func TestCodex156LiteAllowedToolChoicesFollowDeclarations(t *testing.T) {
 	body := []byte(`{"input":[],"tools":[{"type":"image_generation"},{"type":"web_search_preview"},{"type":"function","name":"exec"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"image_generation"},{"type":"web_search_preview"},{"type":"function","name":"exec"}]}}`)
-	got := NormalizeCodexLiteCompatibilityTools(body, true)
+	got := mustNormalizeCodexLiteTools(t, body, true)
 	choice := gjson.GetBytes(got, "tool_choice")
 	if choice.Get("mode").String() != "auto" || choice.Get("tools.0.namespace").String() != "image_gen" || choice.Get("tools.1.namespace").String() != "web" || choice.Get("tools.2.name").String() != "exec" {
 		t.Fatalf("choices do not match Lite declarations: %s", got)

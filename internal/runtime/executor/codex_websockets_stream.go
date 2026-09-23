@@ -60,7 +60,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
-	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest)
+	body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
+	if err != nil {
+		return nil, err
+	}
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex websockets executor", body, isCompat)
 	body = normalizeCodexWebsocketParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)

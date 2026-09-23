@@ -22,90 +22,94 @@ import (
 )
 
 func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
-	for _, intent := range []string{"header", "body-mirror", "official-without-header", "configured"} {
-		for _, transport := range []string{"http", "http-stream", "ws", "ws-stream"} {
-			t.Run(intent+"/"+transport, func(t *testing.T) {
-				captured := make(chan []byte, 1)
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.Header.Get(codexResponsesLiteHeader) != "true" {
-						t.Error("missing Lite header")
-					}
-					completed := `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"function_call","namespace":"web","name":"run","call_id":"call-search","arguments":"{\"search_query\":[{\"q\":\"test\"}]}"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`
-					if strings.HasPrefix(transport, "ws") {
-						upgrader := websocket.Upgrader{}
-						conn, err := upgrader.Upgrade(w, r, nil)
-						if err != nil {
-							t.Error(err)
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		for _, intent := range []string{"header", "body-mirror", "official-without-header", "configured"} {
+			for _, transport := range []string{"http", "http-stream", "ws", "ws-stream"} {
+				t.Run(model+"/"+intent+"/"+transport, func(t *testing.T) {
+					captured := make(chan []byte, 1)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.Header.Get(codexResponsesLiteHeader) != "true" {
+							t.Error("missing Lite header")
+						}
+						completed := `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"function_call","namespace":"web","name":"run","call_id":"call-search","arguments":"{\"search_query\":[{\"q\":\"test\"}]}"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`
+						if strings.HasPrefix(transport, "ws") {
+							upgrader := websocket.Upgrader{}
+							conn, err := upgrader.Upgrade(w, r, nil)
+							if err != nil {
+								t.Error(err)
+								return
+							}
+							defer func() { _ = conn.Close() }()
+							_, body, err := conn.ReadMessage()
+							if err != nil {
+								t.Error(err)
+								return
+							}
+							captured <- body
+							_ = conn.WriteMessage(websocket.TextMessage, []byte(completed))
 							return
 						}
-						defer func() { _ = conn.Close() }()
-						_, body, err := conn.ReadMessage()
-						if err != nil {
-							t.Error(err)
-							return
-						}
+						body, _ := io.ReadAll(r.Body)
 						captured <- body
-						_ = conn.WriteMessage(websocket.TextMessage, []byte(completed))
-						return
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprintf(w, "data: %s\n\n", completed)
+					}))
+					defer server.Close()
+					cfg := &config.Config{}
+					auth := &cliproxyauth.Auth{Provider: "codex", ID: t.Name(), Attributes: map[string]string{"api_key": "key", "base_url": server.URL}}
+					req := cliproxyexecutor.Request{Model: model, Payload: []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":"search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"tools":[{"type":"web_search_preview"},{"type":"image_generation"}]}`)}
+					req.Payload, _ = sjson.SetBytes(req.Payload, "model", model)
+					opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: http.Header{http.CanonicalHeaderKey(codexResponsesLiteHeader): {"true"}}}
+					switch intent {
+					case "body-mirror":
+						opts.Headers = nil
+						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
+					case "official-without-header":
+						opts.Headers = nil
+						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.x-codex-turn-metadata", `{"session_id":"session","turn_id":"turn"}`)
+					case "configured":
+						opts.Headers = nil
+						auth.Attributes["header:"+codexResponsesLiteHeader] = "true"
 					}
-					body, _ := io.ReadAll(r.Body)
-					captured <- body
-					w.Header().Set("Content-Type", "text/event-stream")
-					_, _ = fmt.Fprintf(w, "data: %s\n\n", completed)
-				}))
-				defer server.Close()
-				cfg := &config.Config{}
-				auth := &cliproxyauth.Auth{Provider: "codex", ID: t.Name(), Attributes: map[string]string{"api_key": "key", "base_url": server.URL}}
-				req := cliproxyexecutor.Request{Model: "gpt-5.6-sol", Payload: []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":"search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"tools":[{"type":"web_search_preview"},{"type":"image_generation"}]}`)}
-				opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: http.Header{http.CanonicalHeaderKey(codexResponsesLiteHeader): {"true"}}}
-				switch intent {
-				case "body-mirror":
-					opts.Headers = nil
-					req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
-				case "official-without-header":
-					opts.Headers = nil
-					req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.x-codex-turn-metadata", `{"session_id":"session","turn_id":"turn"}`)
-				case "configured":
-					opts.Headers = nil
-					auth.Attributes["header:"+codexResponsesLiteHeader] = "true"
-				}
-				httpExec := NewCodexExecutor(cfg)
-				execute := httpExec.Execute
-				stream := httpExec.ExecuteStream
-				if strings.HasPrefix(transport, "ws") {
-					ws := NewCodexWebsocketsExecutor(cfg)
-					execute = ws.Execute
-					stream = ws.ExecuteStream
-				}
-				if strings.HasSuffix(transport, "stream") {
-					result, err := stream(context.Background(), auth, req, opts)
-					if err != nil {
-						t.Fatal(err)
+					httpExec := NewCodexExecutor(cfg)
+					execute := httpExec.Execute
+					stream := httpExec.ExecuteStream
+					if strings.HasPrefix(transport, "ws") {
+						ws := NewCodexWebsocketsExecutor(cfg)
+						execute = ws.Execute
+						stream = ws.ExecuteStream
 					}
-					for chunk := range result.Chunks {
-						if chunk.Err != nil {
-							t.Fatal(chunk.Err)
+					if strings.HasSuffix(transport, "stream") {
+						result, err := stream(context.Background(), auth, req, opts)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for chunk := range result.Chunks {
+							if chunk.Err != nil {
+								t.Fatal(chunk.Err)
+							}
+						}
+					} else {
+						if _, err := execute(context.Background(), auth, req, opts); err != nil {
+							t.Fatal(err)
 						}
 					}
-				} else {
-					if _, err := execute(context.Background(), auth, req, opts); err != nil {
-						t.Fatal(err)
+					body := <-captured
+					if gjson.GetBytes(body, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(body) != util.CodexResponsesLiteToolsCompatible {
+						t.Fatalf("tools: %s", body)
 					}
-				}
-				body := <-captured
-				if gjson.GetBytes(body, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(body) != util.CodexResponsesLiteToolsCompatible {
-					t.Fatalf("tools: %s", body)
-				}
-				descriptors := util.CollectResponsesToolWinners(gjson.ParseBytes(body))
-				for _, name := range []string{"image_gen__imagegen", "web__run"} {
-					if _, ok := descriptors[name]; !ok {
-						t.Fatalf("missing %s: %s", name, body)
+					descriptors := util.CollectResponsesToolWinners(gjson.ParseBytes(body))
+					for _, name := range []string{"image_gen__imagegen", "web__run"} {
+						if _, ok := descriptors[name]; !ok {
+							t.Fatalf("missing %s: %s", name, body)
+						}
 					}
-				}
-				if strings.HasPrefix(transport, "ws") && gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" {
-					t.Fatal("missing per-request mirror")
-				}
-			})
+					assertCodexReservedWireFixtures(t, body)
+					if strings.HasPrefix(transport, "ws") && gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" {
+						t.Fatal("missing per-request mirror")
+					}
+				})
+			}
 		}
 	}
 }
@@ -116,7 +120,7 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 	for _, mode := range []config.DisableImageGenerationMode{config.DisableImageGenerationOff, config.DisableImageGenerationAll, config.DisableImageGenerationChat, config.DisableImageGenerationPassthrough} {
 		cfg := &config.Config{}
 		cfg.DisableImageGeneration = mode
-		got := applyCodexImageGenerationPolicy(base, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", false)
+		got := mustApplyCodexImagePolicy(t, base, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", false)
 		if mode == config.DisableImageGenerationPassthrough {
 			if string(got) != string(base) {
 				t.Fatal("passthrough changed")
@@ -131,7 +135,7 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 		}
 	}
 	cfg := &config.Config{}
-	if got := applyCodexImageGenerationPolicy(base, "gpt-5.6-sol", nil, cfg, nil, "/v1/responses", true); !helps.HasCodexImageTool(got) || util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {
+	if got := mustApplyCodexImagePolicy(t, base, "gpt-5.6-sol", nil, cfg, nil, "/v1/responses", true); !helps.HasCodexImageTool(got) || util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("official Lite request not normalized: %s", got)
 	}
 	for _, parallel := range []any{true, "false", nil, 0} {
