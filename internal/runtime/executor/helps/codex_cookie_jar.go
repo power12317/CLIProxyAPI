@@ -40,6 +40,7 @@ var codexAllowedCookieNames = []string{
 type codexCookieJar struct {
 	inner         http.CookieJar
 	preserveOaiLB bool
+	owner         string
 }
 
 func (j *codexCookieJar) Cookies(u *url.URL) []*http.Cookie {
@@ -87,23 +88,33 @@ func CodexCookieJarForAuth(auth *cliproxyauth.Auth) http.CookieJar {
 	if !CodexAuthUsesOAuthCookieJar(auth) || strings.TrimSpace(auth.ID) == "" {
 		return nil
 	}
-	preserveOaiLB := false
-	// The 0.154.0-compatible profile intentionally excludes __oailb.
-	// Keep this explicit so a future profile can opt in without changing the jar boundary.
+	preserveOaiLB := true
 	if value, ok := auth.Metadata["codex_cookie_preserve_oailb"].(bool); ok {
 		preserveOaiLB = value
 	}
-	if existing, ok := codexCookieJars.Load(auth.ID); ok {
-		return existing.(http.CookieJar)
+	owner := CodexOwnerFingerprint(auth)
+	for {
+		existing, loaded := codexCookieJars.Load(auth.ID)
+		if loaded {
+			jar := existing.(*codexCookieJar)
+			if jar.owner == owner && jar.preserveOaiLB == preserveOaiLB {
+				return jar
+			}
+		}
+		inner, errNewJar := cookiejar.New(nil)
+		if errNewJar != nil {
+			log.WithError(errNewJar).Warn("failed to create Codex cookie jar")
+			return nil
+		}
+		jar := &codexCookieJar{inner: inner, preserveOaiLB: preserveOaiLB, owner: owner}
+		if loaded {
+			if codexCookieJars.CompareAndSwap(auth.ID, existing, jar) {
+				return jar
+			}
+		} else if actual, existed := codexCookieJars.LoadOrStore(auth.ID, jar); !existed {
+			return actual.(*codexCookieJar)
+		}
 	}
-	inner, errNewJar := cookiejar.New(nil)
-	if errNewJar != nil {
-		log.WithError(errNewJar).Warn("failed to create Codex cookie jar")
-		return nil
-	}
-	jar := &codexCookieJar{inner: inner, preserveOaiLB: preserveOaiLB}
-	actual, _ := codexCookieJars.LoadOrStore(auth.ID, jar)
-	return actual.(http.CookieJar)
 }
 
 // InvalidateCodexCookieJar removes all Cookie state for an auth ID.
@@ -179,11 +190,7 @@ func CodexOAuthUserAgent(auth *cliproxyauth.Auth) string {
 			}
 		}
 	}
-	system := CodexOAuthClientSystem(auth)
-	if system == "windows" {
-		return "codex-tui/0.154.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.154.0)"
-	}
-	return "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.154.0)"
+	return CodexSystemUserAgent(CodexOAuthClientSystem(auth))
 }
 
 // CodexOAuthClientSystem returns the system assigned to an OAuth credential.
@@ -317,4 +324,41 @@ func StartCodexCookieRefreshLoop(ctx context.Context, cfg *config.Config, list f
 			}
 		}
 	}()
+}
+
+// CodexWebsocketCookieHeaders prepares a WSS handshake from the same HTTPS jar.
+// An explicit Cookie header wins over the jar, matching the CLI transport.
+func CodexWebsocketCookieHeaders(jar http.CookieJar, rawURL string, headers http.Header) http.Header {
+	headers = headers.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	target := codexWebsocketCookieURL(rawURL)
+	if jar == nil || target == nil || headers.Get("Cookie") != "" {
+		return headers
+	}
+	request := &http.Request{Header: headers}
+	for _, cookie := range jar.Cookies(target) {
+		request.AddCookie(cookie)
+	}
+	return headers
+}
+
+// StoreCodexWebsocketCookies accepts both successful and rejected handshake responses.
+func StoreCodexWebsocketCookies(jar http.CookieJar, rawURL string, response *http.Response) {
+	if target := codexWebsocketCookieURL(rawURL); jar != nil && target != nil && response != nil {
+		jar.SetCookies(target, response.Cookies())
+	}
+}
+
+func codexWebsocketCookieURL(rawURL string) *url.URL {
+	target, err := url.Parse(rawURL)
+	if err != nil || target.Scheme != "wss" {
+		return nil
+	}
+	target.Scheme = "https"
+	if !isAllowedCodexCookieURL(target) {
+		return nil
+	}
+	return target
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,14 +18,16 @@ import (
 // CodexOAuthIdentity contains the canonical identifiers shared by the body and
 // the protected OAuth request headers.
 type CodexOAuthIdentity struct {
-	System           string
-	InstallationID   string
-	SessionID        string
-	ThreadID         string
-	TurnID           string
-	WindowID         string
-	ClientRequestID  string
-	TurnMetadataJSON string
+	System             string
+	InstallationID     string
+	SessionID          string
+	PromptCacheKey     string
+	ResponsesSessionID string
+	ThreadID           string
+	TurnID             string
+	WindowID           string
+	ClientRequestID    string
+	TurnMetadataJSON   string
 }
 
 // CodexInstallationAccountID returns the shared identity seed for normal
@@ -72,20 +75,31 @@ func ApplyCodexOAuthFidelity(body []byte, accountID, credentialSystem string, de
 		identity.System = detectCodexSystem(document, turnMetadata)
 	}
 	identity.SessionID = firstString(
-		stringValue(document["prompt_cache_key"]),
-		stringValue(clientMetadata["session_id"]),
 		stringValue(turnMetadata["session_id"]),
+		stringValue(clientMetadata["session_id"]),
+		stringValue(turnMetadata["thread_id"]),
+		stringValue(clientMetadata["thread_id"]),
+		stringValue(document["prompt_cache_key"]),
 	)
 	if identity.SessionID == "" {
 		identity.SessionID = uuid.NewString()
 	}
 	identity.ThreadID = firstString(stringValue(clientMetadata["thread_id"]), stringValue(turnMetadata["thread_id"]), identity.SessionID)
-	identity.TurnID = firstString(stringValue(clientMetadata["turn_id"]), stringValue(turnMetadata["turn_id"]), stringValue(turnMetadata["turn_id"]))
+	identity.PromptCacheKey = firstString(stringValue(document["prompt_cache_key"]), identity.SessionID)
+	identity.ResponsesSessionID = identity.PromptCacheKey
+	if stringValue(turnMetadata["subagent_kind"]) != "" || stringValue(clientMetadata["x-openai-subagent"]) != "" {
+		identity.ResponsesSessionID = identity.SessionID
+	}
+	identity.TurnID = firstString(stringValue(clientMetadata["turn_id"]), stringValue(turnMetadata["turn_id"]))
 	if identity.TurnID == "" {
 		identity.TurnID = uuid.NewString()
 	}
-	identity.WindowID = firstString(stringValue(clientMetadata["x-codex-window-id"]), stringValue(turnMetadata["window_id"]), identity.SessionID+":0")
-	identity.ClientRequestID = identity.SessionID
+	windowNumber := "0"
+	if number, errParse := strconv.ParseUint(fmt.Sprint(turnMetadata["window_number"]), 10, 64); errParse == nil {
+		windowNumber = strconv.FormatUint(number, 10)
+	}
+	identity.WindowID = firstString(stringValue(clientMetadata["x-codex-window-id"]), stringValue(turnMetadata["window_id"]), identity.ThreadID+":"+windowNumber)
+	identity.ClientRequestID = identity.ThreadID
 	if deviceConvergence {
 		identity.InstallationID = codexInstallationUUID(accountID, identity.System)
 	} else {
@@ -113,7 +127,7 @@ func ApplyCodexOAuthFidelity(body []byte, accountID, credentialSystem string, de
 	rewriteTimezoneMetadata(clientMetadata)
 	clientMetadata["x-codex-turn-metadata"] = turnMetadata
 	document["client_metadata"] = clientMetadata
-	document["prompt_cache_key"] = identity.SessionID
+	document["prompt_cache_key"] = identity.PromptCacheKey
 	rewriteCodexEnvironmentTimezones(document)
 
 	encoded, errMarshal := json.Marshal(turnMetadata)
@@ -201,25 +215,28 @@ func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, mo
 	}
 	ua := configuredUserAgent
 	if strings.TrimSpace(ua) == "" {
-		if identity.System == "windows" {
-			ua = "codex-tui/0.154.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.154.0)"
-		} else {
-			ua = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.154.0)"
+		ua = CodexSystemUserAgent(identity.System)
+		if clientUA := headers.Get("User-Agent"); strings.HasPrefix(clientUA, "codex-tui/") || strings.HasPrefix(clientUA, "codex_cli_rs/") {
+			ua = clientUA
 		}
 	}
 	beta := configuredBeta
 	if strings.TrimSpace(beta) == "" {
-		beta = "remote_compaction_v2"
+		beta = MergeCodexBetaFeatures(headers.Get("X-Codex-Beta-Features"), "remote_compaction_v2")
 	}
-	headers.Set("Originator", "codex-tui")
+	if headers.Get("Originator") == "" {
+		headers.Set("Originator", "codex-tui")
+	}
 	headers.Set("User-Agent", ua)
-	headers.Set("Version", "0.154.0")
+	if headers.Get("Version") == "" {
+		headers.Set("Version", CodexClientVersion)
+	}
 	headers.Set("X-Codex-Beta-Features", beta)
 	headers.Set("X-Codex-Routing-Hint", "model="+strings.TrimSpace(model))
 	headers.Set("X-Codex-Window-Id", identity.WindowID)
 	headers.Set("X-Codex-Turn-Metadata", identity.TurnMetadataJSON)
 	headers.Set("X-Client-Request-Id", identity.ClientRequestID)
-	headers.Set("Session-Id", identity.SessionID)
+	headers.Set("Session-Id", firstString(identity.ResponsesSessionID, identity.SessionID))
 	headers.Set("Thread-Id", identity.ThreadID)
 	if stream {
 		headers.Set("Accept", "text/event-stream")
@@ -426,4 +443,20 @@ func firstString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// MergeCodexBetaFeatures preserves client features while adding required defaults once.
+func MergeCodexBetaFeatures(values ...string) string {
+	seen := make(map[string]bool)
+	var features []string
+	for _, value := range values {
+		for _, feature := range strings.Split(value, ",") {
+			feature = strings.TrimSpace(feature)
+			if feature != "" && !seen[feature] {
+				seen[feature] = true
+				features = append(features, feature)
+			}
+		}
+	}
+	return strings.Join(features, ",")
 }

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	codexUserAgent             = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+	codexUserAgent             = helps.CodexDefaultUserAgent
 	codexOriginator            = "codex-tui"
 	codexDefaultImageToolModel = "gpt-image-2"
 	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
@@ -36,9 +36,9 @@ func translateCodexRequestPair(from, to sdktranslator.Format, model string, orig
 	isCompat := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
 	translate := func(raw []byte) []byte {
 		if isCompat && from == sdktranslator.FormatClaude && to == sdktranslator.FormatCodex {
-			return helps.TranslateRequestWithAPIKeyModelCompatibility(context.Background(), nil, nil, from, to, model, raw, stream, true)
+			return helps.PreserveCodexProtocolFields(raw, helps.TranslateRequestWithAPIKeyModelCompatibility(context.Background(), nil, nil, from, to, model, raw, stream, true))
 		}
-		return sdktranslator.TranslateRequest(from, to, model, raw, stream)
+		return helps.PreserveCodexProtocolFields(raw, sdktranslator.TranslateRequest(from, to, model, raw, stream))
 	}
 	if bytes.Equal(originalPayload, payload) {
 		body := translate(payload)
@@ -135,6 +135,11 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	}
 	if cache.ID == "" {
 		cache.ID = helps.ProviderSessionUUID("codex", req.Metadata)
+	}
+	if helps.IsOfficialCodexRequest(rawJSON) {
+		if configuredCache := gjson.GetBytes(rawJSON, "prompt_cache_key").String(); configuredCache != "" {
+			cache.ID = configuredCache
+		}
 	}
 
 	if cache.ID != "" {
@@ -354,7 +359,11 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Openai-Internal-Codex-Responses-Lite", "")
 
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	fallbackUserAgent := codexUserAgent
+	if helps.CodexAuthUsesOAuthCookieJar(auth) {
+		fallbackUserAgent = helps.CodexOAuthUserAgent(auth)
+	}
+	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
 
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
@@ -380,8 +389,21 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	util.ApplyCustomHeadersFromAttrs(r, attrs, ginHeaders)
 	applyCodexCloakingHeaders(r.Header, cfg)
+	if cfg != nil && !cfg.Codex.DisableCodexCloaking && cfgUserAgent != "" {
+		r.Header.Set("User-Agent", cfgUserAgent)
+	} else if cfg != nil && !cfg.Codex.DisableCodexCloaking && helps.CodexAuthUsesOAuthCookieJar(auth) {
+		r.Header.Set("User-Agent", helps.CodexOAuthUserAgent(auth))
+	}
+	if strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex-tui/") || strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex_cli_rs/") {
+		if cfgUserAgent == "" {
+			r.Header.Set("User-Agent", ginHeaders.Get("User-Agent"))
+		}
+		if originator := ginHeaders.Get("Originator"); originator != "" {
+			r.Header.Set("Originator", originator)
+		}
+	}
+	util.ApplyCustomHeadersFromAttrs(r, attrs, ginHeaders)
 }
 
 func replaceCodexRequestBody(r *http.Request, body []byte) {
@@ -452,35 +474,14 @@ func isCodexFreePlanAuth(auth *cliproxyauth.Auth) bool {
 	return strings.EqualFold(strings.TrimSpace(auth.Attributes["plan_type"]), "free")
 }
 
-func isImageGenerationFunctionTool(tool gjson.Result) bool {
-	switch tool.Get("type").String() {
-	case "function":
-		return tool.Get("name").String() == "image_gen.imagegen"
-	case "namespace":
-		if tool.Get("name").String() != "image_gen" {
-			return false
-		}
-		tools := tool.Get("tools")
-		if !tools.IsArray() {
-			return false
-		}
-		for _, nestedTool := range tools.Array() {
-			if nestedTool.Get("type").String() == "function" && nestedTool.Get("name").String() == "imagegen" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth.Auth, headers http.Header) []byte {
-	if util.IsCodexResponsesLiteRequest(body, headers) {
-		return body
-	}
+func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth.Auth) []byte {
 	if strings.HasSuffix(baseModel, "spark") {
 		return body
 	}
 	if isCodexFreePlanAuth(auth) {
+		return body
+	}
+	if helps.HasCodexImageTool(body) {
 		return body
 	}
 
@@ -488,11 +489,6 @@ func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth
 	if !tools.Exists() || !tools.IsArray() {
 		body, _ = sjson.SetRawBytes(body, "tools", imageGenToolArrayJSON)
 		return body
-	}
-	for _, t := range tools.Array() {
-		if t.Get("type").String() == "image_generation" || isImageGenerationFunctionTool(t) {
-			return body
-		}
 	}
 	body, _ = sjson.SetRawBytes(body, "tools.-1", imageGenToolJSON)
 	return body

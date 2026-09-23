@@ -392,8 +392,8 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	}
 	// Keep the probe headers aligned with the normal Codex OAuth client identity.
 	req.Header.Set("Originator", "codex-tui")
-	req.Header.Set("Version", "0.154.0")
-	req.Header.Set("User-Agent", "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.154.0)")
+	req.Header.Set("Version", CodexClientVersion)
+	req.Header.Set("User-Agent", CodexSystemUserAgent(CodexOAuthClientSystem(auth)))
 	req.Header.Set("X-Codex-Beta-Features", "remote_compaction_v2")
 	req.Header.Set("X-Codex-Routing-Hint", "model="+model)
 	req.Header.Set("X-Codex-Window-Id", uuid.NewString())

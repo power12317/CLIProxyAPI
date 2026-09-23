@@ -47,6 +47,7 @@ type codexOpenAIImagePreparedRequest struct {
 }
 
 type codexImageCallResult struct {
+	GenerationID  string
 	Result        string
 	RevisedPrompt string
 	OutputFormat  string
@@ -986,6 +987,7 @@ func codexExtractImageResults(completed []byte, itemsByIndex map[int64][]byte, f
 		}
 		entry := codexImageCallResult{
 			Result:        res,
+			GenerationID:  strings.TrimSpace(item.Get("generation_id").String()),
 			RevisedPrompt: strings.TrimSpace(item.Get("revised_prompt").String()),
 			OutputFormat:  strings.TrimSpace(item.Get("output_format").String()),
 			Size:          strings.TrimSpace(item.Get("size").String()),
@@ -1056,6 +1058,9 @@ func codexBuildImagesAPIResponse(results []codexImageCallResult, createdAt int64
 	items := make([][]byte, 0, len(results))
 	for _, img := range results {
 		item := []byte(`{}`)
+		if img.GenerationID != "" {
+			item, _ = sjson.SetBytes(item, "generation_id", img.GenerationID)
+		}
 		if img.RevisedPrompt != "" {
 			item, _ = sjson.SetBytes(item, "revised_prompt", img.RevisedPrompt)
 		}
@@ -1080,6 +1085,9 @@ func codexBuildImagePartialFrame(payload []byte, responseFormat string, streamPr
 	data := []byte(`{"type":"","partial_image_index":0}`)
 	data, _ = sjson.SetBytes(data, "type", eventName)
 	data, _ = sjson.SetBytes(data, "partial_image_index", gjson.GetBytes(payload, "partial_image_index").Int())
+	if generationID := strings.TrimSpace(gjson.GetBytes(payload, "generation_id").String()); generationID != "" {
+		data, _ = sjson.SetBytes(data, "generation_id", generationID)
+	}
 	if codexNormalizeImageResponseFormat(responseFormat) == "url" {
 		data, _ = sjson.SetBytes(data, "url", "data:"+codexMimeTypeFromOutputFormat(outputFormat)+";base64,"+b64)
 	} else {
@@ -1092,6 +1100,9 @@ func codexBuildImageCompletedFrame(img codexImageCallResult, usageRaw []byte, re
 	eventName := strings.TrimSpace(streamPrefix) + ".completed"
 	data := []byte(`{"type":""}`)
 	data, _ = sjson.SetBytes(data, "type", eventName)
+	if img.GenerationID != "" {
+		data, _ = sjson.SetBytes(data, "generation_id", img.GenerationID)
+	}
 	if len(usageRaw) > 0 && json.Valid(usageRaw) {
 		data, _ = sjson.SetRawBytes(data, "usage", usageRaw)
 	}

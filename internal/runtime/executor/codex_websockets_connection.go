@@ -34,7 +34,10 @@ func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	jar := helps.CodexCookieJarForAuth(auth)
+	headers = helps.CodexWebsocketCookieHeaders(jar, wsURL, headers)
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
+	helps.StoreCodexWebsocketCookies(jar, wsURL, resp)
 	if err != nil {
 		cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	}

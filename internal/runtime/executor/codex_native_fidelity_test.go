@@ -104,7 +104,7 @@ func testCodexNativeStreamFidelity(t *testing.T, source sdktranslator.Format) {
 					native := lite != "" && (source == sdktranslator.FormatCodex || source == sdktranslator.FormatOpenAIResponse)
 					if transport == "websocket" {
 						wantLiteHeader := ""
-						if native && lite == "header" {
+						if lite != "" {
 							wantLiteHeader = "true"
 						}
 						if got := upstreamHeaders.Get(codexResponsesLiteHeader); got != wantLiteHeader {
@@ -128,8 +128,11 @@ func testCodexNativeStreamFidelity(t *testing.T, source sdktranslator.Format) {
 						if string(terminal) != completed {
 							t.Errorf("native completion changed: %s", terminal)
 						}
-					} else if gjson.GetBytes(body, "instructions").Type != gjson.String || gjson.GetBytes(terminal, "response.output.0.id").String() != "msg_1" {
-						t.Errorf("compatibility normalization/backfill lost: %s; %s", body, terminal)
+					} else {
+						instructions := gjson.GetBytes(body, "instructions")
+						if lite == "" && instructions.Type != gjson.String || lite != "" && instructions.Exists() || gjson.GetBytes(terminal, "response.output.0.id").String() != "msg_1" {
+							t.Errorf("compatibility normalization/backfill lost: %s; %s", body, terminal)
+						}
 					}
 				})
 			}

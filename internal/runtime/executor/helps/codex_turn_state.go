@@ -34,6 +34,7 @@ type codexTurnStateEntry struct {
 }
 
 type codexTurnStateBucket struct {
+	owner   string
 	entries map[codexTurnStateKey]codexTurnStateEntry
 }
 
@@ -115,7 +116,7 @@ func (c *codexTurnStateCache) request(auth *cliproxyauth.Auth, target string, bo
 			origin: codexTurnOrigin(target),
 			turnID: firstString(codexTurnString(headerTurn.Get("turn_id")), codexTurnString(turn.Get("turn_id")), codexTurnString(metadata.Get("turn_id"))),
 		},
-		sessionID: firstString(codexTurnHeaderValue(headers, "Session-Id"), codexTurnHeaderValue(headers, "Session_id"), codexTurnString(headerTurn.Get("session_id")), codexTurnString(turn.Get("session_id")), codexTurnString(metadata.Get("session_id"))),
+		sessionID: firstString(codexTurnString(headerTurn.Get("session_id")), codexTurnString(turn.Get("session_id")), codexTurnString(metadata.Get("session_id")), codexTurnHeaderValue(headers, "Session-Id"), codexTurnHeaderValue(headers, "Session_id")),
 	}
 	if auth != nil {
 		state.authID = auth.ID
@@ -123,13 +124,13 @@ func (c *codexTurnStateCache) request(auth *cliproxyauth.Auth, target string, bo
 		if state.authFile == "." || state.authFile == "" {
 			state.authFile = filepath.Base(strings.TrimSpace(auth.ID))
 		}
-		state.key.accountID, _ = auth.Metadata["account_id"].(string)
+		state.key.accountID = CodexOwnerFingerprint(auth)
 	}
 	if state.authID != "" && state.key.turnID != "" && state.key.origin != "" {
 		c.mu.Lock()
 		bucket := c.buckets[state.authID]
-		if bucket == nil {
-			bucket = &codexTurnStateBucket{entries: make(map[codexTurnStateKey]codexTurnStateEntry)}
+		if bucket == nil || bucket.owner != state.key.accountID {
+			bucket = &codexTurnStateBucket{owner: state.key.accountID, entries: make(map[codexTurnStateKey]codexTurnStateEntry)}
 			c.buckets[state.authID] = bucket
 		}
 		state.bucket = bucket

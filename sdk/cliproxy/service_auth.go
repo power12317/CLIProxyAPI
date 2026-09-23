@@ -372,6 +372,13 @@ func (s *Service) prepareCoreAuthForModelRegistration(ctx context.Context, auth 
 		}
 		op = "update"
 		_, err = s.coreManager.Update(ctx, auth)
+		if err == nil && strings.EqualFold(auth.Provider, "codex") {
+			if helps.CodexOwnerFingerprint(existing) != helps.CodexOwnerFingerprint(auth) {
+				helps.InvalidateCodexCookieJar(auth.ID)
+				helps.InvalidateCodexTurnStates(auth.ID)
+				executor.CloseCodexWebsocketSessionsForAuthID(auth.ID, "auth_owner_changed")
+			}
+		}
 	} else {
 		_, err = s.coreManager.Register(ctx, auth)
 	}

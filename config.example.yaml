@@ -214,6 +214,8 @@ claude-code:
   disable-cloaking-model-list: false
 
 # disable-image-generation supports: false (default), true, "chat", or "passthrough".
+# - false: ensure an image tool exists for official and compatible Codex clients; use image_gen.imagegen
+#   in Responses Lite and hosted image_generation otherwise. Free credentials and spark models skip automatic injection.
 # - true: disable image_generation everywhere (also returns 404 for /v1/images/generations and /v1/images/edits).
 # - "chat": disable image_generation injection on non-images endpoints, but keep /v1/images/generations and /v1/images/edits enabled.
 # - "passthrough": never inject or strip image_generation on non-images endpoints (forward the client payload unchanged); behaves like "chat" on /v1/images/* endpoints.

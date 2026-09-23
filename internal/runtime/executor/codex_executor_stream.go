@@ -72,9 +72,10 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
-	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, opts.Headers, requestPath, officialCodexRequest)
+	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
+	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex executor", body, isCompat)
-	body = normalizeCodexParallelToolCalls(body, opts.Headers, officialCodexRequest)
+	body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
 	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
@@ -86,9 +87,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	var fixedInstallationID string
 	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
-		if officialOAuthRequest && codexResponsesLiteModelEnabled(baseModel) {
-			body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
-		}
 	}
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 

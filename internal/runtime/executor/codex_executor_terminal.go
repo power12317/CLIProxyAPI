@@ -185,7 +185,7 @@ func codexTerminalFailureStatus(body []byte) int {
 	errorType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()))
 	errorCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.code").String()))
 	switch {
-	case errorCode == "cyber_policy":
+	case errorCode == "cyber_policy", errorCode == "bio_policy":
 		return http.StatusBadRequest
 	case errorType == "not_found_error", errorCode == "not_found", errorCode == "model_not_found":
 		return http.StatusNotFound
@@ -193,7 +193,7 @@ func codexTerminalFailureStatus(body []byte) int {
 		return http.StatusUnauthorized
 	case errorType == "permission_error", errorCode == "forbidden", errorCode == "permission_denied":
 		return http.StatusForbidden
-	case errorType == "rate_limit_error", errorCode == "rate_limit_exceeded":
+	case errorType == "rate_limit_error", errorCode == "rate_limit_exceeded", errorCode == "slow_down", isCodexUsageLimitError(body):
 		return http.StatusTooManyRequests
 	case errorType == "invalid_request_error", errorType == "bad_request_error":
 		return http.StatusBadRequest
@@ -318,11 +318,15 @@ func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling
 	errCode := statusCode
 	isUsageLimit := isCodexUsageLimitError(body)
 	credentialScoped := isUsageLimit && !modelLevelCooling
-	if isCodexModelCapacityError(body) || isUsageLimit {
+	if isCodexModelCapacityError(body) || isUsageLimit || gjson.GetBytes(body, "error.code").String() == "slow_down" {
 		errCode = http.StatusTooManyRequests
 	}
+	policyError := gjson.GetBytes(body, "error.code").String() == "bio_policy"
+	if policyError {
+		errCode = http.StatusBadRequest
+	}
 	body = classifyCodexStatusError(errCode, body)
-	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped}
+	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped, requestScoped: policyError}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
 	}
@@ -360,6 +364,10 @@ func codexStatusErrorClassification(statusCode int, body []byte) (code string, e
 	upstreamCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.code").String()))
 	upstreamType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()))
 	isInvalidRequest := upstreamType == "" || upstreamType == "invalid_request_error"
+	switch upstreamCode {
+	case "slow_down", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "bio_policy":
+		return "", "", false
+	}
 
 	switch {
 	case statusCode == http.StatusRequestEntityTooLarge || upstreamCode == "context_length_exceeded" || upstreamCode == "context_too_large" || isInvalidRequest && (strings.Contains(errorMessage, "context length") || strings.Contains(errorMessage, "context_length") || strings.Contains(errorMessage, "maximum context") || strings.Contains(errorMessage, "too many tokens")):
@@ -400,9 +408,8 @@ func isCodexModelCapacityError(errorBody []byte) bool {
 }
 
 // isCodexUsageLimitError reports whether the error body represents a Codex
-// quota/plan-limit exhaustion (error.type == "usage_limit_reached"). This is the
-// signal Codex emits when a credential's usage quota is depleted, and it carries
-// reset timing (resets_at/resets_in_seconds) parsed by parseCodexRetryAfter.
+// quota/plan-limit exhaustion, including credit and organization/project limits.
+// Optional reset timing (resets_at/resets_in_seconds) is parsed by parseCodexRetryAfter.
 // Transient per-minute rate limits (rate_limit_error/rate_limit_exceeded) are
 // intentionally excluded, as they should be retried rather than cooled down.
 func isCodexUsageLimitError(errorBody []byte) bool {
@@ -411,10 +418,12 @@ func isCodexUsageLimitError(errorBody []byte) bool {
 	}
 	candidates := []string{
 		gjson.GetBytes(errorBody, "error.type").String(),
+		gjson.GetBytes(errorBody, "error.code").String(),
 		gjson.GetBytes(errorBody, "type").String(),
 	}
 	for _, candidate := range candidates {
-		if strings.EqualFold(strings.TrimSpace(candidate), "usage_limit_reached") {
+		switch strings.ToLower(strings.TrimSpace(candidate)) {
+		case "usage_limit_reached", "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded":
 			return true
 		}
 	}
@@ -625,7 +634,7 @@ func isCodexOverloadBootstrapFailure(body []byte) bool {
 	switch {
 	case errorType == "service_unavailable_error", errorCode == "server_is_overloaded":
 		return true
-	case errorType == "rate_limit_error", errorCode == "rate_limit_exceeded":
+	case errorType == "rate_limit_error", errorCode == "rate_limit_exceeded", errorCode == "slow_down":
 		return true
 	case (errorType == "server_error" || errorCode == "server_error") && strings.Contains(errorMessage, "you can retry your request"):
 		return true

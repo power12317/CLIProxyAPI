@@ -59,9 +59,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
-	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, opts.Headers, requestPath, officialCodexRequest)
+	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
+	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex websockets executor", body, isCompat)
-	body = normalizeCodexWebsocketParallelToolCalls(body, opts.Headers, officialCodexRequest)
+	body = normalizeCodexWebsocketParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)
 	multiAgentV2Conflict := helps.HasCodexMultiAgentV2NamespaceConflict(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
@@ -83,9 +84,21 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	clientBody := body
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
-	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, baseModel, officialCodexRequest)
+	var oauthIdentity helps.CodexOAuthIdentity
+	officialOAuthRequest := false
+	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(upstreamBody) {
+		upstreamBody, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
+	}
+	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, baseModel, officialCodexRequest, toolHeaders)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
+	if officialOAuthRequest {
+		ua, beta := codexHeaderDefaults(e.cfg, auth)
+		helps.ApplyCodexOAuthHeaders(wsHeaders, oauthIdentity, baseModel, true, ua, beta)
+		// Keep only one spelling of the routing session header on the wire.
+		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
+		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
+	}
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody, baseModel, officialCodexRequest)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
@@ -149,7 +162,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	var errDial error
 	dialCtx := ctx
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL)
+		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, helps.CodexConnectionFingerprint(auth, wsHeaders, e.cfg.ProxyURL))
 		if conn == nil {
 			unlockStreamSession()
 			return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
@@ -160,7 +173,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}
 	var upstreamHeaders http.Header
 	if respHS != nil {
-		upstreamHeaders = respHS.Header.Clone()
+		upstreamHeaders = helps.StripCodexInternalResponseHeaders(respHS.Header)
 	}
 	if errDial != nil {
 		bodyErr := websocketHandshakeBody(respHS)

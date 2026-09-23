@@ -54,6 +54,11 @@ func applyCodexPromptCacheHeadersWithContext(ctx context.Context, from sdktransl
 	if cache.ID == "" {
 		cache.ID = helps.ProviderSessionUUID("codex", req.Metadata)
 	}
+	if helps.IsOfficialCodexRequest(rawJSON) {
+		if configuredCache := gjson.GetBytes(rawJSON, "prompt_cache_key").String(); configuredCache != "" {
+			cache.ID = configuredCache
+		}
+	}
 
 	if cache.ID != "" {
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", cache.ID)
@@ -95,7 +100,11 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	if isAPIKey {
 		ensureHeaderWithPriority(headers, ginHeaders, "User-Agent", "", "")
 	} else {
-		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+		fallbackUserAgent := codexUserAgent
+		if helps.CodexAuthUsesOAuthCookieJar(auth) {
+			fallbackUserAgent = helps.CodexOAuthUserAgent(auth)
+		}
+		ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, fallbackUserAgent)
 	}
 
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))
@@ -142,8 +151,21 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		attrs = auth.Attributes
 	}
 	req := (&http.Request{Header: headers}).WithContext(ctx)
-	util.ApplyCustomHeadersFromAttrs(req, attrs, ginHeaders)
 	applyCodexCloakingHeaders(headers, cfg)
+	if cfg != nil && !cfg.Codex.DisableCodexCloaking && cfgUserAgent != "" {
+		headers.Set("User-Agent", cfgUserAgent)
+	} else if cfg != nil && !cfg.Codex.DisableCodexCloaking && helps.CodexAuthUsesOAuthCookieJar(auth) {
+		headers.Set("User-Agent", helps.CodexOAuthUserAgent(auth))
+	}
+	if strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex-tui/") || strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex_cli_rs/") {
+		if cfgUserAgent == "" {
+			headers.Set("User-Agent", ginHeaders.Get("User-Agent"))
+		}
+		if originator := ginHeaders.Get("Originator"); originator != "" {
+			headers.Set("Originator", originator)
+		}
+	}
+	util.ApplyCustomHeadersFromAttrs(req, attrs, ginHeaders)
 
 	return headers
 }

@@ -9,10 +9,11 @@ type SDKConfig struct {
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 
-	// DisableImageGeneration controls whether the built-in image_generation tool is injected/allowed.
+	// DisableImageGeneration controls whether image tools are injected/allowed.
 	//
 	// Supported values:
-	//   - false (default): image_generation is enabled everywhere (normal behavior).
+	//   - false (default): ensure image tools for official and compatible Codex clients, using
+	//     image_gen.imagegen in Lite and hosted image_generation otherwise; retain Free/spark exclusions.
 	//   - true: image_generation is disabled everywhere. The server stops injecting it, removes it from request payloads,
 	//     and returns 404 for /v1/images/generations and /v1/images/edits.
 	//   - "chat": disable image_generation injection for all non-images endpoints (e.g. /v1/responses, /v1/chat/completions),

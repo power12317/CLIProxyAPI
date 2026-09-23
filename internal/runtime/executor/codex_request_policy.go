@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -19,11 +18,30 @@ func codexOfficialRequest(originalPayload, payload []byte) bool {
 }
 
 func codexResponsesLiteBodyMode(body []byte, official bool, headers http.Header) bool {
+	if explicit := strings.TrimSpace(headers.Get(codexResponsesLiteHeader)); explicit != "" {
+		return strings.EqualFold(explicit, "true")
+	}
 	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	if codexResponsesLiteAutoEnabled(body, model, official) {
+	if official && codexResponsesLiteModelEnabled(model) && codexResponsesLiteBodyFieldsSatisfied(body) {
 		return true
 	}
 	return util.IsCodexResponsesLiteRequest(body, headers)
+}
+
+// codexToolPolicyHeaders uses the same explicit Lite overrides as the final
+// request, so tool normalization cannot choose a conflicting wire format.
+func codexToolPolicyHeaders(auth *cliproxyauth.Auth, source http.Header, model string) http.Header {
+	headers := source.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	applyCodexConfiguredHeaderOverrides(&http.Request{Header: headers}, auth, source)
+	for key, value := range registry.ModelOverrideHeaders(model) {
+		if strings.EqualFold(key, codexResponsesLiteHeader) {
+			headers.Set(key, value)
+		}
+	}
+	return headers
 }
 
 func codexResponsesLiteModelEnabled(model string) bool {
@@ -40,7 +58,7 @@ func codexResponsesLiteBodyFieldsSatisfied(body []byte) bool {
 }
 
 func codexResponsesLiteAutoEnabled(body []byte, model string, official bool) bool {
-	return official && codexResponsesLiteModelEnabled(model) && codexResponsesLiteBodyFieldsSatisfied(body)
+	return official && codexResponsesLiteModelEnabled(model) && codexResponsesLiteBodyFieldsSatisfied(body) && util.ClassifyCodexResponsesLiteTools(body) != util.CodexResponsesLiteToolsIncompatible
 }
 
 // ensureCodexResponsesLiteHeader only reconstructs a missing header for an
@@ -49,13 +67,20 @@ func ensureCodexResponsesLiteHeader(headers http.Header, body []byte, model stri
 	if headers == nil || headers.Get(codexResponsesLiteHeader) != "" {
 		return
 	}
-	if codexResponsesLiteAutoEnabled(body, model, official) {
+	if codexResponsesLiteAutoEnabled(body, model, official) || util.IsCodexResponsesLiteRequest(body, nil) {
 		headers.Set(codexResponsesLiteHeader, "true")
 	}
 }
 
-func ensureCodexResponsesLiteMirror(body []byte, model string, official bool) []byte {
-	if !codexResponsesLiteAutoEnabled(body, model, official) {
+func ensureCodexResponsesLiteMirror(body []byte, model string, official bool, headerSets ...http.Header) []byte {
+	var headers http.Header
+	if len(headerSets) > 0 {
+		headers = headerSets[0]
+	}
+	if explicit := strings.TrimSpace(headers.Get(codexResponsesLiteHeader)); explicit != "" && !strings.EqualFold(explicit, "true") {
+		return body
+	}
+	if !codexResponsesLiteAutoEnabled(body, model, official) && !util.IsCodexResponsesLiteRequest(body, headers) {
 		return body
 	}
 	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
@@ -92,105 +117,7 @@ func codexImagesEndpointPath(requestPath string) bool {
 
 // stripCodexImageGenerationTools removes supported image-generation tool forms
 // from top-level and additional_tools arrays while preserving other namespace tools.
-func stripCodexImageGenerationTools(body []byte) []byte {
-	var document any
-	if errUnmarshal := json.Unmarshal(body, &document); errUnmarshal != nil {
-		return body
-	}
-	changed := false
-	var walk func(any) any
-	var cleanTool func(any) (any, bool)
-
-	cleanTool = func(value any) (any, bool) {
-		tool, ok := value.(map[string]any)
-		if !ok {
-			return walk(value), false
-		}
-		typ, _ := tool["type"].(string)
-		name, _ := tool["name"].(string)
-		if typ == "image_generation" || typ == "function" && name == "image_gen.imagegen" {
-			return nil, true
-		}
-		if typ == "namespace" {
-			if nested, okNested := tool["tools"].([]any); okNested {
-				filtered := make([]any, 0, len(nested))
-				for _, child := range nested {
-					cleaned, remove := cleanTool(child)
-					if remove {
-						changed = true
-						continue
-					}
-					filtered = append(filtered, cleaned)
-				}
-				if len(filtered) == 0 && name == "image_gen" {
-					return nil, true
-				}
-				tool["tools"] = filtered
-			}
-		}
-		return walk(tool), false
-	}
-
-	walk = func(value any) any {
-		switch typed := value.(type) {
-		case []any:
-			for index := range typed {
-				typed[index] = walk(typed[index])
-			}
-			return typed
-		case map[string]any:
-			for key, child := range typed {
-				if key == "tools" {
-					if tools, ok := child.([]any); ok {
-						filtered := make([]any, 0, len(tools))
-						for _, tool := range tools {
-							cleaned, remove := cleanTool(tool)
-							if remove {
-								changed = true
-								continue
-							}
-							filtered = append(filtered, cleaned)
-						}
-						typed[key] = filtered
-						continue
-					}
-				}
-				if key == "tool_choice" && isCodexImageGenerationToolChoice(child) {
-					delete(typed, key)
-					changed = true
-					continue
-				}
-				typed[key] = walk(child)
-			}
-			return typed
-		default:
-			return value
-		}
-	}
-
-	document = walk(document)
-	if !changed {
-		return body
-	}
-	encoded, errMarshal := json.Marshal(document)
-	if errMarshal != nil {
-		return body
-	}
-	return encoded
-}
-
-func isCodexImageGenerationToolChoice(value any) bool {
-	switch typed := value.(type) {
-	case string:
-		return typed == "image_generation" || typed == "image_gen.imagegen"
-	case map[string]any:
-		typ, _ := typed["type"].(string)
-		name, _ := typed["name"].(string)
-		return typ == "image_generation" || name == "image_generation" || name == "image_gen.imagegen"
-	default:
-		return false
-	}
-}
+func stripCodexImageGenerationTools(body []byte) []byte { return helps.StripCodexImageTools(body) }
 
 func applyCodexImageGenerationPolicy(body []byte, baseModel string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, requestPath string, official bool) []byte {
 	return applyCodexImageGenerationPolicyWithInjection(body, baseModel, auth, cfg, headers, requestPath, official, true)
@@ -204,14 +131,19 @@ func applyCodexImageGenerationPolicyWithInjection(body []byte, baseModel string,
 	if cfg != nil && cfg.DisableImageGeneration == config.DisableImageGenerationPassthrough {
 		return body
 	}
-	if codexShouldStripImageGeneration(cfg, requestPath) {
-		return stripCodexImageGenerationTools(body)
+	stripImages := codexShouldStripImageGeneration(cfg, requestPath)
+	if stripImages {
+		body = stripCodexImageGenerationTools(body)
 	}
-	if official || !allowInjection {
+	if !allowInjection {
 		return body
 	}
-	if cfg == nil || cfg.DisableImageGeneration == config.DisableImageGenerationOff {
-		return ensureImageGenerationTool(body, baseModel, auth, headers)
+	injectImages := !stripImages && (cfg == nil || cfg.DisableImageGeneration == config.DisableImageGenerationOff) && !isCodexFreePlanAuth(auth) && !strings.HasSuffix(baseModel, "spark")
+	if codexResponsesLiteBodyMode(body, official, headers) {
+		return helps.NormalizeCodexLiteCompatibilityTools(body, injectImages)
 	}
-	return body
+	if !injectImages {
+		return body
+	}
+	return ensureImageGenerationTool(body, baseModel, auth)
 }

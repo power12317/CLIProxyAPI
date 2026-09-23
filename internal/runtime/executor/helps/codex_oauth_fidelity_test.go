@@ -113,8 +113,8 @@ func TestConfigureCodexChatGPTUsageRequestUsesSystemProfile(t *testing.T) {
 		system string
 		wantUA string
 	}{
-		{name: "legacy defaults to mac", wantUA: "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.154.0)"},
-		{name: "windows", system: "windows", wantUA: "codex-tui/0.154.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.154.0)"},
+		{name: "legacy defaults to mac", wantUA: "codex-tui/0.156.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.156.0)"},
+		{name: "windows", system: "windows", wantUA: "codex-tui/0.156.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.156.0)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			auth := &cliproxyauth.Auth{

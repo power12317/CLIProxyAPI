@@ -13,6 +13,7 @@ import (
 	"time"
 
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -213,7 +214,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 		functionCallItemTemplate, _ = sjson.SetBytes(functionCallItemTemplate, "id", itemResult.Get("call_id").String())
 
 		// Restore original tool name if it was shortened.
-		name := itemResult.Get("name").String()
+		name := util.QualifyResponsesNamespaceToolName(itemResult.Get("namespace").String(), itemResult.Get("name").String())
 		rev := buildReverseMapFromOriginalOpenAI(originalRequestRawJSON)
 		if orig, ok := rev[name]; ok {
 			name = orig
@@ -349,7 +350,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 		functionCallItemTemplate, _ = sjson.SetBytes(functionCallItemTemplate, "id", itemResult.Get("call_id").String())
 
 		// Restore original tool name if it was shortened.
-		name := itemResult.Get("name").String()
+		name := util.QualifyResponsesNamespaceToolName(itemResult.Get("namespace").String(), itemResult.Get("name").String())
 		rev := buildReverseMapFromOriginalOpenAI(originalRequestRawJSON)
 		if orig, ok := rev[name]; ok {
 			name = orig
@@ -496,7 +497,7 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 				}
 
 				if nameResult := outputItem.Get("name"); nameResult.Exists() {
-					n := nameResult.String()
+					n := util.QualifyResponsesNamespaceToolName(outputItem.Get("namespace").String(), nameResult.String())
 					rev := buildReverseMapFromOriginalOpenAI(originalRequestRawJSON)
 					if orig, ok := rev[n]; ok {
 						n = orig

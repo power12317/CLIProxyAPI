@@ -23,7 +23,7 @@ func (e statusErrWithHeaders) Headers() http.Header {
 	if e.headers == nil {
 		return nil
 	}
-	return e.headers.Clone()
+	return helps.StripCodexInternalResponseHeaders(e.headers)
 }
 
 func parseCodexWebsocketError(payload []byte) (error, bool) {
@@ -52,6 +52,10 @@ func parseCodexWebsocketErrorWithCooling(payload []byte, modelLevelCooling bool)
 		code:             status,
 		msg:              string(out),
 		credentialScoped: isUsageLimit && !modelLevelCooling,
+	}
+	switch gjson.GetBytes(out, "error.code").String() {
+	case "slow_down", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "bio_policy":
+		statusError = newCodexStatusErrWithCooling(status, out, modelLevelCooling)
 	}
 	if retryAfter := parseCodexRetryAfter(status, out, time.Now()); retryAfter != nil {
 		statusError.retryAfter = retryAfter

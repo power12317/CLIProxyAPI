@@ -64,9 +64,10 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
-	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, opts.Headers, requestPath, officialCodexRequest)
+	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
+	body = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex executor", body, isCompat)
-	body = normalizeCodexParallelToolCalls(body, opts.Headers, officialCodexRequest)
+	body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
 	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
@@ -78,9 +79,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	var fixedInstallationID string
 	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
-		if officialOAuthRequest && codexResponsesLiteModelEnabled(baseModel) {
-			body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
-		}
 	}
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
@@ -290,13 +288,19 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = applyCodexImageGenerationPolicyWithoutInjection(body, e.cfg, requestPath)
+	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
 	body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex executor", body, isCompat)
-	body = normalizeCodexParallelToolCalls(body, opts.Headers, officialCodexRequest)
+	body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
+	var compactIdentity helps.CodexOAuthIdentity
+	compactOAuth := false
+	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
+		body, compactIdentity, compactOAuth = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
+	}
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
 	var identityState codexIdentityConfuseState
 	httpReq, upstreamBody, identityState, err := e.cacheHelper(ctx, from, url, auth, req, originalPayloadSource, body, opts.Headers)
@@ -308,6 +312,11 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	turnStateBody = upstreamBody
 	replaceCodexRequestBody(httpReq, upstreamBody)
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
+	if compactOAuth {
+		ua, beta := codexHeaderDefaults(e.cfg, auth)
+		helps.ApplyCodexOAuthHeaders(httpReq.Header, compactIdentity, baseModel, false, ua, beta)
+		applyCodexConfiguredHeaderOverrides(httpReq, auth, opts.Headers)
+	}
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
 	ensureCodexResponsesLiteHeader(httpReq.Header, upstreamBody, baseModel, officialCodexRequest)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)

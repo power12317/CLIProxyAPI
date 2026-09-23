@@ -24,7 +24,11 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 
 	rawJSON = setCodexRequiredBool(rawJSON, "stream", true)
 	rawJSON = setCodexRequiredBool(rawJSON, "store", false)
-	rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
+	// Preserve the original Lite contract across translation, including invalid
+	// explicitly supplied values so automatic detection cannot turn them into false.
+	if !gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").Exists() && gjson.GetBytes(rawJSON, "reasoning.context").String() != "all_turns" && !util.IsCodexResponsesLiteRequest(rawJSON, nil) {
+		rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
+	}
 	rawJSON = setCodexRequiredInclude(rawJSON)
 	// Codex Responses rejects token limit fields, so strip them out before forwarding.
 	rawJSON = deleteCodexRequestFields(rawJSON, "max_output_tokens", "max_completion_tokens", "temperature", "top_p")
