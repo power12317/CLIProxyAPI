@@ -21,9 +21,9 @@ func (h *Handler) GetCodexTurnStateTicket(c *gin.Context) {
 	response := gin.H{
 		"enabled":                  policy.Enabled,
 		"cache_all_models":         policy.CacheAllModelsEnabled(),
-		"target_length":            config.DefaultCodexTurnStateTicketPersonalTargetLength,
-		"personal_target_length":   config.DefaultCodexTurnStateTicketPersonalTargetLength,
-		"team_target_length":       config.DefaultCodexTurnStateTicketTeamTargetLength,
+		"target_length":            config.DefaultCodexTurnStateTicketTargetLength,
+		"personal_target_length":   config.DefaultCodexTurnStateTicketTargetLength,
+		"team_target_length":       config.DefaultCodexTurnStateTicketTargetLength,
 		"ttl_seconds":              policy.TTLSeconds,
 		"refresh_before_seconds":   policy.RefreshBeforeSeconds,
 		"probe_interval_seconds":   policy.ProbeIntervalSeconds,
@@ -80,9 +80,12 @@ func (h *Handler) PutCodexTurnStateTicket(c *gin.Context) {
 	if req.CacheAllModels != nil {
 		policy.CacheAllModels = req.CacheAllModels
 	}
-	if req.TargetLength != nil && *req.TargetLength != config.DefaultCodexTurnStateTicketPersonalTargetLength {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "target_length is derived from the account plan: Personal=292, Team/Business=332"})
+	if req.TargetLength != nil && *req.TargetLength != config.DefaultCodexTurnStateTicketTargetLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_length is fixed at 780 for all account plans"})
 		return
+	}
+	if req.TargetLength != nil {
+		policy.TargetLength = config.DefaultCodexTurnStateTicketTargetLength
 	}
 	if req.TTLSeconds != nil {
 		policy.TTLSeconds = *req.TTLSeconds

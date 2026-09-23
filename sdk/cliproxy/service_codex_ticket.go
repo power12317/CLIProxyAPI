@@ -31,7 +31,6 @@ func (s *Service) startCodexTicketHarvester(ctx context.Context) {
 		},
 	})
 	s.codexTicketHarvester = harvester
-	helps.SetCodexTurnStateTicketInvalidator(harvester.Invalidate)
 	helps.SetCodexTurnStateTicketRecorder(harvester.Record)
 	harvester.Start(ctx)
 }

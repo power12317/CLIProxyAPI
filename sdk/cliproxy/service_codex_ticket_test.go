@@ -65,7 +65,7 @@ func newTicketTestService(t *testing.T, expired bool) (*Service, *ticketTestStor
 	}
 	if expired {
 		for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
-			helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: model, State: "gAAAAA" + strings.Repeat("e", 286), CapturedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
+			helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: model, State: "gAAAAA" + strings.Repeat("e", 774), CapturedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
 		}
 	}
 	registered, errRegister := manager.Register(t.Context(), auth)
@@ -84,7 +84,7 @@ func assertTicketModelsReady(t *testing.T, service *Service, auth *coreauth.Auth
 		t.Fatalf("ticket statuses = %+v", statuses)
 	}
 	for _, status := range statuses {
-		if !status.Ready || status.Blocked || status.Length != 292 || status.RemainingSeconds < 3500 {
+		if !status.Ready || status.Blocked || status.Length != 780 || status.RemainingSeconds < 3500 {
 			t.Errorf("model %s lost its new ticket: %+v", status.Model, status)
 		}
 	}
@@ -118,7 +118,7 @@ func TestCodexTicketSequentialProbesPreserveBothModels(t *testing.T) {
 					case <-req.Context().Done():
 						return nil, req.Context().Err()
 					}
-					return &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {"gAAAAA" + strings.Repeat("n", 286)}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+					return &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {"gAAAAA" + strings.Repeat("n", 774)}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 				})
 				ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))
 				service.startCodexTicketHarvester(ctx)
@@ -226,9 +226,9 @@ func TestCodexTicketNormalResponsesPreserveOtherModelsAndCredentials(t *testing.
 		t.Fatal(errUpdate)
 	}
 	policy := service.cfg.Codex.EffectiveTurnStateTicket()
-	resp := &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {"gAAAAA" + strings.Repeat("r", 286)}}}
-	helps.InvalidateCodexTurnStateTicketOnResponse(first, policy, "gpt-5.6-sol", resp)
-	helps.InvalidateCodexTurnStateTicketOnResponse(second, policy, "gpt-6-astra", resp)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {"gAAAAA" + strings.Repeat("r", 774)}}}
+	helps.RecordCodexTurnStateTicketOnResponse(first, policy, "gpt-5.6-sol", resp)
+	helps.RecordCodexTurnStateTicketOnResponse(second, policy, "gpt-6-astra", resp)
 	current, _ := service.coreManager.GetByID(auth.ID)
 	assertTicketModelsReady(t, service, current)
 	if current.Metadata["access_token"] != "refreshed-token" || current.Metadata["note"] != "updated-note" {
@@ -257,14 +257,20 @@ func TestCodexTicketAllModelsPersistsReloadsAndReportsStatus(t *testing.T) {
 	defer service.stopCodexTicketHarvester()
 	policy := service.cfg.Codex.EffectiveTurnStateTicket()
 	states := map[string]string{
-		"gpt-5.6-luna":  "gAAAAA" + strings.Repeat("l", 286),
-		"gpt-5.6-terra": "gAAAAA" + strings.Repeat("t", 286),
+		"gpt-5.6-luna":  "gAAAAA" + strings.Repeat("l", 774),
+		"gpt-5.6-terra": "gAAAAA" + strings.Repeat("t", 774),
 	}
 	for model, state := range states {
 		// Use the same original snapshot to also exercise per-model merge persistence.
-		helps.InvalidateCodexTurnStateTicketOnResponse(auth.Clone(), policy, model, &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {state}}})
+		helps.RecordCodexTurnStateTicketOnResponse(auth.Clone(), policy, model, &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {state}}})
 		ticketTestWait(t, store.saved)
 	}
+	// A later response must replace the same model on disk without losing siblings.
+	states["gpt-5.6-luna"] = strings.Repeat("n", 780)
+	current, _ := service.coreManager.GetByID(auth.ID)
+	helps.RecordCodexTurnStateTicketOnResponse(current, policy, "gpt-5.6-luna", &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {states["gpt-5.6-luna"]}}})
+	ticketTestWait(t, store.saved)
+	helps.RecordCodexTurnStateTicketOnResponse(current, policy, "gpt-5.6-luna", &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {strings.Repeat("x", 312)}}})
 	path := auth.Attributes[coreauth.AttributePath]
 	data, errRead := os.ReadFile(path)
 	if errRead != nil {

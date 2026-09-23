@@ -40,9 +40,9 @@ func TestHarvestCodexTurnStateTicketLogsRawResponseLengths(t *testing.T) {
 		wantTicket   bool
 		wantLevel    log.Level
 	}{
-		{name: "personal 292", status: 200, length: 292, wantTicket: true, wantLevel: log.InfoLevel},
+		{name: "personal 780", status: 200, length: 780, wantTicket: true, wantLevel: log.InfoLevel},
 		{name: "personal 312 remains visible", status: 200, length: 312, wantLevel: log.InfoLevel},
-		{name: "team 332", plan: "team", status: 200, length: 332, wantTicket: true, wantLevel: log.InfoLevel},
+		{name: "team 780", plan: "team", status: 200, length: 780, wantTicket: true, wantLevel: log.InfoLevel},
 		{name: "no response header", status: 200, wantLevel: log.InfoLevel},
 		{name: "429 still records 312", status: 429, length: 312, wantLevel: log.WarnLevel},
 		{name: "upstream 500", status: 500, wantLevel: log.ErrorLevel},

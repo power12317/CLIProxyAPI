@@ -363,8 +363,8 @@ codex:
     # Capture and reuse normal-response tickets for all models (default true).
     # Only models listed below are actively probed or blocked by fail-closed.
     cache-all-models: true
-    # Ticket length is derived from the OAuth account plan:
-    # Personal (free/plus/pro) = 292; Team/Business = 332.
+    # All account plans use 780-byte tickets. A new response ticket replaces
+    # the saved value and restarts this retention period; other lengths never invalidate it.
     ttl-seconds: 3600
     refresh-before-seconds: 600
     harvest-proxy-url: ""

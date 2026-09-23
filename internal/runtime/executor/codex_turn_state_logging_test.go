@@ -44,26 +44,25 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 			responseLen int
 			missingTurn bool
 		}{
-			{name: "personal-ticket", model: "gpt-6-astra", ticketLen: 292},
-			{name: "replace-passive-312", model: "gpt-6-astra", ticketLen: 292, passiveLen: 312},
-			{name: "team-ticket", plan: "team", model: "gpt-5.6-sol", ticketLen: 332},
+			{name: "personal-ticket", model: "gpt-6-astra", ticketLen: 780},
+			{name: "retained-ticket-replaced", model: "gpt-6-astra", ticketLen: 780, responseLen: 780},
+			{name: "312-preserves-ticket", model: "gpt-6-astra", ticketLen: 780, responseLen: 312},
+			{name: "replace-passive-312", model: "gpt-6-astra", ticketLen: 780, passiveLen: 312},
+			{name: "team-ticket", plan: "team", model: "gpt-5.6-sol", ticketLen: 780},
 			{name: "unconfigured-model", model: "gpt-5.6-luna", responseLen: 312},
-			{name: "luna-normal-response-ticket", model: "gpt-5.6-luna", responseLen: 292},
-			{name: "terra-normal-response-ticket", model: "gpt-5.6-terra", responseLen: 292},
-			{name: "team-normal-response-ticket", plan: "team", model: "gpt-5.6-luna", responseLen: 332},
+			{name: "luna-normal-response-ticket", model: "gpt-5.6-luna", responseLen: 780},
+			{name: "terra-normal-response-ticket", model: "gpt-5.6-terra", responseLen: 780},
+			{name: "team-normal-response-ticket", plan: "team", model: "gpt-5.6-luna", responseLen: 780},
 			{name: "passive-without-ticket", model: "gpt-6-astra", passiveLen: 312},
-			{name: "ticket-without-turn", model: "gpt-6-astra", ticketLen: 292, missingTurn: true},
+			{name: "ticket-without-turn", model: "gpt-6-astra", ticketLen: 780, missingTurn: true},
 		} {
 			t.Run(transport+"/"+tc.name, func(t *testing.T) {
 				isWebsocket := strings.HasPrefix(transport, "websocket")
-				captured := make(chan int, 2)
+				captured := make(chan string, 2)
 				var handshakes atomic.Int32
 				response := `{"id":"resp_1","model":"` + tc.model + `","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
 				completed := `{"type":"response.completed","response":` + response + `}`
 				responseState := strings.Repeat("r", tc.responseLen)
-				if tc.responseLen == 292 || tc.responseLen == 332 {
-					responseState = "gAAAAA" + strings.Repeat("r", tc.responseLen-6)
-				}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if isWebsocket {
 						handshakes.Add(1)
@@ -79,7 +78,7 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 							if errRead != nil {
 								return
 							}
-							captured <- len(gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String())
+							captured <- gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String()
 							if tc.responseLen > 0 {
 								metadata, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{"x-codex-turn-state": responseState}})
 								if errWrite := conn.WriteMessage(websocket.TextMessage, metadata); errWrite != nil {
@@ -94,7 +93,7 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 						}
 					}
 					_, _ = io.Copy(io.Discard, r.Body)
-					captured <- len(r.Header.Get(helps.CodexTurnStateTicketHeader))
+					captured <- r.Header.Get(helps.CodexTurnStateTicketHeader)
 					if tc.responseLen > 0 {
 						w.Header().Set(helps.CodexTurnStateTicketHeader, responseState)
 					}
@@ -169,11 +168,11 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 					c.Status(http.StatusOK)
 				})
 				attempts := 1
-				if isWebsocket || tc.responseLen == 292 || tc.responseLen == 332 {
+				if isWebsocket || tc.responseLen == 780 {
 					attempts = 2
 				}
 				for attempt := 0; attempt < attempts; attempt++ {
-					if attempt > 0 && (tc.responseLen == 292 || tc.responseLen == 332) {
+					if attempt > 0 && (tc.responseLen == 780) {
 						payload = []byte(strings.ReplaceAll(string(payload), "turn-1", "new-turn"))
 					}
 					hook.Reset()
@@ -182,13 +181,17 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 					if recorder.Code != http.StatusOK {
 						t.Fatalf("HTTP status = %d", recorder.Code)
 					}
-					wireLen := <-captured
+					wireState := <-captured
+					wireLen := len(wireState)
 					wantLen := tc.passiveLen
 					if attempt > 0 && tc.responseLen > 0 {
 						wantLen = tc.responseLen
 					}
 					if tc.ticketLen > 0 {
 						wantLen = tc.ticketLen
+					}
+					if attempt > 0 && tc.responseLen == 780 && wireState != responseState {
+						t.Fatal("request did not use the new response ticket")
 					}
 					if wireLen != wantLen {
 						t.Fatalf("outbound length = %d, want %d", wireLen, wantLen)

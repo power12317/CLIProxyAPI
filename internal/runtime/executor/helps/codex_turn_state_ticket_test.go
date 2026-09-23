@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -17,7 +18,7 @@ import (
 )
 
 func testTicketState(length int) string {
-	return "gAAAAA" + strings.Repeat("t", length-len("gAAAAA"))
+	return strings.Repeat("t", length)
 }
 
 func TestCodexTicketCacheAllModelsCaptureAndOverrides(t *testing.T) {
@@ -28,14 +29,14 @@ func TestCodexTicketCacheAllModelsCaptureAndOverrides(t *testing.T) {
 		cacheAll          *bool
 		length            int
 	}{
-		{name: "luna default", model: "gpt-5.6-luna", enabled: true, capture: true, length: 292},
-		{name: "terra default", model: "gpt-5.6-terra", enabled: true, capture: true, length: 292},
-		{name: "team", model: "gpt-5.6-luna", plan: "team", enabled: true, capture: true, length: 332},
-		{name: "team rejects personal", model: "gpt-5.6-luna", plan: "team", enabled: true, length: 292},
+		{name: "luna default", model: "gpt-5.6-luna", enabled: true, capture: true, length: 780},
+		{name: "terra default", model: "gpt-5.6-terra", enabled: true, capture: true, length: 780},
+		{name: "team", model: "gpt-5.6-luna", plan: "team", enabled: true, capture: true, length: 780},
+		{name: "business", model: "gpt-5.6-luna", plan: "business", enabled: true, capture: true, length: 780},
 		{name: "312 never captured", model: "gpt-5.6-luna", enabled: true, length: 312},
-		{name: "sub switch off", model: "gpt-5.6-luna", enabled: true, cacheAll: &disabled, length: 292},
-		{name: "master off", model: "gpt-5.6-luna", length: 292},
-		{name: "configured still captured", model: "gpt-6-astra", enabled: true, capture: true, cacheAll: &disabled, length: 292},
+		{name: "sub switch off", model: "gpt-5.6-luna", enabled: true, cacheAll: &disabled, length: 780},
+		{name: "master off", model: "gpt-5.6-luna", length: 780},
+		{name: "configured still captured", model: "gpt-6-astra", enabled: true, capture: true, cacheAll: &disabled, length: 780},
 	} {
 		for _, event := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/event=%v", tc.name, event), func(t *testing.T) {
@@ -44,9 +45,9 @@ func TestCodexTicketCacheAllModelsCaptureAndOverrides(t *testing.T) {
 				value := testTicketState(tc.length)
 				if event {
 					payload, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{CodexTurnStateTicketHeader: value}})
-					InvalidateCodexTurnStateTicketOnEvent(auth, cfg, tc.model, payload)
+					RecordCodexTurnStateTicketOnEvent(auth, cfg, tc.model, payload)
 				} else {
-					InvalidateCodexTurnStateTicketOnResponse(auth, cfg, tc.model, &http.Response{StatusCode: 200, Header: http.Header{CodexTurnStateTicketHeader: {value}}})
+					RecordCodexTurnStateTicketOnResponse(auth, cfg, tc.model, &http.Response{StatusCode: 200, Header: http.Header{CodexTurnStateTicketHeader: {value}}})
 				}
 				ticket := codexTurnStateTicketForAuth(auth, tc.model)
 				if (ticket != nil) != tc.capture {
@@ -84,7 +85,7 @@ func TestCodexTicketCacheAllModelsExpiryAndStatus(t *testing.T) {
 	auth := &cliproxyauth.Auth{ID: "all-models", Provider: "codex", Metadata: map[string]any{"access_token": "test"}}
 	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra", "gpt-5.6-sol"}, FailClosed: true}
 	for model, expiry := range map[string]time.Time{"gpt-5.6-luna": now.Add(5 * time.Minute), "gpt-5.6-terra": now.Add(-time.Minute)} {
-		StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: model, State: testTicketState(292), ExpiresAt: expiry})
+		StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: model, State: testTicketState(780), ExpiresAt: expiry})
 		headers := make(http.Header)
 		if errApply := ApplyCodexTurnStateTicket(auth, cfg, model, headers); errApply != nil {
 			t.Fatal("extra model must not be blocked by fail-closed", errApply)
@@ -113,7 +114,7 @@ func TestCodexTurnStateTicketConfiguredModelInjection(t *testing.T) {
 		},
 		Metadata: map[string]any{},
 	}
-	state := testTicketState(config.DefaultCodexTurnStateTicketPersonalTargetLength)
+	state := testTicketState(config.DefaultCodexTurnStateTicketTargetLength)
 	StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: state, ExpiresAt: time.Now().Add(time.Hour)})
 	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}, FailClosed: true}
 	headers := make(http.Header)
@@ -139,7 +140,7 @@ func TestCodexTurnStateTicketFailClosedAndExpiry(t *testing.T) {
 	if !errors.Is(errApply, ErrCodexTurnStateTicketUnavailable) {
 		t.Fatalf("missing ticket error = %v", errApply)
 	}
-	StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: testTicketState(292), ExpiresAt: time.Now().Add(-time.Second)})
+	StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: testTicketState(780), ExpiresAt: time.Now().Add(-time.Second)})
 	if errApply = ApplyCodexTurnStateTicket(auth, cfg, "gpt-6-astra", make(http.Header)); !errors.Is(errApply, ErrCodexTurnStateTicketUnavailable) {
 		t.Fatalf("expired ticket error = %v", errApply)
 	}
@@ -165,37 +166,22 @@ func TestCodexTurnStateTicketFailOpenPreservesPassiveStateBeforeSending(t *testi
 func TestCodexTurnStateTicketResponseValueIsStored(t *testing.T) {
 	auth := &cliproxyauth.Auth{ID: "auth-response", Provider: "codex", Attributes: map[string]string{cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth}, Metadata: map[string]any{}}
 	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}, TTLSeconds: 3600}
-	state := testTicketState(config.DefaultCodexTurnStateTicketPersonalTargetLength)
+	state := testTicketState(config.DefaultCodexTurnStateTicketTargetLength)
 	var recorded string
 	SetCodexTurnStateTicketRecorder(func(gotAuth *cliproxyauth.Auth, ticket CodexTurnStateTicket) {
 		recorded = gotAuth.ID + "/" + ticket.Model
 	})
 	defer SetCodexTurnStateTicketRecorder(nil)
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{CodexTurnStateTicketHeader: {state}}}
-	if invalidated := InvalidateCodexTurnStateTicketOnResponse(auth, cfg, "gpt-6-astra", resp); invalidated {
-		t.Fatal("292 response was treated as invalidation")
+	if !RecordCodexTurnStateTicketOnResponse(auth, cfg, "gpt-6-astra", resp) {
+		t.Fatal("780 response was not saved")
 	}
 	ticket := codexTurnStateTicketForAuth(auth, "gpt-6-astra")
-	if ticket == nil || !ticket.valid(time.Now(), config.DefaultCodexTurnStateTicketPersonalTargetLength) {
+	if ticket == nil || !ticket.valid(time.Now()) {
 		t.Fatalf("stored response ticket = %#v", ticket)
 	}
 	if recorded != "auth-response/gpt-6-astra" {
 		t.Fatalf("response ticket recorder = %q", recorded)
-	}
-}
-
-func TestCodexTurnStateTicket312ResponseTriggersProbeWithoutExistingTicket(t *testing.T) {
-	auth := &cliproxyauth.Auth{ID: "auth-312", Provider: "codex", Attributes: map[string]string{cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth}, Metadata: map[string]any{}}
-	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}}
-	var invalidated string
-	SetCodexTurnStateTicketInvalidator(func(authID, model string) { invalidated = authID + "/" + model })
-	defer SetCodexTurnStateTicketInvalidator(nil)
-	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{CodexTurnStateTicketHeader: {strings.Repeat("x", 312)}}}
-	if !InvalidateCodexTurnStateTicketOnResponse(auth, cfg, "gpt-6-astra", resp) {
-		t.Fatal("312 response did not trigger invalidation/probe")
-	}
-	if invalidated != "auth-312/gpt-6-astra" {
-		t.Fatalf("312 invalidator callback = %q", invalidated)
 	}
 }
 
@@ -211,7 +197,7 @@ func TestCodexTurnStateTicketStatusShowsInvalidLength(t *testing.T) {
 
 func TestHarvestCodexTurnStateTicketWithoutProxy(t *testing.T) {
 	auth := &cliproxyauth.Auth{ID: "auth-direct", Provider: "codex", Attributes: map[string]string{cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth}, Metadata: map[string]any{"access_token": "token"}}
-	state := testTicketState(config.DefaultCodexTurnStateTicketPersonalTargetLength)
+	state := testTicketState(config.DefaultCodexTurnStateTicketTargetLength)
 	cfg := &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{Enabled: true, AttemptTimeoutSeconds: 2}}}
 	roundTripper := codexRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{CodexTurnStateTicketHeader: {state}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
@@ -221,7 +207,7 @@ func TestHarvestCodexTurnStateTicketWithoutProxy(t *testing.T) {
 	if errHarvest != nil {
 		t.Fatalf("direct harvest error = %v", errHarvest)
 	}
-	if status != http.StatusOK || ticket.Length != config.DefaultCodexTurnStateTicketPersonalTargetLength {
+	if status != http.StatusOK || ticket.Length != config.DefaultCodexTurnStateTicketTargetLength {
 		t.Fatalf("direct harvest status=%d ticket=%#v", status, ticket)
 	}
 }
@@ -262,7 +248,7 @@ func TestHarvestCodexTurnStateTicketMatchesConversationInstallation(t *testing.T
 				t.Fatal("failed to prepare normal conversation identity")
 			}
 			sessions, turns := make(map[string]bool), make(map[string]bool)
-			state := testTicketState(292)
+			state := testTicketState(780)
 			roundTripper := codexRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 				body, errRead := io.ReadAll(req.Body)
 				if errRead != nil {
@@ -314,30 +300,101 @@ func (f codexRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error)
 	return f(req)
 }
 
-func TestCodexTurnStateTicketInvalidatesOnDegraded312Response(t *testing.T) {
-	state := testTicketState(config.DefaultCodexTurnStateTicketPersonalTargetLength)
-	auth := &cliproxyauth.Auth{ID: "auth-312", Provider: "codex", Attributes: map[string]string{cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth}, Metadata: map[string]any{}}
-	StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: state, ExpiresAt: time.Now().Add(time.Hour)})
-	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}}
-	var invalidated string
-	SetCodexTurnStateTicketInvalidator(func(authID, model string) { invalidated = authID + "/" + model })
-	defer SetCodexTurnStateTicketInvalidator(nil)
-	resp := &http.Response{Header: http.Header{CodexTurnStateTicketHeader: {strings.Repeat("x", 312)}}}
-	if !InvalidateCodexTurnStateTicketOnResponse(auth, cfg, "gpt-6-astra", resp) {
-		t.Fatal("312 response did not invalidate the ticket")
+func TestCodexTurnStateTicketResponseRetentionAndReplacement(t *testing.T) {
+	for _, eventKind := range []string{"http", "response.metadata", "codex.response.metadata"} {
+		t.Run(eventKind, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				auth := &cliproxyauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "test"}}
+				cfg := config.CodexTurnStateTicketConfig{Enabled: true, TTLSeconds: 3600}
+				capture := func(state string) bool {
+					if eventKind == "http" {
+						return RecordCodexTurnStateTicketOnResponse(auth, cfg, "gpt-6-astra", &http.Response{Header: http.Header{CodexTurnStateTicketHeader: {state}}})
+					}
+					payload, _ := json.Marshal(map[string]any{"type": eventKind, "headers": map[string]string{"x-codex-turn-state": state}})
+					return RecordCodexTurnStateTicketOnEvent(auth, cfg, "gpt-6-astra", payload)
+				}
+				var saves int
+				SetCodexTurnStateTicketRecorder(func(_ *cliproxyauth.Auth, _ CodexTurnStateTicket) { saves++ })
+				defer SetCodexTurnStateTicketRecorder(nil)
+				for _, length := range []int{0, 292, 312, 332} {
+					if capture(strings.Repeat("x", length)) || codexTurnStateTicketForAuth(auth, "gpt-6-astra") != nil {
+						t.Fatalf("length %d created a retained ticket", length)
+					}
+				}
+				first := strings.Repeat("a", 780)
+				if !capture(first) {
+					t.Fatal("initial 780 ticket was not saved")
+				}
+				initial := codexTurnStateTicketForAuth(auth, "gpt-6-astra")
+				time.Sleep(20 * time.Minute) // synctest virtual time.
+				for _, length := range []int{0, 292, 312, 332} {
+					if capture(strings.Repeat("x", length)) {
+						t.Fatalf("length %d replaced a retained ticket", length)
+					}
+					current := codexTurnStateTicketForAuth(auth, "gpt-6-astra")
+					if *current != *initial {
+						t.Fatalf("length %d changed the ticket or expiry", length)
+					}
+				}
+				headers := make(http.Header)
+				if errApply := ApplyCodexTurnStateTicket(auth, cfg, "gpt-6-astra", headers); errApply != nil || headers.Get(CodexTurnStateTicketHeader) != first {
+					t.Fatal("ticket was not retained across other response lengths")
+				}
+				second := strings.Repeat("b", 780)
+				if !capture(second) {
+					t.Fatal("replacement 780 ticket was not saved")
+				}
+				updated := codexTurnStateTicketForAuth(auth, "gpt-6-astra")
+				if updated.State != second || !updated.CapturedAt.Equal(time.Now()) || !updated.ExpiresAt.Equal(initial.ExpiresAt.Add(20*time.Minute)) || saves != 2 {
+					t.Fatal("replacement did not restart the retention period exactly once")
+				}
+				if errApply := ApplyCodexTurnStateTicket(auth, cfg, "gpt-6-astra", headers); errApply != nil || headers.Get(CodexTurnStateTicketHeader) != second {
+					t.Fatal("header did not switch to the replacement")
+				}
+				body := ApplyCodexTurnStateTicketBody(auth, cfg, "gpt-6-astra", []byte(`{"client_metadata":{"turn_id":"new-turn"}}`))
+				if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != second {
+					t.Fatal("new turn did not use replacement")
+				}
+				if !codexTurnStateTicketForAuth(auth, "gpt-6-astra").ExpiresAt.Equal(updated.ExpiresAt) {
+					t.Fatal("injection renewed expiry")
+				}
+				time.Sleep(time.Hour) // synctest virtual time, exactly at expiry.
+				headers = make(http.Header)
+				if errApply := ApplyCodexTurnStateTicket(auth, cfg, "gpt-6-astra", headers); errApply != nil || headers.Get(CodexTurnStateTicketHeader) != "" {
+					t.Fatal("expired ticket was injected")
+				}
+			})
+		})
 	}
-	if invalidated != "auth-312/gpt-6-astra" {
-		t.Fatalf("invalidator callback = %q", invalidated)
+}
+
+func TestCodexTurnStateTicketLegacyValuesAreNotInjected(t *testing.T) {
+	for _, length := range []int{292, 312, 332} {
+		auth := &cliproxyauth.Auth{ID: "legacy", Provider: "codex", Metadata: map[string]any{"access_token": "test"}}
+		StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: testTicketState(length), ExpiresAt: time.Now().Add(time.Hour)})
+		cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}}
+		headers := make(http.Header)
+		if errApply := ApplyCodexTurnStateTicket(auth, cfg, "gpt-6-astra", headers); errApply != nil || headers.Get(CodexTurnStateTicketHeader) != "" {
+			t.Fatalf("legacy length %d injected", length)
+		}
+		body := ApplyCodexTurnStateTicketBody(auth, cfg, "gpt-6-astra", []byte(`{}`))
+		if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
+			t.Fatal("legacy ticket injected in body")
+		}
+		statuses := CodexTurnStateTicketStatuses(auth, cfg, time.Now())
+		if len(statuses) != 1 || statuses[0].Ready || statuses[0].TargetLength != 780 || statuses[0].Length != length {
+			t.Fatalf("legacy status = %+v", statuses)
+		}
 	}
 }
 
 func TestCodexTurnStateTicketStatusRedactsState(t *testing.T) {
 	auth := &cliproxyauth.Auth{ID: "auth-1", Provider: "codex", Attributes: map[string]string{cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth}, Metadata: map[string]any{"ordinary": "keep"}}
-	state := testTicketState(config.DefaultCodexTurnStateTicketPersonalTargetLength)
+	state := testTicketState(config.DefaultCodexTurnStateTicketTargetLength)
 	StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: state, ExpiresAt: time.Now().Add(time.Hour)})
 	cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}}
 	statuses := CodexTurnStateTicketStatuses(auth, cfg, time.Now())
-	if len(statuses) != 1 || !statuses[0].Ready || statuses[0].TargetLength != 292 || statuses[0].Length != 292 {
+	if len(statuses) != 1 || !statuses[0].Ready || statuses[0].TargetLength != 780 || statuses[0].Length != 780 {
 		t.Fatalf("statuses = %#v", statuses)
 	}
 	redacted := RedactCodexTurnStateTicketMetadata(auth.Metadata)
@@ -349,13 +406,13 @@ func TestCodexTurnStateTicketStatusRedactsState(t *testing.T) {
 	}
 }
 
-func TestCodexTurnStateTicketUsesTeamBusinessTargetLength(t *testing.T) {
-	for _, plan := range []string{"team", "business"} {
+func TestCodexTurnStateTicketUsesFixedLengthForAllPlans(t *testing.T) {
+	for _, plan := range []string{"", "free", "plus", "pro", "team", "business"} {
 		auth := &cliproxyauth.Auth{ID: "auth-" + plan, Provider: "codex", Attributes: map[string]string{
 			cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindOAuth,
 			"plan_type":                    plan,
 		}, Metadata: map[string]any{}}
-		state := testTicketState(config.DefaultCodexTurnStateTicketTeamTargetLength)
+		state := testTicketState(config.DefaultCodexTurnStateTicketTargetLength)
 		StoreCodexTurnStateTicket(auth, CodexTurnStateTicket{Model: "gpt-6-astra", State: state, ExpiresAt: time.Now().Add(time.Hour)})
 		cfg := config.CodexTurnStateTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}, FailClosed: true}
 		headers := make(http.Header)
@@ -366,7 +423,7 @@ func TestCodexTurnStateTicketUsesTeamBusinessTargetLength(t *testing.T) {
 			t.Fatalf("plan=%s ticket length=%d, want=%d", plan, len(got), len(state))
 		}
 		statuses := CodexTurnStateTicketStatuses(auth, cfg, time.Now())
-		if len(statuses) != 1 || statuses[0].TargetLength != 332 || statuses[0].Length != 332 {
+		if len(statuses) != 1 || statuses[0].TargetLength != 780 || statuses[0].Length != 780 {
 			t.Fatalf("plan=%s statuses = %#v", plan, statuses)
 		}
 	}

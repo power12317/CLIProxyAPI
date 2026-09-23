@@ -226,14 +226,14 @@ type CodexConfig struct {
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
 }
 
-// CodexTurnStateTicketConfig controls proactive Codex turn-state ticket harvest.
-// A ticket is a short-lived, account/model-scoped value returned by ChatGPT.
+// CodexTurnStateTicketConfig controls Codex turn-state retention and timed refresh.
+// Tickets are stored independently per credential and model.
 type CodexTurnStateTicketConfig struct {
 	// CacheAllModels also captures and reuses normal-response tickets outside
 	// Models. Nil defaults to true; it never expands proactive probes or fail-closed.
 	CacheAllModels        *bool    `yaml:"cache-all-models,omitempty" json:"cache-all-models,omitempty"`
 	Enabled               bool     `yaml:"enabled" json:"enabled"`
-	TargetLength          int      `yaml:"target-length" json:"target-length"`
+	TargetLength          int      `yaml:"target-length" json:"target-length"` // Legacy input; the effective length is always 780.
 	TTLSeconds            int      `yaml:"ttl-seconds" json:"ttl-seconds"`
 	RefreshBeforeSeconds  int      `yaml:"refresh-before-seconds" json:"refresh-before-seconds"`
 	HarvestProxyURL       string   `yaml:"harvest-proxy-url" json:"harvest-proxy-url"`
@@ -250,11 +250,7 @@ func (c CodexTurnStateTicketConfig) CacheAllModelsEnabled() bool {
 }
 
 const (
-	DefaultCodexTurnStateTicketPersonalTargetLength = 292
-	DefaultCodexTurnStateTicketTeamTargetLength     = 332
-	// DefaultCodexTurnStateTicketTargetLength remains for API compatibility;
-	// ticket length is now derived from the OAuth account plan.
-	DefaultCodexTurnStateTicketTargetLength          = DefaultCodexTurnStateTicketPersonalTargetLength
+	DefaultCodexTurnStateTicketTargetLength          = 780
 	DefaultCodexTurnStateTicketTTLSeconds            = 3600
 	DefaultCodexTurnStateTicketRefreshBeforeSeconds  = 600
 	DefaultCodexTurnStateTicketProbeIntervalSeconds  = 60
@@ -269,9 +265,8 @@ func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
 	if c != nil {
 		out = c.TurnStateTicket
 	}
-	// TargetLength is retained for compatibility with existing config/API
-	// clients. The effective length is derived per account from plan_type.
-	out.TargetLength = DefaultCodexTurnStateTicketPersonalTargetLength
+	// TargetLength is retained for older config files; all plans use one shape.
+	out.TargetLength = DefaultCodexTurnStateTicketTargetLength
 	if out.TTLSeconds <= 0 {
 		out.TTLSeconds = DefaultCodexTurnStateTicketTTLSeconds
 	}

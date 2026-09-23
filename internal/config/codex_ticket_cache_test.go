@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,5 +52,18 @@ func TestCodexTicketCacheAllModelsDefaultAndRoundTrip(t *testing.T) {
 				t.Fatal("JSON round trip changed cache-all-models")
 			}
 		})
+	}
+}
+
+func TestCodexTicketLegacyTargetLengthUsesFixedDefault(t *testing.T) {
+	for _, length := range []int{0, 292, 332, 780} {
+		cfg, errParse := ParseConfigBytes([]byte(fmt.Sprintf("codex:\n  turn-state-ticket:\n    enabled: true\n    target-length: %d\n", length)))
+		if errParse != nil {
+			t.Fatal(errParse)
+		}
+		policy := cfg.Codex.EffectiveTurnStateTicket()
+		if policy.TargetLength != 780 || policy.TTLSeconds != 3600 || policy.RefreshBeforeSeconds != 600 || policy.ProbeIntervalSeconds != 60 || !policy.CacheAllModelsEnabled() {
+			t.Fatalf("legacy length %d changed the retention policy: %+v", length, policy)
+		}
 	}
 }
