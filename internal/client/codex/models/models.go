@@ -113,6 +113,7 @@ func buildCodexClientModels(models []map[string]any, providersForModel Providers
 			}
 			applyCodexClientProviderCapabilities(entry, id, true, providersForModel)
 			applyCPAWebSearchCapability(entry, id, webSearchCapabilityForModel, clientVersion)
+			applyCodexClientReasoningDefault(entry, metadataID)
 			sanitizeCodexClientReasoningMetadata(entry, clientVersion)
 			applyCodexClientVisibilityOverride(entry, id)
 			if optimizeMultiAgentV2 {
@@ -802,6 +803,22 @@ func applyCodexClientThinkingMetadata(entry map[string]any, thinking *registry.T
 
 	entry["supported_reasoning_levels"] = levels
 	entry["default_reasoning_level"] = defaultLevel
+}
+
+// applyCodexClientReasoningDefault keeps Astra's local default stable across
+// remote catalog refreshes. Validation below still respects excluded levels.
+func applyCodexClientReasoningDefault(entry map[string]any, metadataID string) {
+	if metadataID != "gpt-6-astra" {
+		return
+	}
+	levels, _ := entry["supported_reasoning_levels"].([]any)
+	for _, raw := range levels {
+		level, _ := raw.(map[string]any)
+		if stringModelValue(level, "effort") == "low" {
+			entry["default_reasoning_level"] = "low"
+			return
+		}
+	}
 }
 
 func sanitizeCodexClientReasoningMetadata(entry map[string]any, clientVersion string) {

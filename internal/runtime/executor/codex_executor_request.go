@@ -33,13 +33,13 @@ const (
 
 var dataTag = []byte("data:")
 
-func translateCodexRequestPair(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte) {
+func translateCodexRequestPair(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, clientHeaders http.Header, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte) {
 	isCompat := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
 	translate := func(raw []byte) []byte {
 		if isCompat && from == sdktranslator.FormatClaude && to == sdktranslator.FormatCodex {
-			return helps.PreserveCodexProtocolFields(raw, helps.TranslateRequestWithAPIKeyModelCompatibility(context.Background(), nil, nil, from, to, model, raw, stream, true))
+			return helps.PreserveCodexProtocolFields(raw, helps.TranslateRequestWithAPIKeyModelCompatibility(context.Background(), nil, nil, from, to, model, raw, stream, true), util.IsCodexResponsesLiteRequest(raw, clientHeaders))
 		}
-		return helps.PreserveCodexProtocolFields(raw, sdktranslator.TranslateRequest(from, to, model, raw, stream))
+		return helps.PreserveCodexProtocolFields(raw, sdktranslator.TranslateRequest(from, to, model, raw, stream), util.IsCodexResponsesLiteRequest(raw, clientHeaders))
 	}
 	if bytes.Equal(originalPayload, payload) {
 		body := translate(payload)
@@ -352,6 +352,8 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	}
 	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Parent-Thread-Id", "")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-OpenAI-Subagent", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-State", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Window-Id", "")
@@ -396,7 +398,7 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	} else if cfg != nil && !isCodexCloakingDisabled(cfg, auth) && helps.CodexAuthUsesOAuthCookieJar(auth) {
 		r.Header.Set("User-Agent", helps.CodexOAuthUserAgent(auth))
 	}
-	if strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex-tui/") || strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex_cli_rs/") {
+	if helps.IsCodexClientUserAgent(ginHeaders.Get("User-Agent")) {
 		if cfgUserAgent == "" {
 			r.Header.Set("User-Agent", ginHeaders.Get("User-Agent"))
 		}
@@ -515,8 +517,7 @@ func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth
 }
 
 func normalizeCodexParallelToolCalls(body []byte, headers http.Header, official ...bool) []byte {
-	isOfficial := len(official) > 0 && official[0]
-	if codexResponsesLiteBodyMode(body, isOfficial, headers) {
+	if codexResponsesLiteBodyMode(body, headers) {
 		body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
 		return body
 	}

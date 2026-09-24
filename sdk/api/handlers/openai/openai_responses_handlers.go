@@ -597,6 +597,11 @@ func (h *OpenAIResponsesAPIHandler) Responses(c *gin.Context) {
 
 	rawJSON = h.prepareCodexMultiAgentV2Tools(c, rawJSON)
 	rawJSON = h.prepareCodexOrphanDelegation(c, rawJSON)
+	// Gate native response events on body metadata as well: intermediaries can
+	// strip every client identity header while preserving the Codex payload.
+	if gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").Exists() {
+		c.Set("codex_native_responses_body", true)
+	}
 
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
@@ -829,6 +834,9 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 func isCodexResponsesClientRequest(c *gin.Context) bool {
 	if c == nil || c.Request == nil {
 		return false
+	}
+	if c.GetBool("codex_native_responses_body") {
+		return true
 	}
 	if multiagentv2.IsCodexClientUserAgent(c.GetHeader("User-Agent")) {
 		return true

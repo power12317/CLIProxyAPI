@@ -23,7 +23,7 @@ import (
 
 func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
 	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
-		for _, intent := range []string{"header", "body-mirror", "official-without-header", "configured"} {
+		for _, intent := range []string{"header", "body-mirror", "official-body-mirror", "configured"} {
 			for _, transport := range []string{"http", "http-stream", "ws", "ws-stream"} {
 				t.Run(model+"/"+intent+"/"+transport, func(t *testing.T) {
 					captured := make(chan []byte, 1)
@@ -64,8 +64,9 @@ func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
 					case "body-mirror":
 						opts.Headers = nil
 						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
-					case "official-without-header":
+					case "official-body-mirror":
 						opts.Headers = nil
+						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
 						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.x-codex-turn-metadata", `{"session_id":"session","turn_id":"turn"}`)
 					case "configured":
 						opts.Headers = nil
@@ -135,20 +136,21 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 		}
 	}
 	cfg := &config.Config{}
-	if got := mustApplyCodexImagePolicy(t, base, "gpt-5.6-sol", nil, cfg, nil, "/v1/responses", true); !helps.HasCodexImageTool(got) || util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {
+	if got := mustApplyCodexImagePolicy(t, base, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", true); !helps.HasCodexImageTool(got) || util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("official Lite request not normalized: %s", got)
 	}
 	for _, parallel := range []any{true, "false", nil, 0} {
 		body, _ := sjson.SetBytes(base, "parallel_tool_calls", parallel)
 		h := make(http.Header)
-		ensureCodexResponsesLiteHeader(h, body, "gpt-5.6-sol", true)
+		ensureCodexResponsesLiteHeader(h, body)
 		if h.Get(codexResponsesLiteHeader) != "" {
 			t.Fatal("invalid parallel gained header")
 		}
 	}
 	for _, model := range []string{"gpt-5.5", "unknown-model", "gpt-5.6-sol"} {
 		h := make(http.Header)
-		ensureCodexResponsesLiteHeader(h, base, model, true)
+		body, _ := sjson.SetBytes(base, "model", model)
+		ensureCodexResponsesLiteHeader(h, body)
 		if h.Get(codexResponsesLiteHeader) != "" {
 			t.Fatal("hosted tools gained auto Lite header")
 		}
@@ -254,7 +256,7 @@ func TestCodex156FinalCacheAffinitySurvivesCacheHelpers(t *testing.T) {
 		body    []byte
 		headers http.Header
 	}{{httpBody, httpReq.Header}, {wsBody, wsHeaders}} {
-		helps.ApplyCodexOAuthHeaders(upstream.headers, id, "model", true, "", "")
+		helps.ApplyCodexOAuthHeaders(upstream.headers, id, true, "", "")
 		if gjson.GetBytes(upstream.body, "prompt_cache_key").String() != "configured-cache" || upstream.headers.Get("Session-Id") != "configured-cache" || id.SessionID != "real-session" {
 			t.Fatalf("final cache affinity changed: %s %v", upstream.body, upstream.headers)
 		}
@@ -318,12 +320,12 @@ func TestCodex156OAuthFinalIdentityAcrossTransports(t *testing.T) {
 		t.Run(transport, func(t *testing.T) {
 			captured := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				for key, want := range map[string]string{"Session-Id": "cache", "Thread-Id": "thread", "X-Client-Request-Id": "thread", "X-Codex-Window-Id": "thread:0", "Version": "0.156.0", "X-Codex-Beta-Features": "extra,remote_compaction_v2"} {
+				for key, want := range map[string]string{"Session-Id": "cache", "Thread-Id": "thread", "X-Client-Request-Id": "thread", "X-Codex-Window-Id": "thread:0", "Version": helps.CodexClientVersion, "X-Codex-Beta-Features": "extra,remote_compaction_v2"} {
 					if got := r.Header.Get(key); got != want {
 						t.Errorf("%s = %q, want %q", key, got, want)
 					}
 				}
-				if !strings.Contains(r.UserAgent(), "Windows") || !strings.Contains(r.UserAgent(), "0.156.0") {
+				if !strings.Contains(r.UserAgent(), "Windows") || !strings.Contains(r.UserAgent(), helps.CodexClientVersion) {
 					t.Error(r.UserAgent())
 				}
 				completed := `{"type":"response.completed","response":{"id":"r","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`

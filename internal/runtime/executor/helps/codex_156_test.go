@@ -36,7 +36,7 @@ func TestCodex156SeparatesSessionCacheThread(t *testing.T) {
 			t.Fatal("fidelity failed")
 		}
 		header := http.Header{"X-Codex-Beta-Features": {"other,remote_compaction_v2,other"}}
-		ApplyCodexOAuthHeaders(header, id, "model", true, "", "")
+		ApplyCodexOAuthHeaders(header, id, true, "", "")
 		wantSession := "cache"
 		if child {
 			wantSession = "session"
@@ -48,7 +48,7 @@ func TestCodex156SeparatesSessionCacheThread(t *testing.T) {
 		if metadata.Get("session_id").String() != "session" || gjson.GetBytes(updated, "prompt_cache_key").String() != "cache" || metadata.Get("analytics_enabled").Type != gjson.False || metadata.Get("future.value").Int() != 7 {
 			t.Fatalf("body: %s", updated)
 		}
-		if header.Get("Version") != "0.156.0" || !strings.Contains(header.Get("User-Agent"), "Windows") || header.Get("X-Codex-Beta-Features") != "other,remote_compaction_v2" {
+		if header.Get("Version") != CodexClientVersion || !strings.Contains(header.Get("User-Agent"), "Windows") || header.Get("X-Codex-Beta-Features") != "other,remote_compaction_v2" {
 			t.Fatalf("profile: %v", header)
 		}
 	}
@@ -65,11 +65,11 @@ func TestCodex156PreservesClientWindowAndHeaderProfile(t *testing.T) {
 		t.Fatalf("window identity = %+v", id)
 	}
 	header := http.Header{"User-Agent": {"codex-tui/0.156.0 (Linux; x86_64)"}, "Originator": {"codex_exec"}, "Version": {"0.156.0-client"}}
-	ApplyCodexOAuthHeaders(header, id, "model", true, "", "")
+	ApplyCodexOAuthHeaders(header, id, true, "", "")
 	if header.Get("Originator") != "codex_exec" || !strings.Contains(header.Get("User-Agent"), "Linux") || header.Get("Version") != "0.156.0-client" {
 		t.Fatalf("client profile overwritten: %v", header)
 	}
-	ApplyCodexOAuthHeaders(header, id, "model", true, "configured-ua", "configured-beta")
+	ApplyCodexOAuthHeaders(header, id, true, "configured-ua", "configured-beta")
 	if header.Get("User-Agent") != "configured-ua" || header.Get("X-Codex-Beta-Features") != "configured-beta" {
 		t.Fatalf("explicit configuration lost: %v", header)
 	}

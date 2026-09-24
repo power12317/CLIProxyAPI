@@ -17,14 +17,7 @@ func codexOfficialRequest(originalPayload, payload []byte) bool {
 	return helps.IsOfficialCodexRequest(originalPayload) || helps.IsOfficialCodexRequest(payload)
 }
 
-func codexResponsesLiteBodyMode(body []byte, official bool, headers http.Header) bool {
-	if explicit := strings.TrimSpace(headers.Get(codexResponsesLiteHeader)); explicit != "" {
-		return strings.EqualFold(explicit, "true")
-	}
-	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	if official && codexResponsesLiteModelEnabled(model) && codexResponsesLiteBodyFieldsSatisfied(body) {
-		return true
-	}
+func codexResponsesLiteBodyMode(body []byte, headers http.Header) bool {
 	return util.IsCodexResponsesLiteRequest(body, headers)
 }
 
@@ -44,49 +37,27 @@ func codexToolPolicyHeaders(auth *cliproxyauth.Auth, source http.Header, model s
 	return headers
 }
 
-func codexResponsesLiteModelEnabled(model string) bool {
-	return registry.CodexModelUsesResponsesLite(model)
-}
-
-func codexResponsesLiteBodyFieldsSatisfied(body []byte) bool {
-	contextValue := gjson.GetBytes(body, "reasoning.context")
-	if contextValue.Type != gjson.String || contextValue.String() != "all_turns" {
-		return false
-	}
-	parallelValue := gjson.GetBytes(body, "parallel_tool_calls")
-	return parallelValue.Type == gjson.False
-}
-
-func codexResponsesLiteAutoEnabled(body []byte, model string, official bool) bool {
-	return official && codexResponsesLiteModelEnabled(model) && codexResponsesLiteBodyFieldsSatisfied(body) && util.ClassifyCodexResponsesLiteTools(body) != util.CodexResponsesLiteToolsIncompatible
-}
-
-// ensureCodexResponsesLiteHeader only reconstructs a missing header for an
-// official Codex body. Existing client or configured headers are preserved.
-func ensureCodexResponsesLiteHeader(headers http.Header, body []byte, model string, official bool) {
+// ensureCodexResponsesLiteHeader restores explicit body intent, including false.
+func ensureCodexResponsesLiteHeader(headers http.Header, body []byte) {
 	if headers == nil || headers.Get(codexResponsesLiteHeader) != "" {
 		return
 	}
-	if codexResponsesLiteAutoEnabled(body, model, official) || util.IsCodexResponsesLiteRequest(body, nil) {
-		headers.Set(codexResponsesLiteHeader, "true")
+	if value := util.CodexResponsesLiteHeaderValue(body, nil); value != "" {
+		headers.Set(codexResponsesLiteHeader, value)
 	}
 }
 
-func ensureCodexResponsesLiteMirror(body []byte, model string, official bool, headerSets ...http.Header) []byte {
-	var headers http.Header
-	if len(headerSets) > 0 {
-		headers = headerSets[0]
-	}
-	if explicit := strings.TrimSpace(headers.Get(codexResponsesLiteHeader)); explicit != "" && !strings.EqualFold(explicit, "true") {
+// ensureCodexResponsesLiteMirror keeps every WS frame aligned with the resolved
+// header. A reused connection cannot update its handshake on subsequent turns.
+func ensureCodexResponsesLiteMirror(body []byte, headers http.Header) []byte {
+	value := util.CodexResponsesLiteHeaderValue(body, headers)
+	if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
 		return body
 	}
-	if !codexResponsesLiteAutoEnabled(body, model, official) && !util.IsCodexResponsesLiteRequest(body, headers) {
+	if current := gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"); current.Exists() && current.String() == strings.ToLower(value) {
 		return body
 	}
-	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
-		return body
-	}
-	updated, errSet := sjson.SetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
+	updated, errSet := sjson.SetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", strings.ToLower(value))
 	if errSet != nil {
 		return body
 	}
@@ -142,7 +113,7 @@ func applyCodexImageGenerationPolicyWithInjection(body []byte, baseModel string,
 		return body, nil
 	}
 	injectImages := !stripImages && (cfg == nil || cfg.DisableImageGeneration == config.DisableImageGenerationOff) && !isCodexFreePlanAuth(auth) && !strings.HasSuffix(baseModel, "spark")
-	if codexResponsesLiteBodyMode(body, official, headers) {
+	if codexResponsesLiteBodyMode(body, headers) {
 		return helps.NormalizeCodexLiteCompatibilityTools(body, injectImages, originalRequests...)
 	}
 	if !injectImages {

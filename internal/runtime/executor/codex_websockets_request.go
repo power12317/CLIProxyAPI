@@ -91,6 +91,8 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-metadata", "")
+	misc.EnsureHeader(headers, ginHeaders, "X-Codex-Parent-Thread-Id", "")
+	misc.EnsureHeader(headers, ginHeaders, "X-OpenAI-Subagent", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-client-request-id", "")
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
@@ -157,7 +159,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	} else if cfg != nil && !isCodexCloakingDisabled(cfg, auth) && helps.CodexAuthUsesOAuthCookieJar(auth) {
 		headers.Set("User-Agent", helps.CodexOAuthUserAgent(auth))
 	}
-	if strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex-tui/") || strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex_cli_rs/") {
+	if helps.IsCodexClientUserAgent(ginHeaders.Get("User-Agent")) {
 		if cfgUserAgent == "" {
 			headers.Set("User-Agent", ginHeaders.Get("User-Agent"))
 		}

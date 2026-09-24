@@ -46,7 +46,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	originalPayload := originalPayloadSource
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
-	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, false, isCompat)
+	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, false, opts.Headers, isCompat)
 
 	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
 	if err != nil {
@@ -65,6 +65,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
+	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
+		body = ensureCodexResponsesLiteMirror(body, toolHeaders)
+	}
 	body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
 	if err != nil {
 		return resp, err
@@ -106,11 +109,15 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		replaceCodexRequestBody(httpReq, upstreamBody)
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
+	if helps.CodexAuthUsesOAuthCookieJar(auth) {
+		helps.ApplyCodexOAuthRoutingHint(httpReq.Header, turnStateBody)
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
+	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
 	if officialOAuthRequest {
 		configuredUA, configuredBeta := codexHeaderDefaults(e.cfg, auth)
-		helps.ApplyCodexOAuthHeaders(httpReq.Header, oauthIdentity, baseModel, true, configuredUA, configuredBeta)
+		helps.ApplyCodexOAuthHeaders(httpReq.Header, oauthIdentity, true, configuredUA, configuredBeta)
 		applyCodexConfiguredHeaderOverrides(httpReq, auth, opts.Headers)
 		applyModelHeaderOverrides(httpReq.Header, baseModel)
 		httpReq.Header.Del("Cookie")
@@ -122,7 +129,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			httpReq.Header.Set("X-Codex-Turn-Metadata", helps.RewriteCodexTurnMetadataInstallation(httpReq.Header.Get("X-Codex-Turn-Metadata"), fixedInstallationID))
 		}
 	}
-	ensureCodexResponsesLiteHeader(httpReq.Header, turnStateBody, baseModel, officialCodexRequest)
+	ensureCodexResponsesLiteHeader(httpReq.Header, turnStateBody)
 	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
 	turnState.ApplyHeaders(httpReq.Header)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
@@ -278,7 +285,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	originalPayload := originalPayloadSource
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
-	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, false, isCompat)
+	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, false, opts.Headers, isCompat)
 
 	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
 	if err != nil {
@@ -292,6 +299,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = applyCodexImageGenerationPolicyWithoutInjection(body, e.cfg, requestPath)
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
+	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
+		body = ensureCodexResponsesLiteMirror(body, toolHeaders)
+	}
 	body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex executor", body, isCompat)
 	body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
@@ -314,14 +324,18 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
 	turnStateBody = upstreamBody
 	replaceCodexRequestBody(httpReq, upstreamBody)
+	if helps.CodexAuthUsesOAuthCookieJar(auth) {
+		helps.ApplyCodexOAuthRoutingHint(httpReq.Header, turnStateBody)
+	}
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
+	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
 	if compactOAuth {
 		ua, beta := codexHeaderDefaults(e.cfg, auth)
-		helps.ApplyCodexOAuthHeaders(httpReq.Header, compactIdentity, baseModel, false, ua, beta)
+		helps.ApplyCodexOAuthHeaders(httpReq.Header, compactIdentity, false, ua, beta)
 		applyCodexConfiguredHeaderOverrides(httpReq, auth, opts.Headers)
 	}
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
-	ensureCodexResponsesLiteHeader(httpReq.Header, upstreamBody, baseModel, officialCodexRequest)
+	ensureCodexResponsesLiteHeader(httpReq.Header, upstreamBody)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
 	turnState.ApplyHeaders(httpReq.Header)

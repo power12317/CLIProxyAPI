@@ -189,6 +189,7 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 			continue
 		}
 
+		normalizeCodexCatalogHeaders(&parsed)
 		return &parsed, url
 	}
 	return nil, ""
@@ -319,11 +320,31 @@ func loadModelsFromBytes(data []byte, source string) error {
 	if err := validateModelsCatalog(&parsed); err != nil {
 		return fmt.Errorf("%s: validate models catalog: %w", source, err)
 	}
+	normalizeCodexCatalogHeaders(&parsed)
 
 	modelsCatalogStore.mu.Lock()
 	modelsCatalogStore.data = &parsed
 	modelsCatalogStore.mu.Unlock()
 	return nil
+}
+
+// normalizeCodexCatalogHeaders removes only the retired catalog UA default.
+// Normalize before publishing remote refreshes so they cannot restore that pin;
+// explicit credential headers and runtime model registrations are unaffected.
+func normalizeCodexCatalogHeaders(data *staticModelsJSON) {
+	const retiredUserAgent = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+	for _, models := range [][]*ModelInfo{data.CodexFree, data.CodexTeam, data.CodexPlus, data.CodexPro} {
+		for _, model := range models {
+			if model == nil || model.ID != "gpt-5.6-luna" || model.Config == nil {
+				continue
+			}
+			for key, value := range model.Config.OverrideHeader {
+				if strings.EqualFold(strings.TrimSpace(key), "User-Agent") && value == retiredUserAgent {
+					delete(model.Config.OverrideHeader, key)
+				}
+			}
+		}
+	}
 }
 
 func getModels() *staticModelsJSON {

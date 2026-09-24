@@ -79,7 +79,7 @@ func TestCodexExecutorCompactAddsDefaultInstructionsWithoutInjectingImageTool(t 
 	}
 }
 
-func TestCodexExecutorCompactOnlyAutoAddsLiteHeaderForFinalLiteBody(t *testing.T) {
+func TestCodexExecutorCompactRestoresLiteFromNativeBody(t *testing.T) {
 	var gotHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
@@ -99,6 +99,6 @@ func TestCodexExecutorCompactOnlyAutoAddsLiteHeaderForFinalLiteBody(t *testing.T
 		t.Fatalf("Execute error: %v", err)
 	}
 	if got := gotHeaders.Get(codexResponsesLiteHeader); got != "true" {
-		t.Fatalf("Lite header = %q, want true", got)
+		t.Fatalf("Lite header = %q, want restored native header", got)
 	}
 }

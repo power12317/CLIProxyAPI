@@ -24,7 +24,7 @@ func TestTranslateCodexRequestPairReusesEqualPayload(t *testing.T) {
 	}, sdktranslator.ResponseTransform{})
 
 	payload := []byte(`{"model":"test-model","input":[{"role":"user"}]}`)
-	originalTranslated, body := translateCodexRequestPair(from, to, "test-model", payload, bytes.Clone(payload), true)
+	originalTranslated, body := translateCodexRequestPair(from, to, "test-model", payload, bytes.Clone(payload), true, nil)
 
 	if gotCalls := atomic.LoadInt32(&calls); gotCalls != 1 {
 		t.Fatalf("TranslateRequest calls = %d, want 1", gotCalls)
@@ -45,7 +45,7 @@ func TestTranslateCodexRequestPairTranslatesDifferentPayloads(t *testing.T) {
 
 	originalPayload := []byte(`{"model":"test-model","input":[{"role":"system"}]}`)
 	payload := []byte(`{"model":"test-model","input":[{"role":"user"}]}`)
-	originalTranslated, body := translateCodexRequestPair(from, to, "test-model", originalPayload, payload, false)
+	originalTranslated, body := translateCodexRequestPair(from, to, "test-model", originalPayload, payload, false, nil)
 
 	if gotCalls := atomic.LoadInt32(&calls); gotCalls != 2 {
 		t.Fatalf("TranslateRequest calls = %d, want 2", gotCalls)

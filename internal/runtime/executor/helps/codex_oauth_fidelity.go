@@ -209,14 +209,14 @@ func RewriteCodexTurnMetadataInstallation(raw, installationID string) string {
 	return string(encoded)
 }
 
-func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, model string, stream bool, configuredUserAgent, configuredBeta string) {
+func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, stream bool, configuredUserAgent, configuredBeta string) {
 	if headers == nil {
 		return
 	}
 	ua := configuredUserAgent
 	if strings.TrimSpace(ua) == "" {
 		ua = CodexSystemUserAgent(identity.System)
-		if clientUA := headers.Get("User-Agent"); strings.HasPrefix(clientUA, "codex-tui/") || strings.HasPrefix(clientUA, "codex_cli_rs/") {
+		if clientUA := headers.Get("User-Agent"); IsCodexClientUserAgent(clientUA) {
 			ua = clientUA
 		}
 	}
@@ -232,9 +232,16 @@ func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, mo
 		headers.Set("Version", CodexClientVersion)
 	}
 	headers.Set("X-Codex-Beta-Features", beta)
-	headers.Set("X-Codex-Routing-Hint", "model="+strings.TrimSpace(model))
-	headers.Set("X-Codex-Window-Id", identity.WindowID)
-	headers.Set("X-Codex-Turn-Metadata", identity.TurnMetadataJSON)
+	if headers.Get("X-Codex-Window-Id") == "" {
+		headers.Set("X-Codex-Window-Id", identity.WindowID)
+	}
+	turnMetadata := headers.Get("X-Codex-Turn-Metadata")
+	if turnMetadata == "" {
+		turnMetadata = identity.TurnMetadataJSON
+	} else if identity.InstallationID != "" {
+		turnMetadata = RewriteCodexTurnMetadataInstallation(turnMetadata, identity.InstallationID)
+	}
+	headers.Set("X-Codex-Turn-Metadata", CodexTurnMetadataHeader(turnMetadata))
 	headers.Set("X-Client-Request-Id", identity.ClientRequestID)
 	headers.Set("Session-Id", firstString(identity.ResponsesSessionID, identity.SessionID))
 	headers.Set("Thread-Id", identity.ThreadID)
@@ -243,6 +250,23 @@ func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, mo
 	} else {
 		headers.Set("Accept", "application/json")
 	}
+}
+
+// ApplyCodexOAuthRoutingHint derives routing from the final uncompressed body.
+// Callers apply explicit credential and model header overrides afterward.
+func ApplyCodexOAuthRoutingHint(headers http.Header, body []byte) {
+	if headers == nil {
+		return
+	}
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if model == "" {
+		return
+	}
+	hint := "model=" + model
+	if tier := gjson.GetBytes(body, "service_tier"); tier.Type == gjson.String && tier.String() != "" {
+		hint += ";tier=" + tier.String()
+	}
+	headers.Set("X-Codex-Routing-Hint", hint)
 }
 
 func codexInstallationUUID(accountID, system string) string {

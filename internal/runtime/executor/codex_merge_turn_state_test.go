@@ -94,7 +94,7 @@ func TestCodexDuplexTurnStateReusedBeforeCompletion(t *testing.T) {
 				}
 				if ticketEnabled {
 					turnMetadata := fmt.Sprintf(`{"turn_id":%q,"session_id":"duplex-session"}`, turn)
-					return []byte(fmt.Sprintf(`{"type":"response.create","model":%q,"input":[],"tools":[{"type":"web_search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"client_metadata":{"x-codex-turn-metadata":%q}}`, model, turnMetadata))
+					return []byte(fmt.Sprintf(`{"type":"response.create","model":%q,"input":[],"tools":[{"type":"web_search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true","x-codex-turn-metadata":%q}}`, model, turnMetadata))
 				}
 				return []byte(fmt.Sprintf(`{"type":"response.create","model":%q,"input":[],"client_metadata":{"turn_id":%q}}`, model, turn))
 			}
