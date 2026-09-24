@@ -9,11 +9,32 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+// Forced transport retains full input for HTTP fallback, but a create without
+// a parent is already a complete root. It must not inherit stale warmup tools.
+func normalizeResponsesWebsocketForcedRequest(rawJSON, lastRequest, lastResponseOutput []byte, lastResponseID string, pendingToolCallIDs []string, allowCompactionReplayBypass bool) ([]byte, []byte, *interfaces.ErrorMessage) {
+	if gjson.GetBytes(rawJSON, "type").String() == wsRequestTypeCreate && strings.TrimSpace(gjson.GetBytes(rawJSON, "previous_response_id").String()) == "" {
+		normalized := normalizeResponseTranscriptReplacement(rawJSON, lastRequest)
+		input := gjson.GetBytes(rawJSON, "input")
+		// Preserve the fork's image tool warmup merge when either declaration
+		// inventory contains image_gen. Prompt text alone is not a declaration.
+		if input.IsArray() && gjson.GetBytes(lastRequest, "generate").Type == gjson.False && (helps.HasCodexImageTool(lastRequest) || helps.HasCodexImageTool(rawJSON)) {
+			merged, errMerge := mergeResponsesWebsocketInput(lastRequest, lastResponseOutput, input.Raw)
+			if errMerge != nil {
+				return nil, lastRequest, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: errMerge}
+			}
+			normalized, _ = sjson.SetRawBytes(normalized, "input", merged)
+		}
+		return normalizeResponseCreateRequest(normalized)
+	}
+	return normalizeResponsesWebsocketRequestWithIncrementalState(rawJSON, lastRequest, lastResponseOutput, lastResponseID, pendingToolCallIDs, false, allowCompactionReplayBypass)
+}
 
 func normalizeResponsesWebsocketRequest(rawJSON []byte, lastRequest []byte, lastResponseOutput []byte) ([]byte, []byte, *interfaces.ErrorMessage) {
 	return normalizeResponsesWebsocketRequestWithMode(rawJSON, lastRequest, lastResponseOutput, true, true)

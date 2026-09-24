@@ -30,8 +30,9 @@ type codexTurnStateKey struct {
 }
 
 type codexTurnStateEntry struct {
-	state     string
-	expiresAt time.Time
+	state             string
+	expiresAt         time.Time
+	preferredMetadata bool
 }
 
 type codexTurnStateBucket struct {
@@ -76,8 +77,9 @@ func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target stri
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	state := codexTurnStates.request(auth, target, body, headers)
-	state.firstValue = cliproxyexecutor.CodexTransport(ctx) != nil
+	forced := cliproxyexecutor.CodexTransport(ctx) != nil
+	state := codexTurnStates.requestWithIdentity(auth, target, body, headers, forced)
+	state.firstValue = forced
 	state.ctx = ctx
 	state.requestedModel = strings.TrimSpace(model)
 	// Resolve only explicitly configured values. Inbound headers alone do not
@@ -107,17 +109,31 @@ func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target stri
 }
 
 func (c *codexTurnStateCache) request(auth *cliproxyauth.Auth, target string, body []byte, headers http.Header) *CodexTurnState {
+	return c.requestWithIdentity(auth, target, body, headers, false)
+}
+
+func (c *codexTurnStateCache) requestWithIdentity(auth *cliproxyauth.Auth, target string, body []byte, headers http.Header, preferBody bool) *CodexTurnState {
 	metadata := gjson.GetBytes(body, "client_metadata")
 	turn := metadata.Get("x-codex-turn-metadata")
 	if turn.Type == gjson.String {
 		turn = gjson.Parse(turn.String())
 	}
 	headerTurn := gjson.Parse(codexTurnHeaderValue(headers, "X-Codex-Turn-Metadata"))
+	turnID := firstString(codexTurnString(headerTurn.Get("turn_id")), codexTurnString(turn.Get("turn_id")), codexTurnString(metadata.Get("turn_id")))
+	if preferBody {
+		// A downstream WS handshake may describe an earlier turn. Per-frame
+		// identity, including an explicitly empty prewarm turn, is authoritative.
+		if frameTurn := metadata.Get("turn_id"); frameTurn.Type == gjson.String {
+			turnID = codexTurnString(frameTurn)
+		} else if nestedTurn := turn.Get("turn_id"); nestedTurn.Type == gjson.String {
+			turnID = codexTurnString(nestedTurn)
+		}
+	}
 	state := &CodexTurnState{
 		cache: c,
 		key: codexTurnStateKey{
 			origin: codexTurnOrigin(target),
-			turnID: firstString(codexTurnString(headerTurn.Get("turn_id")), codexTurnString(turn.Get("turn_id")), codexTurnString(metadata.Get("turn_id"))),
+			turnID: turnID,
 		},
 		sessionID: firstString(codexTurnString(headerTurn.Get("session_id")), codexTurnString(turn.Get("session_id")), codexTurnString(metadata.Get("session_id")), codexTurnHeaderValue(headers, "Session-Id"), codexTurnHeaderValue(headers, "Session_id")),
 	}
@@ -287,6 +303,10 @@ func (s *CodexTurnState) ObserveRequest(headers http.Header, websocketBody []byt
 }
 
 func (s *CodexTurnState) observe(value string) {
+	s.observeMetadata(value, false)
+}
+
+func (s *CodexTurnState) observeMetadata(value string, preferred bool) {
 	if s == nil {
 		return
 	}
@@ -300,12 +320,17 @@ func (s *CodexTurnState) observe(value string) {
 	s.cache.mu.Lock()
 	defer s.cache.mu.Unlock()
 	if s.cache.buckets[s.authID] == s.bucket {
-		if s.firstValue {
-			if entry, exists := s.bucket.entries[s.key]; exists && s.cache.now().Before(entry.expiresAt) {
+		if entry, exists := s.bucket.entries[s.key]; exists && s.cache.now().Before(entry.expiresAt) {
+			// response.metadata takes precedence over the codex-prefixed fallback,
+			// including when the fallback arrived first on an earlier request.
+			if entry.preferredMetadata && !preferred {
+				return
+			}
+			if s.firstValue && (entry.preferredMetadata || !preferred) {
 				return
 			}
 		}
-		s.bucket.entries[s.key] = codexTurnStateEntry{state: value, expiresAt: s.cache.now().Add(codexTurnStateTTL)}
+		s.bucket.entries[s.key] = codexTurnStateEntry{state: value, expiresAt: s.cache.now().Add(codexTurnStateTTL), preferredMetadata: preferred}
 	}
 }
 
@@ -343,7 +368,7 @@ func (s *CodexTurnState) ObserveEvent(payload []byte) {
 	}
 	gjson.GetBytes(payload, "headers").ForEach(func(key, value gjson.Result) bool {
 		if strings.EqualFold(key.String(), codexTurnStateHeader) && value.Type == gjson.String {
-			s.observe(value.String())
+			s.observeMetadata(value.String(), kind == "response.metadata")
 			return false
 		}
 		return true

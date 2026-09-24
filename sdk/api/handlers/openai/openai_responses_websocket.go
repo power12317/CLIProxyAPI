@@ -612,6 +612,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			}
 		} else if forceBridge && previousResponseID != "" && previousResponseID != lastResponseID {
 			errMsg = responsesWebsocketPreviousResponseNotFoundError()
+		} else if forceBridge {
+			requestJSON, updatedLastRequest, errMsg = normalizeResponsesWebsocketForcedRequest(payload, lastRequest, lastResponseOutput, lastResponseID, lastResponsePendingToolCallIDs, allowCompactionReplayBypass)
 		} else if nativeWebsocketPassthrough {
 			requestJSON, errMsg = normalizeResponsesWebsocketPassthroughRequest(payload, requestModelName)
 		} else if len(lastRequest) == 0 && strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String()) != "" {

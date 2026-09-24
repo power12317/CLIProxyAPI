@@ -5,6 +5,7 @@ on:
     # run only against tags
     tags:
       - '*'
+      - '!websocket-har-alignment-v*'
 
 permissions:
   contents: write

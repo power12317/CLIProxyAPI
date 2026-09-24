@@ -106,7 +106,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	helps.RestoreCodexMetadataHeaders(wsHeaders, upstreamBody)
 	if officialOAuthRequest {
 		ua, beta := codexHeaderDefaults(e.cfg, auth)
-		helps.ApplyCodexOAuthHeaders(wsHeaders, oauthIdentity, true, ua, beta)
+		helps.ApplyCodexOAuthWebsocketHeaders(wsHeaders, oauthIdentity, ua, beta)
 		// Keep only one spelling of the routing session header on the wire.
 		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
 	}
@@ -115,7 +115,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
 	}
 	applyModelHeaderOverrides(wsHeaders, baseModel)
-	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
+	if !officialOAuthRequest {
+		ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
+	}
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
 	turnState.ApplyWebsocketHeaders(wsHeaders)

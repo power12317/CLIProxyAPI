@@ -45,7 +45,7 @@ delivery controls. Background HTTP requests are not WS generation requests.
 | Generation frame | Send `response.create`; preserve native tools, reasoning, metadata, stream options, and Responses Lite settings. |
 | `response.id` | Use as `previous_response_id` only on the same live connection and only when the retained input/output prefix and request properties match. |
 | Response output | Include completed tool/reasoning/message items in the comparison baseline. Incomplete or failed responses are not continuation baselines. |
-| `x-codex-turn-state` | In forced mode, use the first returned metadata-event value for the same credential owner, origin, and turn. Replay it in `client_metadata` on subsequent frames and in HTTP headers on fallback. New turns and changed owners do not inherit it. |
+| `x-codex-turn-state` | Prefer a valid `response.metadata` value; use `codex.response.metadata` only as a fallback. In forced mode, retain the first value from the preferred source for the same credential owner, origin, and turn. A standard event may replace an earlier fallback value. Replay it in `client_metadata` on subsequent frames and in HTTP headers on fallback. New turns and changed owners do not inherit it. |
 | WS handshake turn-state | Native CLI passes no turn-state capture to its connect operation. Forced mode does not promote a handshake-only token into the turn cache. Dynamic state belongs in frames, not reconnect handshake headers. Explicit header/model overrides and the separately configured ticket feature retain their existing precedence. |
 | Metadata on reused connections | Rebuild each frame's metadata from the current request. Reusing a socket does not mean reusing the previous turn's metadata. |
 | ETags, rate limits, model and usage events | Preserve existing event/usage handling. These response values are not blindly copied into request headers. |
@@ -55,6 +55,66 @@ The existing fork-specific identity convergence, OAuth fidelity, reasoning repla
 model routing, tool schema handling, and turn-state ticket options remain in their
 current pipeline. This feature does not try to implement attestation or invent
 missing native client identifiers.
+
+## HAR alignment and metadata compatibility
+
+A local September 24 capture of OAuth Codex CLI 0.156.1 contains two connections,
+11 `response.create` frames (two prewarms and nine generations), and 11
+`codex.response.metadata` events carrying turn-state. The captured client sends
+none of those values back, including during repeated requests in the same turn.
+The capture is private test input and is not part of this repository's fixtures.
+
+The official source nevertheless implements the full turn-state path:
+
+1. [`ResponsesStreamEvent::turn_state()`](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/codex-api/src/sse/responses.rs#L219)
+   accepts only `response.metadata` and reads `headers.x-codex-turn-state`.
+2. [WebSocket event processing](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/codex-api/src/endpoint/responses_websocket.rs#L747)
+   stores the extracted value in a `OnceLock` supplied by the
+   [actual caller](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/core/src/client.rs#L2003).
+3. [Subsequent frame construction](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/core/src/client.rs#L1908)
+   inserts that cached value into `client_metadata["x-codex-turn-state"]`.
+4. [The documented lifecycle](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/core/src/client.rs#L275)
+   keeps the value stable within a turn and clears it for a new turn or owner.
+
+The captured event name does not pass the official extractor's guard. CPA's
+support for `codex.response.metadata` is an intentional compatibility extension,
+not a claim that the unmodified CLI recognizes both names. `response.metadata`
+has priority regardless of arrival order. An empty or invalid standard value
+does not block the fallback. If a fallback value has already been used, a later
+valid standard event replaces it for subsequent requests; already-sent frames
+cannot be changed. Forced mode keeps the first standard value, or the first
+fallback value if no standard value arrives. Explicit configured overrides and
+the optional ticket feature still take precedence over this passive cache.
+Forced mode resolves turn identity from each frame before falling back to a
+handshake header, so an old downstream handshake cannot route a new turn through
+the previous turn's cache. An explicitly empty prewarm turn stays unscoped.
+
+Other capture-driven corrections:
+
+- A `response.create` without a parent is a complete transcript root. The capture's
+  first generation keeps its seven input items instead of retaining a stale eighth
+  `additional_tools` item from prewarm. The requested exception preserves the
+  prewarm merge if either input's structured tool inventory contains `image_gen`;
+  a textual mention in a prompt does not trigger it. Subsequent parent-linked
+  requests still retain full replay history and derive safe wire deltas.
+- Native `generate:false` frames with `request_kind:prewarm` preserve empty outer
+  and nested `turn_id` values. Generation requests retain the existing fallback
+  identity behavior.
+- Native OAuth WS preparation does not synthesize `Accept: text/event-stream`,
+  the legacy `Conversation_id` alias, or a handshake Lite header from a body-only
+  Lite marker. Explicit header overrides remain effective, and each frame keeps
+  its Lite mirror. HTTP response negotiation is unchanged.
+- Ping and Pong renew the existing WS read deadline for both pooled and raw
+  connections. The capture's 371-second heartbeat-only gap between prewarm and
+  generation should not close a healthy socket at five minutes. Reconnection
+  remains lazy and begins only when a later request needs a connection.
+
+Compression negotiation remains library-specific: the captured CLI offers
+`permessage-deflate; client_max_window_bits`, while Gorilla offers
+`permessage-deflate; server_no_context_takeover; client_no_context_takeover`.
+CPA advertises the extensions its transport actually supports; it does not spoof
+unsupported compression parameters. Wire behavior is therefore not byte-for-byte
+identical to the native CLI.
 
 ## Retry boundary
 
@@ -76,8 +136,9 @@ splicing is not performed.
 ## Replay, isolation, and resource limits
 
 For ordinary downstream Responses WS sessions, forced mode retains canonical
-history using the existing request merger. The executor independently derives a
-wire delta when safe. A reconnect or HTTP fallback can therefore use the full
+history by replacing complete roots and merging parent-linked deltas, with the
+image-tool prewarm exception described above. The executor independently derives
+a wire delta when safe. A reconnect or HTTP fallback can therefore use the full
 request. Unknown previous-response IDs are rejected rather than guessed.
 
 Both continuation retention and downstream replay history are bounded at 8 MiB.
@@ -121,5 +182,26 @@ Validation on September 24, 2026:
 - CPA-Manager-Plus web tests: 3,438 passed; repository tests: 213 passed.
 - Panel lint: no errors; five warnings in existing, unmodified code.
 
+The subsequent HAR-alignment branch also passed the full Go suite, the required
+server build, and targeted race tests for event priority, per-frame turn identity,
+native OAuth headers, root replay, and heartbeat liveness. An offline replay of
+all 11 captured requests matched the original wire input arrays and parent IDs.
+Separate sanitized tests cover the image-tool merge exception and both metadata
+event names, including fallback-first arrival. The manager UI did not require
+further changes for these protocol corrections.
+
 The setting remains disabled by default. This validation does not include a live
 ChatGPT account or a separately deployed Home server.
+
+## Branch image publication
+
+The `codex/websocket-har-alignment` branch uses Git tags named
+`websocket-har-alignment-vYYYY.MM.DD-N`. These tags trigger only the dedicated
+`docker-websocket-har-alignment` workflow. The regular release workflow excludes
+them, and the production Docker workflow's `v*` filter does not match them.
+
+Branch images publish to the separate GHCR package
+`ghcr.io/power12317/cliproxyapi-websocket-har-alignment`, tagged with the full Git
+tag. The workflow builds Linux amd64 and arm64 images and combines them into a
+multi-architecture manifest. It writes no `latest`, `latest-amd64`, or
+`latest-arm64` tags and never targets the production `cliproxyapi` package.

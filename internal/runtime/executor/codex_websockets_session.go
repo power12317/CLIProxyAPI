@@ -256,7 +256,15 @@ func (s *codexWebsocketSession) configureConn(conn *websocket.Conn) {
 		return
 	}
 	s.resetUpstreamDisconnectError(conn)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
+	})
 	conn.SetPingHandler(func(appData string) error {
+		// Control frames are consumed inside ReadMessage; refresh liveness even
+		// when no response data arrives between turns.
+		if errDeadline := conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout)); errDeadline != nil {
+			return errDeadline
+		}
 		sessionID := ""
 		if s != nil {
 			sessionID = s.sessionID
@@ -442,7 +450,13 @@ func configureRawCodexWebsocketConn(conn *websocket.Conn, authID string, wsURL s
 	if conn == nil {
 		return
 	}
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
+	})
 	conn.SetPingHandler(func(appData string) error {
+		if errDeadline := conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout)); errDeadline != nil {
+			return errDeadline
+		}
 		log.Debugf("codex websockets: upstream ping received session= session_object=none ping_bytes=%d", len(appData))
 		log.Debugf("codex websockets: upstream pong write started session= session_object=none")
 		start := time.Now()

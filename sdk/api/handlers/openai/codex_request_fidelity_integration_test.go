@@ -241,10 +241,15 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 						}
 					}
 				}
-				if got.headers.Get(liteHeader) != tc.wantLite {
-					t.Errorf("Lite header=%q want %q", got.headers.Get(liteHeader), tc.wantLite)
+				wantLiteHeader := tc.wantLite
+				if transport == "ws" && tc.native {
+					// Body-only Lite intent belongs in each frame, not in the handshake.
+					wantLiteHeader = tc.header
 				}
-				if tc.native && tc.mirror != "" && gjson.GetBytes(got.body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != tc.wantLite {
+				if got.headers.Get(liteHeader) != wantLiteHeader {
+					t.Errorf("Lite header=%q want %q", got.headers.Get(liteHeader), wantLiteHeader)
+				}
+				if tc.native && (tc.mirror != "" || transport == "ws" && tc.wantLite != "") && gjson.GetBytes(got.body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != tc.wantLite {
 					t.Error("resolved Lite header/body disagree")
 				}
 				for _, value := range []string{`"encrypted_content":"opaque"`, `"call_id":"call-1"`, `"future":{"flag":false}`} {

@@ -69,6 +69,15 @@ func TestForceWebsocketFiveFailuresThenHTTPAndNextRequestTriesAgain(t *testing.T
 }
 
 func TestForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T) {
+	for _, standardMetadata := range []bool{false, true} {
+		t.Run(fmt.Sprintf("standard_metadata=%t", standardMetadata), func(t *testing.T) {
+			testForceWebsocketSequenceReuseTurnStateAndContinuation(t, standardMetadata)
+		})
+	}
+}
+
+func testForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T, standardMetadata bool) {
+	t.Helper()
 	var connections atomic.Int32
 	frames := make(chan []byte, 3)
 	headers := make(chan http.Header, 1)
@@ -88,6 +97,10 @@ func TestForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T) {
 			}
 			frames <- body
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"event-state"}}`))
+			if standardMetadata {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"standard-state"}}`))
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"standard-later"}}`))
+			}
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"later-state"}}`))
 			response := fmt.Sprintf(`{"type":"response.completed","response":{"id":"r%d","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}`, i)
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(response))
@@ -111,7 +124,7 @@ func TestForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T) {
 		if i == 0 {
 			body, _ = sjson.SetBytes(body, "generate", false)
 		}
-		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: t.Name()}, Headers: http.Header{"User-Agent": {"codex_cli_rs/0.156.1"}}}
+		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: t.Name()}, Headers: http.Header{"User-Agent": {"codex_cli_rs/0.156.1"}, "X-Codex-Turn-Metadata": {`{"turn_id":"turn-1"}`}}}
 		ctx := cliproxyexecutor.WithCodexTransport(t.Context(), &cliproxyexecutor.CodexTransportState{})
 		result, err := e.ExecuteStream(ctx, auth, cliproxyexecutor.Request{Model: "gpt-5.4", Payload: body}, opts)
 		if err != nil {
@@ -142,7 +155,11 @@ func TestForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T) {
 		}
 		state := gjson.GetBytes(frame, "client_metadata.x-codex-turn-state").String()
 		if i == 1 {
-			if state != "event-state" || gjson.GetBytes(frame, "previous_response_id").String() != "r0" || len(gjson.GetBytes(frame, "input").Array()) != 1 {
+			wantState := "event-state"
+			if standardMetadata {
+				wantState = "standard-state"
+			}
+			if state != wantState || gjson.GetBytes(frame, "previous_response_id").String() != "r0" || len(gjson.GetBytes(frame, "input").Array()) != 1 {
 				t.Fatalf("bad continuation: %s", frame)
 			}
 		} else if state != "" {
