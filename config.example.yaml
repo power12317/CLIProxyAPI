@@ -274,6 +274,9 @@ routing:
 
 # Codex provider behavior.
 codex:
+  # Prefer WebSockets for ChatGPT Codex generation, regardless of client transport.
+  # Five failed handshake attempts fall back to HTTP for this request only.
+  force-websocket: false
   # When true (default), replace Codex installation identity with a stable UUID derived
   # from the selected OAuth account and credential system. Set false to preserve the
   # installation identity supplied by the client without adding a missing value.

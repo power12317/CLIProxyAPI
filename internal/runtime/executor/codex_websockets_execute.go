@@ -32,7 +32,11 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
-	defer reporter.TrackFailure(ctx, &err)
+	defer func() {
+		if err != cliproxyexecutor.ErrCodexWebsocketFallback {
+			reporter.TrackFailure(ctx, &err)
+		}
+	}()
 
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
@@ -114,7 +118,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
-	turnState.ApplyHeaders(wsHeaders)
+	turnState.ApplyWebsocketHeaders(wsHeaders)
 	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, wsHeaders); errTicket != nil {
 		return resp, errTicket
@@ -161,7 +165,6 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		AuthType:  authType,
 		AuthValue: authValue,
 	}
-	helps.RecordAPIWebsocketRequest(ctx, e.cfg, wsReqLog)
 
 	var conn *websocket.Conn
 	var closer *websocketConnectionCloser
@@ -178,6 +181,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		conn, closer, respHS, errDial = e.ensureUpstreamConn(dialCtx, auth, sess, authID, wsURL, wsHeaders)
 	}
 	if errDial != nil {
+		if errDial == cliproxyexecutor.ErrCodexWebsocketFallback {
+			return resp, errDial
+		}
 		bodyErr := websocketHandshakeBody(respHS)
 		if respHS != nil {
 			helps.RecordAPIWebsocketUpgradeRejection(ctx, e.cfg, websocketUpgradeRequestLog(wsReqLog), respHS.StatusCode, respHS.Header.Clone(), bodyErr)
@@ -206,7 +212,16 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, errBind
 	}
 	recordAPIWebsocketHandshake(ctx, e.cfg, respHS)
-	turnState.ObserveResponse(respHS)
+	if cliproxyexecutor.CodexTransport(ctx) == nil {
+		turnState.ObserveResponse(respHS)
+	}
+	var continuation *helps.CodexContinuation
+	if cliproxyexecutor.CodexTransport(ctx) != nil {
+		continuation = sess.continuationFor(conn)
+		wsReqBody = helps.CodexWebsocketTransportBody(continuation.Prepare(wsReqBody))
+	}
+	wsReqLog.Body = wsReqBody
+	helps.RecordAPIWebsocketRequest(ctx, e.cfg, wsReqLog)
 	helps.RecordCodexTurnStateTicketOnResponse(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, respHS)
 	defer turnState.LogResponse(ctx, e.cfg, true)
 	reporter.StartResponseTTFT()
@@ -231,7 +246,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
-		errSend = mapCodexWebsocketWriteError(sess, conn, errSend)
+		errSend = helps.GuardCodexWebsocketFailure(ctx, mapCodexWebsocketWriteError(sess, conn, errSend))
 		if sess != nil && !isEphemeralSession {
 			if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
 				e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "send_error", errSend)
@@ -319,7 +334,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		}
 		msgType, payload, errRead := readCodexWebsocketMessage(ctx, sess, conn, readCh)
 		if errRead != nil {
-			mappedErr := mapCodexWebsocketReadError(errRead)
+			mappedErr := helps.GuardCodexWebsocketFailure(ctx, mapCodexWebsocketReadError(errRead))
 			helps.RecordAPIWebsocketError(ctx, e.cfg, "read", mappedErr)
 			return resp, mappedErr
 		}
@@ -377,6 +392,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		case "response.output_item.done":
 			collectCodexOutputItemDone(payload, outputItemsByIndex, &outputItemsFallback)
 		case "response.completed", "response.done", "response.incomplete":
+			continuation.Complete(upstreamBody, patchCodexCompletedOutput(payload, outputItemsByIndex, outputItemsFallback))
 			if helps.IsCodexTerminalEmptyIncomplete(payload, len(outputItemsByIndex)+len(outputItemsFallback), sawOutputDelta) {
 				if sess != nil {
 					e.invalidateUpstreamConn(sess, conn, "terminal_empty_incomplete", nil)

@@ -10,7 +10,41 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
+
+// A replay bridge materializes the client's history before choosing upstream
+// transport. The executor can still compress it into a connection-local delta.
+func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName string) bool {
+	if h == nil || h.Cfg == nil || !h.Cfg.CodexForceWebsocket || h.Cfg.CodexResponseSteering {
+		return false
+	}
+	providers, _ := responsesWebsocketProviderSetForModel(responsesWebsocketResolvedModelName(modelName))
+	if len(providers) != 1 {
+		return false
+	}
+	if _, ok := providers["codex"]; !ok {
+		return false
+	}
+	if h.AuthManager.HomeEnabled() {
+		return true
+	}
+	auths, _ := h.responsesWebsocketAvailableAuthsForModel(modelName)
+	if len(auths) == 0 {
+		return false
+	}
+	for _, auth := range auths {
+		if !coreexecutor.ChatGPTCodexDestination(auth.Provider, auth.Attributes["base_url"]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *OpenAIResponsesAPIHandler) websocketAuthEnabled(auth *coreauth.Auth) bool {
+	return responsesWebsocketAuthSupportsIncrementalInput(auth) ||
+		(h != nil && h.Cfg != nil && h.Cfg.CodexForceWebsocket && auth != nil && coreexecutor.ChatGPTCodexDestination(auth.Provider, auth.Attributes["base_url"]))
+}
 
 func websocketUpstreamSupportsIncrementalInput(attributes map[string]string, metadata map[string]any) bool {
 	if len(attributes) > 0 {
@@ -117,7 +151,7 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketUsesUpstreamWebsocketPasst
 		} else if authProvider != provider {
 			return false
 		}
-		if !websocketUpstreamSupportsIncrementalInput(auth.Attributes, auth.Metadata) {
+		if !h.websocketAuthEnabled(auth) {
 			return false
 		}
 	}

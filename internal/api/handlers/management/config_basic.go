@@ -266,6 +266,14 @@ func (h *Handler) PutWebsocketAuth(c *gin.Context) {
 	h.updateBoolField(c, func(v bool) { h.cfg.WebsocketAuth = v })
 }
 
+func (h *Handler) GetCodexForceWebsocket(c *gin.Context) {
+	c.JSON(200, gin.H{"force-websocket": h.cfg.Codex.ForceWebsocket})
+}
+
+func (h *Handler) PutCodexForceWebsocket(c *gin.Context) {
+	h.updateBoolField(c, func(v bool) { h.cfg.Codex.ForceWebsocket = v })
+}
+
 // Request retry
 func (h *Handler) GetRequestRetry(c *gin.Context) {
 	c.JSON(200, gin.H{"request-retry": h.cfg.RequestRetry})

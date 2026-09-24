@@ -115,6 +115,9 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/ws-auth", s.mgmt.GetWebsocketAuth)
 		mgmt.PUT("/ws-auth", s.mgmt.PutWebsocketAuth)
 		mgmt.PATCH("/ws-auth", s.mgmt.PutWebsocketAuth)
+		mgmt.GET("/codex/force-websocket", s.mgmt.GetCodexForceWebsocket)
+		mgmt.PUT("/codex/force-websocket", s.mgmt.PutCodexForceWebsocket)
+		mgmt.PATCH("/codex/force-websocket", s.mgmt.PutCodexForceWebsocket)
 
 		mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
 		mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)

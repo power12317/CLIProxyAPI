@@ -354,7 +354,7 @@ func wrapHomeStream(ctx context.Context, result *cliproxyexecutor.StreamResult, 
 }
 
 func sanitizeDownstreamWebsocketFallbackRequest(ctx context.Context, auth *Auth, req cliproxyexecutor.Request) cliproxyexecutor.Request {
-	if !cliproxyexecutor.DownstreamWebsocket(ctx) || authWebsocketsEnabled(auth) || len(req.Payload) == 0 {
+	if !cliproxyexecutor.DownstreamWebsocket(ctx) || cliproxyexecutor.PreferredUpstreamWebsocket(ctx) || authWebsocketsEnabled(auth) || len(req.Payload) == 0 {
 		return req
 	}
 	updated, errDelete := sjson.DeleteBytes(req.Payload, "generate")

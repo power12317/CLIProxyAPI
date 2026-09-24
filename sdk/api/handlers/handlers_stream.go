@@ -534,6 +534,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	}
 
 	bootstrapEligible := func(err error) bool {
+		if coreexecutor.IsCodexReplayUnsafe(err) {
+			return false
+		}
 		status := statusFromError(err)
 		if status == 0 {
 			return true

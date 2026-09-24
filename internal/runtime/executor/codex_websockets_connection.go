@@ -28,6 +28,47 @@ const (
 )
 
 func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *websocketConnectionCloser, *http.Response, error) {
+	state := cliproxyexecutor.CodexTransport(ctx)
+	if state == nil {
+		return e.dialCodexWebsocketOnce(ctx, auth, wsURL, headers)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, err
+		}
+		if state.HTTPFallback.Load() || state.Failures.Load() >= cliproxyexecutor.CodexWebsocketMaxFailures {
+			state.HTTPFallback.Store(true)
+			return nil, nil, nil, cliproxyexecutor.ErrCodexWebsocketFallback
+		}
+		conn, closer, resp, err := e.dialCodexWebsocketOnce(ctx, auth, wsURL, headers)
+		if err == nil {
+			return conn, closer, resp, nil
+		}
+		if ctx.Err() != nil {
+			closeHTTPResponseBody(resp, "codex websocket cancelled handshake")
+			return nil, nil, nil, ctx.Err()
+		}
+		// Authentication and quota failures belong to credential recovery, not transport fallback.
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 429) {
+			return conn, closer, resp, err
+		}
+		closeHTTPResponseBody(resp, "codex websocket failed handshake")
+		failures := state.Failures.Add(1)
+		helps.LogWithRequestID(ctx).WithField("websocket_failures", failures).Debug("Codex websocket handshake failed")
+		if failures >= cliproxyexecutor.CodexWebsocketMaxFailures {
+			continue
+		}
+		timer := time.NewTimer(time.Duration(1<<(failures-1)) * 100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (e *CodexWebsocketsExecutor) dialCodexWebsocketOnce(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *websocketConnectionCloser, *http.Response, error) {
 	dialer := newProxyAwareWebsocketDialer(ctx, e.cfg, auth)
 	dialer.HandshakeTimeout = codexResponsesWebsocketHandshakeTO
 	dialer.EnableCompression = true

@@ -61,6 +61,7 @@ type codexWebsocketSession struct {
 	authID                    string
 	proxyURL                  string
 	connectionFingerprint     string
+	continuation              *helps.CodexContinuation
 	multiAgentV2OptimizedConn *websocket.Conn
 	lifecycleBindMu           sync.Mutex
 	lifecycle                 cliproxyexecutor.ExecutionLifecycle
@@ -657,6 +658,7 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 	sess.authID = authID
 	sess.proxyURL = proxyURL
 	sess.connectionFingerprint = fingerprint
+	sess.continuation = &helps.CodexContinuation{}
 	sess.readerConn = conn
 	sess.connMu.Unlock()
 
@@ -664,6 +666,18 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 	go e.readUpstreamLoop(sess, conn)
 	logCodexWebsocketConnectedWithReused(sess, sess.sessionID, authID, wsURL, false)
 	return conn, closer, resp, nil
+}
+
+func (s *codexWebsocketSession) continuationFor(conn *websocket.Conn) *helps.CodexContinuation {
+	if s == nil {
+		return nil
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.conn != conn {
+		return nil
+	}
+	return s.continuation
 }
 
 func (e *CodexWebsocketsExecutor) readUpstreamLoop(sess *codexWebsocketSession, conn *websocket.Conn) {

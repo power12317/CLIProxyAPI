@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -66,6 +67,7 @@ type CodexTurnState struct {
 	requestLen     int
 	responseLen    int
 	fieldsMu       sync.RWMutex
+	firstValue     bool
 }
 
 // NewCodexTurnState reads the final outbound headers and uncompressed JSON. It
@@ -75,6 +77,7 @@ func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target stri
 		ctx = context.Background()
 	}
 	state := codexTurnStates.request(auth, target, body, headers)
+	state.firstValue = cliproxyexecutor.CodexTransport(ctx) != nil
 	state.ctx = ctx
 	state.requestedModel = strings.TrimSpace(model)
 	// Resolve only explicitly configured values. Inbound headers alone do not
@@ -232,6 +235,18 @@ func (s *CodexTurnState) ApplyHeaders(headers http.Header) {
 
 // ApplyWebsocketBody mirrors state into each frame because a reused websocket
 // does not send another HTTP handshake. Missing turn identity remains untouched.
+func (s *CodexTurnState) ApplyWebsocketHeaders(headers http.Header) {
+	s.ApplyHeaders(headers)
+	if s != nil && s.firstValue && !s.configured {
+		// Native Codex puts dynamic turn state in request frames, not reconnect handshakes.
+		for key := range headers {
+			if strings.EqualFold(key, codexTurnStateHeader) {
+				delete(headers, key)
+			}
+		}
+	}
+}
+
 func (s *CodexTurnState) ApplyWebsocketBody(body []byte) []byte {
 	if s == nil || s.key.turnID == "" {
 		return body
@@ -285,6 +300,11 @@ func (s *CodexTurnState) observe(value string) {
 	s.cache.mu.Lock()
 	defer s.cache.mu.Unlock()
 	if s.cache.buckets[s.authID] == s.bucket {
+		if s.firstValue {
+			if entry, exists := s.bucket.entries[s.key]; exists && s.cache.now().Before(entry.expiresAt) {
+				return
+			}
+		}
 		s.bucket.entries[s.key] = codexTurnStateEntry{state: value, expiresAt: s.cache.now().Add(codexTurnStateTTL)}
 	}
 }

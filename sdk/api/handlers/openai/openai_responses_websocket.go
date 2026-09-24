@@ -372,7 +372,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		return auth, ok
 	}
 	upstreamModeForAuth := func(auth *coreauth.Auth) string {
-		if auth != nil && websocketUpstreamSupportsIncrementalInput(auth.Attributes, auth.Metadata) {
+		if auth != nil && h.websocketAuthEnabled(auth) {
 			provider := strings.ToLower(strings.TrimSpace(auth.Provider))
 			if provider == "codex" || provider == "xai" {
 				return responsesWebsocketUpstreamModeWS
@@ -485,7 +485,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		}
 		useUpstreamWebsocketPassthrough := h.responsesWebsocketUsesUpstreamWebsocketPassthrough(requestModelName)
 		if pinnedAuthID != "" {
-			if pinnedAuth, ok := sessionAuthByID(pinnedAuthID); ok && responsesWebsocketAuthSupportsIncrementalInput(pinnedAuth) {
+			if pinnedAuth, ok := sessionAuthByID(pinnedAuthID); ok && h.websocketAuthEnabled(pinnedAuth) {
 				provider := strings.ToLower(strings.TrimSpace(pinnedAuth.Provider))
 				useUpstreamWebsocketPassthrough = provider == "codex" || provider == "xai"
 			}
@@ -497,6 +497,10 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			upstreamWebsocketAuthID,
 		)
 		requestRequiresCurrentUpstreamWebsocket := responsesWebsocketRequestRequiresCurrentUpstream(payload)
+		forceBridge := h.responsesWebsocketForceBridge(requestModelName)
+		if forceBridge {
+			nativeWebsocketPassthrough = false
+		}
 		if upstreamMode == responsesWebsocketUpstreamModeWS && !nativeWebsocketPassthrough {
 			if requestRequiresCurrentUpstreamWebsocket {
 				replayErr := responsesWebsocketHTTPReplayRequiredError()
@@ -577,7 +581,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		var updatedLastRequest []byte
 		var errMsg *interfaces.ErrorMessage
 		previousResponseID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
-		isPrewarm := !useUpstreamWebsocketPassthrough && shouldHandleResponsesWebsocketPrewarmLocally(payload, false)
+		isPrewarm := !forceBridge && !useUpstreamWebsocketPassthrough && shouldHandleResponsesWebsocketPrewarmLocally(payload, false)
 		if pendingPrewarmID != "" && previousResponseID != "" {
 			if previousResponseID != pendingPrewarmID {
 				errMsg = responsesWebsocketPreviousResponseNotFoundError()
@@ -606,6 +610,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				// No parent reference means a self-contained replacement, not a delta.
 				requestJSON, updatedLastRequest, errMsg = normalizeResponseCreateRequest(normalizeResponseTranscriptReplacement(payload, lastRequest))
 			}
+		} else if forceBridge && previousResponseID != "" && previousResponseID != lastResponseID {
+			errMsg = responsesWebsocketPreviousResponseNotFoundError()
 		} else if nativeWebsocketPassthrough {
 			requestJSON, errMsg = normalizeResponsesWebsocketPassthroughRequest(payload, requestModelName)
 		} else if len(lastRequest) == 0 && strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String()) != "" {
@@ -700,6 +706,13 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			cliCtx = cliproxyexecutor.WithRequiredUpstreamWebsocket(cliCtx)
 		}
 		cliCtx = handlers.WithExecutionSessionID(cliCtx, passthroughSessionID)
+		cliCtx = cliproxyexecutor.WithUpstreamTransportCallback(cliCtx, func(websocket bool) {
+			attemptedUpstreamMode = responsesWebsocketUpstreamModeHTTP
+			if websocket {
+				attemptedUpstreamMode = responsesWebsocketUpstreamModeWS
+			}
+			codexDuplexStream.Store(websocket && duplexInput != nil)
+		})
 		cliCtx = handlers.WithSelectedAuthIDCallback(cliCtx, func(authID string) {
 			preserveNativeOutput.Store(false)
 			codexDuplexStream.Store(false)
@@ -790,7 +803,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		toolCacheTurn.commit()
 		pendingPrewarmID = ""
 		upstreamMode = attemptedUpstreamMode
-		if upstreamMode == responsesWebsocketUpstreamModeWS {
+		if upstreamMode == responsesWebsocketUpstreamModeWS && !forceBridge {
 			upstreamWebsocketAuthID = lastAttemptedAuthID
 			if lastAttemptedAuthID != "" {
 				rememberPinnedAuth(lastAttemptedAuthID, modelName)
@@ -802,6 +815,10 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			lastResponseID = ""
 			lastResponsePendingToolCallIDs = nil
 		} else {
+			if forceBridge {
+				// Full history remains authoritative even when this request used WS.
+				upstreamMode = responsesWebsocketUpstreamModeHTTP
+			}
 			upstreamWebsocketAuthID = ""
 			lastRequest = nextLastRequest
 			lastResponseOutput = completedOutput
@@ -845,6 +862,12 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			}
 			lastResponseID = strings.TrimSpace(completedResponseID)
 			lastResponsePendingToolCallIDs = append([]string(nil), completedPendingToolCallIDs...)
+			if forceBridge && len(lastRequest)+len(lastResponseOutput) > 8<<20 {
+				lastRequest = nil
+				lastResponseOutput = nil
+				lastResponseID = ""
+				lastResponsePendingToolCallIDs = nil
+			}
 		}
 	}
 }

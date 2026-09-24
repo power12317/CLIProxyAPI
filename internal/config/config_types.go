@@ -180,6 +180,8 @@ type AntigravityConnectionPoolConfig struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
+	// ForceWebsocket prefers ChatGPT Codex WebSockets independently of the downstream transport.
+	ForceWebsocket  bool `yaml:"force-websocket" json:"force-websocket"`
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
 	// DeviceConvergence controls whether Codex installation identities are rewritten to a
 	// stable account-and-system identity. A nil value defaults to enabled.
