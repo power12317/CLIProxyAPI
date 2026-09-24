@@ -629,6 +629,9 @@ type HostModelExecutionRequest struct {
 	ForcedProvider string `json:"forced_provider,omitempty"`
 	// AuthID optionally locks execution to an exact credential ID.
 	AuthID string `json:"auth_id,omitempty"`
+	// ProxyURL optionally overrides the outbound proxy for this model execution only.
+	// Supported schemes are http, https, socks5, and socks5h.
+	ProxyURL string `json:"proxy_url,omitempty"`
 }
 
 // HostModelExecutionResponse describes a non-streaming host model execution response.
@@ -1402,6 +1405,10 @@ type ManagementResponse struct {
 
 // UsageRecord describes request usage and billing metadata.
 type UsageRecord struct {
+	// RequestID uniquely identifies this specific model execution instance (UUID v4).
+	RequestID string
+	// TraceID identifies the parent inbound HTTP request when available (8-character hex).
+	TraceID string
 	// Provider identifies the upstream provider.
 	Provider string
 	// BaseURL is the upstream base URL configured for the request/credential when available.
@@ -1434,6 +1441,8 @@ type UsageRecord struct {
 	ReasoningEffort string
 	// ServiceTier records the requested or reported service tier.
 	ServiceTier string
+	// ResponseServiceTier stores the final tier reported by the upstream response.
+	ResponseServiceTier string
 	// System stores the Codex client system when known.
 	System string
 	// RequestTurnStateLen and ResponseTurnStateLen store Codex turn-state sizes.
@@ -1442,6 +1451,8 @@ type UsageRecord struct {
 	// Generate reports whether the client requested actual generation.
 	// The host normalizes omitted usage.Record values to true before delivery.
 	Generate bool
+	// Stream reports whether the request was executed in streaming mode.
+	Stream bool
 	// RequestedAt is the time the request was received.
 	RequestedAt time.Time
 	// Latency is the total request latency.

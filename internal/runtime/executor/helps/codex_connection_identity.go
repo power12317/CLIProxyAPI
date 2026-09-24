@@ -35,6 +35,7 @@ func CodexOwnerFingerprint(auth *cliproxyauth.Auth) string {
 
 // CodexConnectionFingerprint contains only handshake-stable settings. Per-turn
 // headers and infrastructure cookies must not force a reconnect on every request.
+// proxyURL is the final execution proxy resolved by the caller.
 func CodexConnectionFingerprint(auth *cliproxyauth.Auth, headers http.Header, proxyURL string) string {
 	stable := make(http.Header)
 	for key, values := range headers {
@@ -43,9 +44,6 @@ func CodexConnectionFingerprint(auth *cliproxyauth.Auth, headers http.Header, pr
 			continue
 		}
 		stable[strings.ToLower(key)] = values
-	}
-	if auth != nil && strings.TrimSpace(auth.ProxyURL) != "" {
-		proxyURL = auth.ProxyURL
 	}
 	return codexIdentityDigest([]any{CodexOwnerFingerprint(auth), stable, strings.TrimSpace(proxyURL)})
 }

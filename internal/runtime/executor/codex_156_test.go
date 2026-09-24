@@ -301,7 +301,7 @@ func TestCodex156WebsocketCredentialRevisionReconnects(t *testing.T) {
 	}
 	headers.Set("Authorization", "Bearer renewed")
 	auth.Metadata["access_token"] = "renewed"
-	if conn, _ := existingWebsocketSessionConn(sess, auth.ID, target, helps.CodexConnectionFingerprint(auth, headers, "")); conn != nil {
+	if conn, _ := existingWebsocketSessionConn(sess, auth.ID, target, "", helps.CodexConnectionFingerprint(auth, headers, "")); conn != nil {
 		t.Fatal("required reuse accepted old credential")
 	}
 	renewed, _, _, err := executor.ensureUpstreamConn(context.Background(), auth, sess, auth.ID, target, headers)

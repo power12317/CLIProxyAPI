@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -389,10 +390,10 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	if auth != nil {
 		attrs = auth.Attributes
 	}
-	applyCodexCloakingHeaders(r.Header, cfg)
-	if cfg != nil && !cfg.Codex.DisableCodexCloaking && cfgUserAgent != "" {
+	applyCodexCloakingHeaders(r.Header, cfg, auth)
+	if cfg != nil && !isCodexCloakingDisabled(cfg, auth) && cfgUserAgent != "" {
 		r.Header.Set("User-Agent", cfgUserAgent)
-	} else if cfg != nil && !cfg.Codex.DisableCodexCloaking && helps.CodexAuthUsesOAuthCookieJar(auth) {
+	} else if cfg != nil && !isCodexCloakingDisabled(cfg, auth) && helps.CodexAuthUsesOAuthCookieJar(auth) {
 		r.Header.Set("User-Agent", helps.CodexOAuthUserAgent(auth))
 	}
 	if strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex-tui/") || strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex_cli_rs/") {
@@ -442,8 +443,27 @@ func applyCodexConfiguredHeaderOverrides(r *http.Request, auth *cliproxyauth.Aut
 	}
 }
 
-func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config) {
-	if headers == nil || cfg == nil || cfg.Codex.DisableCodexCloaking {
+func isCodexCloakingDisabled(cfg *config.Config, auth *cliproxyauth.Auth) bool {
+	if auth != nil && len(auth.Attributes) > 0 {
+		if val, ok := auth.Attributes[cliproxyauth.AttributeCodexDisableCloaking]; ok {
+			if parsed, errParse := strconv.ParseBool(strings.TrimSpace(val)); errParse == nil {
+				return parsed
+			}
+		}
+	}
+	if entry := resolveCodexKeyConfig(cfg, auth); entry != nil && entry.DisableCodexCloaking != nil {
+		return *entry.DisableCodexCloaking
+	}
+	if cfg != nil && cfg.Codex.DisableCodexCloaking {
+		return true
+	}
+	return false
+}
+
+// applyCodexCloakingHeaders sets baseline identity only; configured and native
+// client header precedence is applied afterward.
+func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config, auth *cliproxyauth.Auth) {
+	if headers == nil || cfg == nil || isCodexCloakingDisabled(cfg, auth) {
 		return
 	}
 	headers.Set("User-Agent", codexUserAgent)

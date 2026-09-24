@@ -184,7 +184,7 @@ type CodexConfig struct {
 	// DeviceConvergence controls whether Codex installation identities are rewritten to a
 	// stable account-and-system identity. A nil value defaults to enabled.
 	DeviceConvergence *bool `yaml:"device-convergence,omitempty" json:"device-convergence,omitempty"`
-	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
+	// DisableCodexCloaking disables baseline Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
 	// StreamBootstrapBuffering holds back the frames that arrive before generation starts, none of
 	// which the client has seen anything from - the handshake (response.created, response.in_progress,
@@ -224,6 +224,9 @@ type CodexConfig struct {
 	TurnStateTicket CodexTurnStateTicketConfig `yaml:"turn-state-ticket" json:"turn-state-ticket"`
 	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
+	// ResponseSteering enables full-duplex Codex WebSockets, bound to one
+	// upstream model/account/socket for their entire lifetime. Default is false.
+	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
 }
 
 // CodexTurnStateTicketConfig controls Codex turn-state retention and timed refresh.
@@ -705,6 +708,10 @@ type CodexKey struct {
 	// DisableCooling overrides the global cooling policy for this credential when set.
 	// True disables auth/model cooldowns; false explicitly enables them.
 	DisableCooling *bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
+
+	// DisableCodexCloaking optionally overrides the global codex.disable-codex-cloaking for this credential.
+	// True disables baseline cloaking; false enables it; omitted inherits global. Explicit headers retain precedence.
+	DisableCodexCloaking *bool `yaml:"disable-codex-cloaking,omitempty" json:"disable-codex-cloaking,omitempty"`
 
 	// RequestRetry optionally overrides the global request-retry for this credential.
 	// Nil or a negative value means "use the global request-retry". 0 disables additional retry rounds.

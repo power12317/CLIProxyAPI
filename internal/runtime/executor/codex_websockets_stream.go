@@ -28,97 +28,35 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}
 
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
-	apiKey, baseURL := codexCreds(auth)
-	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api/codex"
-	}
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
 	defer reporter.TrackFailure(ctx, &err)
 
-	from := opts.SourceFormat
-	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
-	preserveNativeOutput := helps.IsNativeCodexRequest(req.Payload, opts)
-	to := sdktranslator.FromString("codex")
-	originalPayloadSource := req.Payload
-	if len(opts.OriginalRequest) > 0 {
-		originalPayloadSource = opts.OriginalRequest
-	}
-	originalPayload := originalPayloadSource
-	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
-	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
-	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, true, isCompat)
-
-	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
+	prepared, err := e.prepareCodexWebsocketStream(ctx, auth, req, opts)
 	if err != nil {
 		return nil, err
 	}
-
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
-	body = helps.SetStringIfDifferent(body, "model", baseModel)
-	body = normalizeCodexInstructions(body, preserveNativeOutput)
-	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
-	body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
-	if err != nil {
-		return nil, err
-	}
-	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex websockets executor", body, isCompat)
-	body = normalizeCodexWebsocketParallelToolCalls(body, toolHeaders, officialCodexRequest)
-	body = helps.NormalizeCodexToolSchemas(body)
-	multiAgentV2Conflict := helps.HasCodexMultiAgentV2NamespaceConflict(body)
-	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
-	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
-	if errReplay != nil {
-		return nil, errReplay
-	}
-
-	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
-	wsURL, err := buildCodexResponsesWebsocketURL(httpURL)
-	if err != nil {
-		return nil, err
-	}
-
-	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithContext(ctx, from, req, body, opts.Headers)
-	if errPromptCache != nil {
-		return nil, errPromptCache
-	}
-	clientBody := body
-	var identityState codexIdentityConfuseState
-	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
-	var oauthIdentity helps.CodexOAuthIdentity
-	officialOAuthRequest := false
-	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(upstreamBody) {
-		upstreamBody, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
-	}
-	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, baseModel, officialCodexRequest, toolHeaders)
-	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
-	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
-	if officialOAuthRequest {
-		ua, beta := codexHeaderDefaults(e.cfg, auth)
-		helps.ApplyCodexOAuthHeaders(wsHeaders, oauthIdentity, baseModel, true, ua, beta)
-		// Keep only one spelling of the routing session header on the wire.
-		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
-		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
-	}
-	applyModelHeaderOverrides(wsHeaders, baseModel)
-	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody, baseModel, officialCodexRequest)
-	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
-	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
-	turnState.ApplyHeaders(wsHeaders)
-	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
-	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, wsHeaders); errTicket != nil {
-		return nil, errTicket
-	}
-	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
-	turnState.ObserveRequest(wsHeaders, upstreamBody)
+	from := prepared.from
+	responseFormat := prepared.responseFormat
+	to := prepared.to
+	preserveNativeOutput := prepared.preserveNativeOutput
+	originalPayload := prepared.originalPayload
+	clientBody := prepared.clientBody
+	upstreamBody := prepared.upstreamBody
+	wsURL := prepared.wsURL
+	wsHeaders := prepared.wsHeaders
+	identityState := prepared.identityState
+	replayScope := prepared.replayScope
+	optimizeMultiAgentV2 := prepared.optimizeMultiAgentV2
+	multiAgentV2Conflict := prepared.multiAgentV2Conflict
+	turnState := prepared.turnState
 	logTurnStateOnReturn := false
 	defer func() {
 		if logTurnStateOnReturn {
 			turnState.LogResponse(ctx, e.cfg, true)
 		}
 	}()
+	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 
 	var authID, authLabel, authType, authValue string
 	authID = auth.ID
@@ -165,7 +103,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	var errDial error
 	dialCtx := ctx
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, helps.CodexConnectionFingerprint(auth, wsHeaders, e.cfg.ProxyURL))
+		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth), helps.CodexConnectionFingerprint(auth, wsHeaders, executionProxyURL(ctx, e.cfg, auth)))
 		if conn == nil {
 			unlockStreamSession()
 			return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
@@ -311,6 +249,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 
 	if optimizeMultiAgentV2 || multiAgentV2Conflict {
 		sess.setMultiAgentV2Optimized(conn, optimizeMultiAgentV2 && !multiAgentV2Conflict)
+	}
+
+	if input := cliproxyexecutor.WebsocketInputFromContext(ctx); input != nil && e.cfg != nil && (e.cfg.Codex.ResponseSteering || e.cfg.CodexResponseSteering) {
+		logTurnStateOnReturn = false
+		return e.streamCodexDuplex(ctx, auth, req, opts, sess, conn, readCh, input, prepared, reporter, upstreamHeaders, unlockStreamSession), nil
 	}
 
 	buffering := e.cfg != nil && e.cfg.Codex.StreamBootstrapBuffering
@@ -815,4 +758,125 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}()
 
 	return &cliproxyexecutor.StreamResult{Headers: upstreamHeaders, Chunks: out}, nil
+}
+
+// codexWebsocketPrepared contains the request pipeline output shared by the
+// ordinary per-response stream and subsequent creates on a duplex connection.
+type codexWebsocketPrepared struct {
+	from                 sdktranslator.Format
+	responseFormat       sdktranslator.Format
+	to                   sdktranslator.Format
+	preserveNativeOutput bool
+	originalPayload      []byte
+	clientBody           []byte
+	upstreamBody         []byte
+	wsURL                string
+	wsHeaders            http.Header
+	identityState        codexIdentityConfuseState
+	turnState            *helps.CodexTurnState
+	replayScope          codexReasoningReplayScope
+	optimizeMultiAgentV2 bool
+	multiAgentV2Conflict bool
+}
+
+func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*codexWebsocketPrepared, error) {
+	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	apiKey, baseURL := codexCreds(auth)
+	if baseURL == "" {
+		baseURL = "https://chatgpt.com/backend-api/codex"
+	}
+	var err error
+	from := opts.SourceFormat
+	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
+	preserveNativeOutput := helps.IsNativeCodexRequest(req.Payload, opts)
+	to := sdktranslator.FromString("codex")
+	originalPayloadSource := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		originalPayloadSource = opts.OriginalRequest
+	}
+	originalPayload := originalPayloadSource
+	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
+	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
+	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, true, isCompat)
+
+	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
+	if err != nil {
+		return nil, err
+	}
+
+	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+	requestPath := helps.PayloadRequestPath(opts)
+	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	body = helps.SetStringIfDifferent(body, "model", baseModel)
+	body = normalizeCodexInstructions(body, preserveNativeOutput)
+	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
+	body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
+	if err != nil {
+		return nil, err
+	}
+	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex websockets executor", body, isCompat)
+	body = normalizeCodexWebsocketParallelToolCalls(body, toolHeaders, officialCodexRequest)
+	body = helps.NormalizeCodexToolSchemas(body)
+	multiAgentV2Conflict := helps.HasCodexMultiAgentV2NamespaceConflict(body)
+	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
+	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
+	if errReplay != nil {
+		return nil, errReplay
+	}
+
+	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
+	wsURL, err := buildCodexResponsesWebsocketURL(httpURL)
+	if err != nil {
+		return nil, err
+	}
+
+	body, wsHeaders, errPromptCache := applyCodexPromptCacheHeadersWithContext(ctx, from, req, body, opts.Headers)
+	if errPromptCache != nil {
+		return nil, errPromptCache
+	}
+	clientBody := body
+	var identityState codexIdentityConfuseState
+	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
+	var oauthIdentity helps.CodexOAuthIdentity
+	officialOAuthRequest := false
+	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(upstreamBody) {
+		upstreamBody, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
+	}
+	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, baseModel, officialCodexRequest, toolHeaders)
+	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
+	if officialOAuthRequest {
+		ua, beta := codexHeaderDefaults(e.cfg, auth)
+		helps.ApplyCodexOAuthHeaders(wsHeaders, oauthIdentity, baseModel, true, ua, beta)
+		// Keep only one spelling of the routing session header on the wire.
+		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
+		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
+	}
+	applyModelHeaderOverrides(wsHeaders, baseModel)
+	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody, baseModel, officialCodexRequest)
+	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
+	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
+	turnState.ApplyHeaders(wsHeaders)
+	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
+	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, wsHeaders); errTicket != nil {
+		return nil, errTicket
+	}
+	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
+	turnState.ObserveRequest(wsHeaders, upstreamBody)
+
+	return &codexWebsocketPrepared{
+		from:                 from,
+		responseFormat:       responseFormat,
+		to:                   to,
+		preserveNativeOutput: preserveNativeOutput,
+		originalPayload:      originalPayload,
+		clientBody:           clientBody,
+		upstreamBody:         upstreamBody,
+		wsURL:                wsURL,
+		wsHeaders:            wsHeaders,
+		identityState:        identityState,
+		turnState:            turnState,
+		replayScope:          replayScope,
+		optimizeMultiAgentV2: optimizeMultiAgentV2,
+		multiAgentV2Conflict: multiAgentV2Conflict,
+	}, nil
 }

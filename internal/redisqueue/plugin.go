@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	coresession "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
@@ -54,6 +55,14 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 	apiKey := strings.TrimSpace(record.APIKey)
 	requestID := strings.TrimSpace(internallogging.GetRequestID(ctx))
+	traceID := strings.TrimSpace(record.TraceID)
+	if traceID == "" {
+		traceID = requestID
+	}
+	executionID := strings.TrimSpace(record.RequestID)
+	if executionID == "" {
+		executionID = uuid.NewString()
+	}
 	reasoningEffort := strings.TrimSpace(record.ReasoningEffort)
 	if reasoningEffort == "" {
 		reasoningEffort = coreusage.ReasoningEffortFromContext(ctx)
@@ -110,24 +119,30 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 
 	detail := requestDetail{
-		Timestamp:       timestamp,
-		LatencyMs:       record.Latency.Milliseconds(),
-		TTFTMs:          record.TTFT.Milliseconds(),
-		Source:          record.Source,
-		AuthIndex:       record.AuthIndex,
-		AccessTokenHash: record.AccessTokenSHA256,
-		ClientIP:        clientRequestMetadata.ClientIP,
-		XForwardedFor:   clientRequestMetadata.XForwardedFor,
-		UserAgent:       clientRequestMetadata.UserAgent,
-		Tokens:          tokens,
-		Failed:          failed,
-		Generate:        coreusage.GenerateEnabled(record.Generate),
-		Stream:          stream,
-		Fail:            fail,
-		ResponseHeaders: record.ResponseHeaders,
+		Timestamp:        timestamp,
+		LatencyMs:        record.Latency.Milliseconds(),
+		TTFTMs:           record.TTFT.Milliseconds(),
+		Source:           record.Source,
+		AuthIndex:        record.AuthIndex,
+		AccessTokenHash:  record.AccessTokenSHA256,
+		ClientIP:         clientRequestMetadata.ClientIP,
+		ResolvedClientIP: clientRequestMetadata.ResolvedClientIP,
+		XForwardedFor:    clientRequestMetadata.XForwardedFor,
+		UserAgent:        clientRequestMetadata.UserAgent,
+		Tokens:           tokens,
+		Failed:           failed,
+		Generate:         coreusage.GenerateEnabled(record.Generate),
+		Stream:           stream,
+		Fail:             fail,
+		ResponseHeaders:  record.ResponseHeaders,
 	}
 
 	payload, err := json.Marshal(queuedUsageDetail{
+		ExecutionID:          executionID,
+		TraceID:              traceID,
+		NodeKind:             strings.TrimSpace(clientRequestMetadata.NodeKind),
+		IsFork:               clientRequestMetadata.IsFork,
+		IsCompaction:         clientRequestMetadata.IsCompaction,
 		requestDetail:        detail,
 		AccountingVersion:    coreusage.TokenAccountingSchemaVersion,
 		TokenBreakdown:       usageDetail.TokenBreakdown,
@@ -159,6 +174,11 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 }
 
 type queuedUsageDetail struct {
+	ExecutionID  string `json:"execution_id,omitempty"`
+	TraceID      string `json:"trace_id,omitempty"`
+	NodeKind     string `json:"node_kind,omitempty"`
+	IsFork       bool   `json:"is_fork,omitempty"`
+	IsCompaction bool   `json:"is_compaction,omitempty"`
 	requestDetail
 	AccountingVersion    int                      `json:"accounting_version"`
 	TokenBreakdown       coreusage.TokenBreakdown `json:"token_breakdown"`
@@ -185,21 +205,22 @@ type queuedUsageDetail struct {
 }
 
 type requestDetail struct {
-	Timestamp       time.Time   `json:"timestamp"`
-	LatencyMs       int64       `json:"latency_ms"`
-	TTFTMs          int64       `json:"ttft_ms"`
-	Source          string      `json:"source"`
-	AuthIndex       string      `json:"auth_index"`
-	AccessTokenHash string      `json:"access_token_sha256,omitempty"`
-	ClientIP        string      `json:"client_ip"`
-	XForwardedFor   string      `json:"x_forwarded_for"`
-	UserAgent       string      `json:"user_agent"`
-	Tokens          tokenStats  `json:"tokens"`
-	Failed          bool        `json:"failed"`
-	Generate        bool        `json:"generate"`
-	Stream          bool        `json:"stream"`
-	Fail            failDetail  `json:"fail"`
-	ResponseHeaders http.Header `json:"response_headers,omitempty"`
+	Timestamp        time.Time   `json:"timestamp"`
+	LatencyMs        int64       `json:"latency_ms"`
+	TTFTMs           int64       `json:"ttft_ms"`
+	Source           string      `json:"source"`
+	AuthIndex        string      `json:"auth_index"`
+	AccessTokenHash  string      `json:"access_token_sha256,omitempty"`
+	ClientIP         string      `json:"client_ip"`
+	ResolvedClientIP string      `json:"resolved_client_ip"`
+	XForwardedFor    string      `json:"x_forwarded_for"`
+	UserAgent        string      `json:"user_agent"`
+	Tokens           tokenStats  `json:"tokens"`
+	Failed           bool        `json:"failed"`
+	Generate         bool        `json:"generate"`
+	Stream           bool        `json:"stream"`
+	Fail             failDetail  `json:"fail"`
+	ResponseHeaders  http.Header `json:"response_headers,omitempty"`
 }
 
 type tokenStats struct {

@@ -9,6 +9,15 @@ func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing
 	}
 }
 
+func TestGetStaticModelDefinitionsByChannelSupportsKimiAndKimiAI(t *testing.T) {
+	for _, channel := range []string{"kimi", "kimi-ai", "kimi.ai", "kimi.com"} {
+		models := GetStaticModelDefinitionsByChannel(channel)
+		if len(models) == 0 {
+			t.Fatalf("GetStaticModelDefinitionsByChannel(%s) returned no models", channel)
+		}
+	}
+}
+
 func TestModelOverrideHeadersFromEmbeddedModels(t *testing.T) {
 	const wantUA = "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
 	got := ModelOverrideHeaders("gpt-5.6-luna")
@@ -220,8 +229,8 @@ func TestGetDevinModelsFallback(t *testing.T) {
 		}
 		if m != nil && m.ID == "devin/grok-4-6" {
 			foundGrok46 = true
-			if m.OwnedBy != "xai" {
-				t.Errorf("devin/grok-4-6 OwnedBy = %q, want xai", m.OwnedBy)
+			if m.OwnedBy != "devin" {
+				t.Errorf("devin/grok-4-6 OwnedBy = %q, want devin", m.OwnedBy)
 			}
 		}
 		if m != nil && m.ID == "devin/deepseek-v4-flash" {

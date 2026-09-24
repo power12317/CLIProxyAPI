@@ -120,7 +120,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		sessionFallback = uuid.NewString()
 	}
 	ensureCodexWebsocketSessionHeader(headers, ginHeaders, sessionFallback)
-	if nativeRequest && cfg != nil && cfg.Codex.DisableCodexCloaking {
+	if nativeRequest && isCodexCloakingDisabled(cfg, auth) {
 		deleteHeaderCaseInsensitive(headers, "session_id")
 		deleteHeaderCaseInsensitive(headers, "conversation_id")
 		for key, values := range ginHeaders {
@@ -151,10 +151,10 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		attrs = auth.Attributes
 	}
 	req := (&http.Request{Header: headers}).WithContext(ctx)
-	applyCodexCloakingHeaders(headers, cfg)
-	if cfg != nil && !cfg.Codex.DisableCodexCloaking && cfgUserAgent != "" {
+	applyCodexCloakingHeaders(headers, cfg, auth)
+	if cfg != nil && !isCodexCloakingDisabled(cfg, auth) && cfgUserAgent != "" {
 		headers.Set("User-Agent", cfgUserAgent)
-	} else if cfg != nil && !cfg.Codex.DisableCodexCloaking && helps.CodexAuthUsesOAuthCookieJar(auth) {
+	} else if cfg != nil && !isCodexCloakingDisabled(cfg, auth) && helps.CodexAuthUsesOAuthCookieJar(auth) {
 		headers.Set("User-Agent", helps.CodexOAuthUserAgent(auth))
 	}
 	if strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex-tui/") || strings.HasPrefix(ginHeaders.Get("User-Agent"), "codex_cli_rs/") {

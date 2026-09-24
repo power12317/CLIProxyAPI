@@ -162,7 +162,16 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 	if sessionID == "" || sessionID == parentSessionID {
 		parentSessionID = ""
 	}
+	requestID := strings.TrimSpace(record.RequestID)
+	traceID := strings.TrimSpace(record.TraceID)
+	if traceID == "" {
+		traceID = strings.TrimSpace(logging.GetRequestID(ctx))
+	}
 	plugin.HandleUsage(ctx, pluginapi.UsageRecord{
+		RequestID:            requestID,
+		TraceID:              traceID,
+		ResponseServiceTier:  record.ResponseServiceTier,
+		Stream:               record.Stream,
 		Provider:             record.Provider,
 		BaseURL:              record.BaseURL,
 		ExecutorType:         record.ExecutorType,
