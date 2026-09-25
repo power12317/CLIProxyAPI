@@ -1,15 +1,78 @@
 package helps
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+// RecordBasispointsFailure promotes this failed request to full local error
+// logging even with request-log disabled. Request bodies and the failing event
+// are complete; authorization headers are not copied into these diagnostics.
+func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original, wire, upstream []byte, phase string, err error) {
+	if cfg == nil || cfg.CommercialMode || err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	ginCtx := ginContextFrom(ctx)
+	if ginCtx == nil {
+		return
+	}
+	ginCtx.Set(logging.ForceErrorLogContextKey, true)
+	if len(original) > 0 {
+		ginCtx.Set("REQUEST_BODY_OVERRIDE", bytes.Clone(original))
+	}
+	fullLogging := *cfg
+	fullLogging.RequestLog = true
+	if !cfg.RequestLog || phase == "prepare" || phase == "attachment_upload" {
+		RecordAPIRequest(ctx, &fullLogging, UpstreamRequestLog{
+			URL: basispoints.ResponsesURL, Method: http.MethodPost, Body: wire, Provider: "codex",
+		})
+	}
+	RecordAPIResponseError(ctx, &fullLogging, fmt.Errorf("Basispoints phase=%s: %w", phase, err))
+	if !cfg.RequestLog && len(upstream) > 0 {
+		AppendAPIResponseChunk(ctx, &fullLogging, upstream)
+	}
+	// Print the decoded transport input as well as its JSON envelope, so raw
+	// newlines, quotes and the exact failing code need no manual unescaping.
+	output := gjson.GetBytes(upstream, "response.output")
+	if !output.IsArray() {
+		output = gjson.GetBytes(upstream, "output")
+	}
+	var tools strings.Builder
+	for _, item := range output.Array() {
+		kind := item.Get("type").String()
+		if kind != "function_call" && kind != "custom_tool_call" {
+			continue
+		}
+		fmt.Fprintf(&tools, "\n=== BASISPOINTS TOOL INPUT ===\nName: %s\nCall ID: %s\n", item.Get("name").String(), item.Get("call_id").String())
+		if kind == "custom_tool_call" {
+			fmt.Fprintf(&tools, "Input:\n%s\n", item.Get("input").String())
+			continue
+		}
+		arguments := item.Get("arguments")
+		if arguments.Type == gjson.String {
+			arguments = gjson.Parse(arguments.String())
+		}
+		fmt.Fprintf(&tools, "Arguments:\n%s\n", item.Get("arguments").String())
+		if code := arguments.Get("code"); code.Type == gjson.String {
+			fmt.Fprintf(&tools, "Transport code:\n%s\n", code.String())
+		}
+	}
+	if tools.Len() > 0 {
+		AppendAPIResponseChunk(ctx, &fullLogging, []byte(tools.String()))
+	}
+}
 
 // NewBasispointsLogState uses the existing Codex access-log representation.
 // The identity body is for logging only, never sent to Basispoints.

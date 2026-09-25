@@ -35,6 +35,10 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		return nil, nil, nil, statusErr{code: 400, msg: `{"error":{"type":"invalid_request_error","code":"unsupported_endpoint","message":"Basispoints uses the Responses endpoint; compact is not supported"}}`, requestScoped: true}
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	original := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		original = opts.OriginalRequest
+	}
 	body := bytes.Clone(req.Payload)
 	from := opts.SourceFormat
 	if from == "" {
@@ -75,6 +79,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	}
 	body, bridge, err := basispoints.Prepare(body, basispoints.Scope(caller, authID), session, &basispoints.SharedCache)
 	if err != nil {
+		helps.RecordBasispointsFailure(ctx, e.cfg, original, nil, nil, "prepare", err)
 		return nil, nil, nil, err
 	}
 	token, _ := codexCreds(auth)
@@ -85,23 +90,30 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	if token == "" || accountID == "" {
 		return nil, nil, nil, statusErr{code: 401, msg: `{"error":{"type":"authentication_error","message":"Basispoints requires a ChatGPT OAuth access token and account ID"}}`, requestScoped: true}
 	}
+	headers := basispoints.Headers(token, accountID)
+	turnState := helps.NewBasispointsLogState(ctx, auth, basispoints.ResponsesURL, req.Payload, body, opts.Headers, baseModel)
+	turnState.ObserveRequest(headers, nil)
+	reporter.SetTranslatedReasoningEffort(body, "openai")
+	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client = reporter.TrackHTTPClient(client)
+	body, err = basispoints.UploadInputImages(ctx, client, body, headers, basispoints.Scope(caller, authID), &basispoints.SharedAttachments)
+	if err != nil {
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
+		helps.RecordBasispointsFailure(ctx, e.cfg, original, nil, nil, "attachment_upload", err)
+		return nil, nil, nil, err
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, basispoints.ResponsesURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	httpReq.Header = basispoints.Headers(token, accountID)
-	turnState := helps.NewBasispointsLogState(ctx, auth, basispoints.ResponsesURL, req.Payload, body, opts.Headers, baseModel)
-	turnState.ObserveRequest(httpReq.Header, nil)
-	reporter.SetTranslatedReasoningEffort(body, "openai")
+	httpReq.Header = headers
 	var authLabel, authType, authValue string
 	if auth != nil {
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{URL: httpReq.URL.String(), Method: httpReq.Method, Headers: httpReq.Header.Clone(), Body: body, Provider: "codex", AuthID: authID, AuthLabel: authLabel, AuthType: authType, AuthValue: authValue})
-	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	client = reporter.TrackHTTPClient(client)
 	response, err := client.Do(httpReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -129,7 +141,11 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		helps.AppendAPIResponseChunk(ctx, e.cfg, raw)
 		helps.LogBasispointsRejection(ctx, response.StatusCode, body, response.Header)
 		requestScoped := (&basispoints.Error{Status: response.StatusCode}).IsRequestScoped()
-		return nil, nil, nil, statusErr{code: response.StatusCode, msg: string(raw), requestScoped: requestScoped, retryAfter: openAICompatRetryAfter(response.StatusCode, response.Header, raw, time.Now())}
+		errRejected := statusErr{code: response.StatusCode, msg: string(raw), requestScoped: requestScoped, retryAfter: openAICompatRetryAfter(response.StatusCode, response.Header, raw, time.Now())}
+		if requestScoped {
+			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, raw, "upstream_rejected", errRejected)
+		}
+		return nil, nil, nil, errRejected
 	}
 	return response, bridge, body, nil
 }
@@ -154,6 +170,11 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 		return nil
 	})
 	if err != nil {
+		original := req.Payload
+		if len(opts.OriginalRequest) > 0 {
+			original = opts.OriginalRequest
+		}
+		helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", err)
 		return result, err
 	}
 	if len(completed) == 0 {
@@ -218,6 +239,11 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 			return nil
 		})
 		if errRead != nil {
+			original := req.Payload
+			if len(opts.OriginalRequest) > 0 {
+				original = opts.OriginalRequest
+			}
+			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", errRead)
 			reporter.PublishFailure(ctx, errRead)
 			select {
 			case out <- coreexecutor.StreamChunk{Err: errRead}:

@@ -41,7 +41,14 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 						}
 					}
 					raw, _ := io.ReadAll(r.Body)
-					if gjson.GetBytes(raw, "model").String() != model || gjson.GetBytes(raw, "reasoning_effort").String() != effort {
+					wireEffort := effort
+					if model == "gpt-6-astra" && effort == "max" {
+						wireEffort = "xhigh"
+						if gjson.GetBytes(raw, "input.0.type").String() != "configuration_update" || gjson.GetBytes(raw, "input.0.reasoning.effort").String() != "max" {
+							t.Fatal("requested max configuration missing")
+						}
+					}
+					if gjson.GetBytes(raw, "model").String() != model || gjson.GetBytes(raw, "reasoning_effort").String() != wireEffort {
 						t.Fatalf("request changed: %s", raw)
 					}
 					if effort == "" && gjson.GetBytes(raw, "reasoning_effort").Exists() {
@@ -51,7 +58,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 						t.Fatal("Codex-specific transport leaked")
 					}
 					status, payload := 200, fmt.Sprintf(`data: {"type":"response.completed","response":{"id":"resp_test","model":%q,"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n", model)
-					if effort == "max" || effort == "ultra" {
+					if wireEffort == "max" || wireEffort == "ultra" {
 						status, payload = 422, `{"detail":"unsupported effort"}`
 					}
 					return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(payload))}, nil
@@ -60,7 +67,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 				if calls != 1 {
 					t.Fatalf("calls = %d", calls)
 				}
-				if effort == "max" || effort == "ultra" {
+				if (effort == "max" && model != "gpt-6-astra") || effort == "ultra" {
 					if err == nil || err.(interface{ StatusCode() int }).StatusCode() != 422 || err.Error() != `{"detail":"unsupported effort"}` {
 						t.Fatalf("upstream error changed: %v", err)
 					}

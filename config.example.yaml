@@ -274,7 +274,8 @@ routing:
 
 # Codex provider behavior.
 codex:
-  # Route all Codex models through Basispoints, preserving model names and effort values.
+  # Route Codex models through Basispoints; hosted tools retain native Codex routing.
+  # Astra max uses wire xhigh plus input configuration_update reasoning.effort=max.
   basispoints:
     enabled: false
   # Prefer WebSockets for ChatGPT Codex generation, regardless of client transport.

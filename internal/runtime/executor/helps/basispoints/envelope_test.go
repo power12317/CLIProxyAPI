@@ -25,6 +25,9 @@ func TestToolEnvelopeFormattingVariants(t *testing.T) {
 		"illegal escape":          strings.Replace(plain, `\\d+`, `\d+`, 1),
 		"call wrapper":            "await functions.shell(" + plain + ");",
 		"direct argument wrapper": "functions.shell(" + args + ")",
+		"assignment wrapper":      "const request = " + plain + ";",
+		"assignment with escape":  "const request = " + strings.Replace(plain, `\\d+`, `\d+`, 1) + ";",
+		"prose after envelope":    "Tool request: " + plain + "\nEnd of request.",
 	}
 	for name, value := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -127,6 +130,7 @@ func TestToolEnvelopeStillRejectsIncompleteOrMultipleCalls(t *testing.T) {
 		"functions.shell(" + call + "); functions.shell(" + call + ")",
 		"functions.shell(" + call + ", " + call + ")",
 		"unknown_tool(" + call + ")",
+		"const first = " + call + "; const second = " + call + ";",
 		"await tools.exec_command({cmd: 'pwd'});",
 	} {
 		_, bridge, err := Prepare(catalogRequest(), "account", "session", &Cache{})

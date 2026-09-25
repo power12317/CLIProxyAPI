@@ -8,7 +8,7 @@
 
 - 不改模型名，不添加 `-basispoints` 或 `-excel` 后缀。
 - 不设置模型作用列表，不按模型名称决定是否切换，不增加模型能力白名单。
-- 推理强度原值发送；`low` 保留为 `low`，`max` 保留为 `max`，`ultra` 保留为 `ultra`。上游不支持就返回上游错误，不本地拒绝、不自动映射、不降档重试。
+- 推理强度默认原值发送；仅按用户 2026-09-25 最新确认，为 Basispoints 上的 `gpt-6-astra` 的 `max` 使用顶层 `xhigh` 和 `input` 中的 `configuration_update.reasoning.effort=max`。其他模型、强度及原有后缀解析不变；不进行降档或自动纠正重试。
 - 未指定推理强度时不擅自补 `medium`，由上游决定默认行为。
 - 原有后缀解析器保持不动。客户端的 `ultra` 协议不在这里新增为后缀或推理档位；透传只处理请求实际携带的 effort。
 - CPAMP 只增加一个开关，不增加模型选择或强度策略控件。
@@ -42,7 +42,7 @@ CPAMP 在现有 Codex 配置附近增加：
 ```text
 使用 Basispoints 接口                         [关闭]
 开启后，所有 Codex 模型请求改走 Basispoints。
-模型名称和推理强度保持原值。
+模型名称保持原值；推理强度仅有本文记录的 Astra max 特殊适配。
 ```
 
 沿用可视化编辑器的“修改草稿 → 保存配置”流程，通过现有 `/v0/management/config.yaml` 保存；现有 `/v0/management/config` 返回该布尔字段。不再为这个开关新增专用状态 API、模型管理接口、探测流程或 revision 协议。
@@ -100,7 +100,7 @@ x-basispoints-auth-mode: chatgpt
 {"reasoning_effort": "low"}
 ```
 
-`medium`、`high`、`xhigh`、`max`、`ultra` 同理，值不改变。不设置 `max-effort-policy`，不继承参考代码中 `max → xhigh` 或未知值回落 `medium` 的行为。按用户补充，`gpt-6-astra` 的 `low` 必须正常透传，不能因参考项目的旧能力列表而被删除或抬高。
+`medium`、`high`、`xhigh`、`ultra` 及其他模型的 `max` 同理，值不改变。不继承参考代码中未知值回落 `medium` 的行为。按用户最新确认，只有实际走 Basispoints 的 `gpt-6-astra` 请求 `max` 时，顶层发送 `reasoning_effort: "xhigh"`，并在 `input` 首部插入 `{"type":"configuration_update","reasoning":{"effort":"max"}}`，不写成提示词。`low` 仍正常透传。
 
 实现时让这条路径在 canonical 管线中采用强度透传策略，只做必要的结构解析，跳过模型能力列表驱动的档位拒绝、clamp、默认值补齐和降级。仍由对应 applier 写出 `reasoning_effort`，不要在 executor 中另写一套解析和优先级。通用校验也不能先把 `low/max/ultra` 改掉，再交给适配器“透传”。
 
@@ -148,7 +148,7 @@ x-basispoints-auth-mode: chatgpt
 
 1. 开关关闭行为与当前分支一致；开启后所有进入 Codex 通路的模型都访问 Basispoints，包括截图中曾报 403 的模型。上游响应决定结果。
 2. 模型名称保持不变，没有后缀、映射表或模型作用列表。CPAMP 只有一个功能开关。
-3. `low/medium/high/xhigh/max/ultra` 都以原值到达 fake upstream；未传强度则保持缺省；suffix/body 的既有优先级不变。
+3. 除 Astra max 的上述明确适配外，`low/medium/high/xhigh/max/ultra` 都以原值到达 fake upstream；未传强度保持缺省，suffix/body 的既有优先级不变。
 4. fake upstream 对 `max/ultra` 返回 400/422 时，客户端收到相应上游错误，不出现本地拦截、降档或切回原接口。
 5. 工具 JSON 二次解码、完整原生 item 回放、多轮 turn/iteration 和真实文本流式正确。
 6. 保存失败不改变生效配置；开关重启后保留；Full Docker 与 CPA Panel 均可保存和读取。
@@ -164,7 +164,7 @@ x-basispoints-auth-mode: chatgpt
 - 浏览器检查单开关交互和保存预览，确认只新增 `codex.basispoints.enabled`；该页面验证使用 demo 配置，不连接真实账号。
 - 确认 `internal/thinking/suffix.go` 与开发基线完全一致；没有扩展后缀解析规则。
 
-协议边界：已实现 Responses 文本、function/custom/namespace 工具、HTTP/SSE，以及下游 Responses WebSocket 的完整历史桥接。`/responses/compact` 返回明确的不支持错误；独立图片附件上传和原生 Office 内置工具不在本次实现中。模型名称和请求实际携带的 effort 不设置本地支持名单。
+协议边界：已实现 Responses 文本、function/custom/namespace 工具、HTTP/SSE，以及下游 Responses WebSocket 的完整历史桥接。`/responses/compact` 返回明确的不支持错误。2026-09-25 后续修复补充用户图片附件直传：调用 Basispoints 的 `/attachments`，将用户消息中的内联图片替换为返回的 `openai_file_id`，工具结果中的图片保持原有形式。模型名称不设置本地支持名单。
 
 ## 8. 参考
 

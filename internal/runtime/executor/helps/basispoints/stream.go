@@ -69,6 +69,7 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("[DONE]")) {
 			return nil
 		}
+		b.LastEvent = append(b.LastEvent[:0], raw...)
 		if b.ObserveEvent != nil {
 			b.ObserveEvent(raw)
 		}

@@ -89,3 +89,41 @@ suffixes, service tiers, and CPAMP remain unchanged by this follow-up.
 Verification includes before/after reproductions, full Go tests, focused race
 tests, and the required server build. Real upstream account generation is not
 part of these local regressions.
+
+## Images, Astra max and complete error logs — basispoints/v2026.09.25-8
+
+The explicitly requested Astra max adapter is inside Basispoints serialization:
+only `gpt-6-astra` with canonical effort `max` uses wire effort `xhigh` and prepends
+`{"type":"configuration_update","reasoning":{"effort":"max"}}` to input.
+This is a configuration item, not a prompt instruction. Other efforts/models,
+native Codex routing and the existing suffix parser remain unchanged.
+
+User-message inline images upload directly to the Basispoints attachments
+endpoint as multipart field `file`, using the selected account's authentication
+and proxy transport. The returned `openai_file_id` replaces `image_url` with
+`file_id`. Exact image bytes and explicit detail are preserved. Tool-result
+images keep their native inline representation. The cache holds only digests
+and file IDs, does not pin accounts, and reuploads when another account is
+selected. Upload errors are returned; images are never omitted to obtain success.
+No public image server or new configuration field is required.
+
+The parser additionally accepts one complete declared tool envelope inside an
+assignment or surrounding prose. This is deterministic parsing, not JavaScript
+execution or another generation attempt. No automatic tool-correction retry,
+image omission, effort downgrade retry, or account binding is introduced.
+
+Input rejection and response-conversion failures promote only the failed request
+to the existing error-log path. With `request-log: false`, `error-*.log` contains
+the complete original client body, complete generated upstream body, failing
+upstream payload/event, parsing phase, and decoded tool arguments/code. These
+failure snapshots do not use the normal 32 MiB deferred-capture cap. Streaming
+failures are logged even after downstream HTTP 200. Successes retain the normal
+logging policy. Authorization headers are not added to the diagnostic snapshot;
+normal header masking and the existing global commercial-mode logging disable
+remain in effect.
+
+Tests cover actual local HTTP multipart upload and response submission, JSON/SSE
+paths, cache reuse and account rotation, native-path isolation, suffix precedence,
+the exact max configuration item, malformed tool events, no correction retries,
+logging with request-log on/off, and bodies exceeding 32 MiB. They do not claim
+to validate live upstream account behavior.

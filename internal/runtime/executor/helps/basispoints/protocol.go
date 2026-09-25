@@ -104,6 +104,8 @@ type Bridge struct {
 	emitted map[string]object
 	// ObserveEvent receives untouched upstream events for the existing CPA logs.
 	ObserveEvent func([]byte)
+	// LastEvent retains the complete event that failed conversion for error logs.
+	LastEvent []byte
 }
 
 func decode(raw []byte) (object, error) {
@@ -141,7 +143,8 @@ func message(role, text string) object {
 	return object{"type": "message", "role": role, "content": []any{object{"type": kind, "text": text}}}
 }
 
-// Prepare converts an already normalized Responses request without changing its model or effort.
+// Prepare converts a normalized Responses request, including the explicit
+// Astra max-effort adaptation at this Basispoints-only boundary.
 // scope must include the caller and selected credential, never a token.
 func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, error) {
 	body, err := decode(raw)
@@ -329,6 +332,10 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		translatedInput = append(translatedInput, item)
 	}
 	var prologue []any
+	effort, maxConfiguration := adaptReasoning(body)
+	if maxConfiguration {
+		prologue = append(prologue, object{"type": "configuration_update", "reasoning": object{"effort": "max"}})
+	}
 	if instructions := stringValue(body["instructions"]); instructions != "" {
 		prologue = append(prologue, message("developer", instructions))
 	}
@@ -351,7 +358,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		"stream": body["stream"] == true, "store": false,
 		"input": append(prologue, translatedInput...),
 	}
-	if effort, exists := body["reasoning_effort"]; exists {
+	if _, exists := body["reasoning_effort"]; exists {
 		output["reasoning_effort"] = effort
 	}
 	if key := stringValue(body["prompt_cache_key"]); key != "" {

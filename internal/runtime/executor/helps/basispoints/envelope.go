@@ -132,10 +132,65 @@ func repairToolJSONStrings(raw string) string {
 
 var toolCallWrapper = regexp.MustCompile(`(?s)^(?:await\s+|return\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*\((.*)\)\s*;?\s*$`)
 
-// Recover one explicitly named call wrapper; no JavaScript or Office code runs.
-// Consuming the entire wrapper preserves the existing rejection of call batches
-// and avoids treating a nested argument object as a separate tool call.
+// Recover one complete declared envelope from wrapper text without executing it.
 func (b *Bridge) recoverToolEnvelope(value any) (object, bool) {
+	raw, ok := value.(string)
+	if !ok {
+		return nil, false
+	}
+	raw = strings.TrimSpace(raw)
+	if toolCallWrapper.MatchString(raw) {
+		return b.recoverExplicitToolEnvelope(raw)
+	}
+	// A failed JSON document is not wrapper text. Do not turn a complete
+	// object nested inside a truncated document into a separate tool call.
+	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") || strings.HasPrefix(raw, "\"") {
+		return nil, false
+	}
+	if found, ok := b.recoverEmbeddedToolEnvelope(raw); ok {
+		return found, true
+	}
+	if repaired := repairToolJSONStrings(raw); repaired != raw {
+		return b.recoverEmbeddedToolEnvelope(repaired)
+	}
+	return nil, false
+}
+
+func (b *Bridge) recoverEmbeddedToolEnvelope(raw string) (object, bool) {
+	var found object
+	for index := 0; index < len(raw); index++ {
+		if raw[index] != '{' {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(raw[index:]))
+		decoder.UseNumber()
+		var candidate object
+		if decoder.Decode(&candidate) != nil || candidate == nil {
+			continue
+		}
+		index += int(decoder.InputOffset()) - 1
+		name, err := envelopeField(candidate, "name", "tool")
+		if err != nil {
+			return nil, false
+		}
+		_, known := b.lookupTool(stringValue(name))
+		if !known && !nativeName(stringValue(name)) {
+			continue
+		}
+		if candidate["arguments"] == nil && candidate["args"] == nil && candidate["input"] == nil {
+			continue
+		}
+		// Preserve the existing single-envelope contract rather than silently
+		// keeping only the first tool from a batch embedded in one code field.
+		if found != nil {
+			return nil, false
+		}
+		found = candidate
+	}
+	return found, found != nil
+}
+
+func (b *Bridge) recoverExplicitToolEnvelope(value any) (object, bool) {
 	raw, ok := value.(string)
 	if !ok {
 		return nil, false
