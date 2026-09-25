@@ -84,3 +84,56 @@ func TestCodexTicketManagementFixedTargetLength(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexTicketManagementIndependentOfBasispoints(t *testing.T) {
+	h := &Handler{cfg: &config.Config{Codex: config.CodexConfig{
+		Basispoints:    config.CodexBasispointsConfig{Enabled: true},
+		ForceWebsocket: true,
+		TurnStateTicket: config.CodexTurnStateTicketConfig{
+			Enabled: true, ProbeIntervalSeconds: 90, TTLSeconds: 1800,
+			Models: []string{"gpt-6-astra"},
+		},
+	}}, configFilePath: writeTestConfigFile(t)}
+	get := func(wantEnabled bool, wantInterval int64) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/codex-turn-state-ticket", nil)
+		h.GetCodexTurnStateTicket(ctx)
+		body := rec.Body.Bytes()
+		if rec.Code != http.StatusOK || gjson.GetBytes(body, "enabled").Bool() != wantEnabled {
+			t.Fatalf("ticket enabled must remain independent of Basispoints: %s", body)
+		}
+		if gjson.GetBytes(body, "probe_interval_seconds").Int() != wantInterval ||
+			gjson.GetBytes(body, "ttl_seconds").Int() != 1800 ||
+			gjson.GetBytes(body, "models.0").String() != "gpt-6-astra" ||
+			!gjson.GetBytes(body, "accounts").IsArray() {
+			t.Fatalf("ticket settings or status missing: %s", body)
+		}
+	}
+	get(true, 90)
+	for _, enabled := range []bool{false, true} {
+		body := `{"enabled":false,"probe_interval_seconds":120}`
+		if enabled {
+			body = `{"enabled":true,"probe_interval_seconds":120}`
+		}
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/codex-turn-state-ticket", strings.NewReader(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		h.PutCodexTurnStateTicket(ctx)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("update status %d: %s", rec.Code, rec.Body.String())
+		}
+		saved, errLoad := config.LoadConfig(h.configFilePath)
+		if errLoad != nil {
+			t.Fatal(errLoad)
+		}
+		if !saved.Codex.Basispoints.Enabled || !saved.Codex.ForceWebsocket ||
+			saved.Codex.EffectiveTurnStateTicket().Enabled != enabled {
+			t.Fatal("ticket update overwrote an independent Codex setting")
+		}
+		h.cfg = saved
+		get(enabled, 120)
+	}
+}

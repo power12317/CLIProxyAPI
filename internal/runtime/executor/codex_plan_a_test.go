@@ -34,7 +34,9 @@ func TestCodexPlanAOutboundHeaders(t *testing.T) {
 			{name: "mac_default", system: "mac"},
 			{name: "windows_priority", system: "windows", tier: "priority", wantTier: "priority"},
 			{name: "ultrafast", tier: "ultrafast", wantTier: "ultrafast"},
-			{name: "explicit_default", tier: "default", wantTier: "default"},
+			{name: "explicit_default", tier: "default"},
+			{name: "explicit_auto", tier: "auto"},
+			{name: "fast_alias", tier: "fast", wantTier: "priority"},
 			{name: "compat_oauth", tier: "priority", wantTier: "priority", compat: true},
 			{name: "api_key", tier: "priority", wantTier: "priority", apiKey: true},
 			{name: "client_identity", clientUA: clientUA},
@@ -44,6 +46,8 @@ func TestCodexPlanAOutboundHeaders(t *testing.T) {
 			{name: "credential_override", configuredUA: "configured-ua", credentialUA: "credential-ua", hintOverride: "custom-route"},
 			{name: "model_override", credentialUA: "credential-ua", modelUA: "model-ua", hintOverride: "custom-route", modelHint: "model-route"},
 			{name: "final_payload_tier", tier: "priority", overrideTier: "ultrafast", wantTier: "ultrafast"},
+			{name: "final_payload_default_omitted", tier: "priority", overrideTier: "default"},
+			{name: "final_payload_auto_omitted", overrideTier: "auto"},
 		} {
 			t.Run(transport+"/"+tc.name, func(t *testing.T) {
 				type capture struct {
@@ -162,6 +166,9 @@ func TestCodexPlanAOutboundHeaders(t *testing.T) {
 				got := <-captured
 				if gjson.GetBytes(got.body, "model").String() != model || gjson.GetBytes(got.body, "service_tier").String() != tc.wantTier {
 					t.Fatalf("unexpected final model/tier: %s", got.body)
+				}
+				if tc.wantTier == "" && gjson.GetBytes(got.body, "service_tier").Exists() {
+					t.Fatalf("ordinary requests must omit service_tier: %s", got.body)
 				}
 				wantHint := "model=" + model
 				if tc.wantTier != "" {

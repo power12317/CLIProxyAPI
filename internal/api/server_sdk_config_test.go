@@ -7,6 +7,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestEffectiveSDKConfigBasispointsOverridesNativeTransport(t *testing.T) {
+	cfg := &config.Config{Codex: config.CodexConfig{
+		Basispoints:    config.CodexBasispointsConfig{Enabled: true},
+		ForceWebsocket: true, ResponseSteering: true,
+	}}
+	actual := effectiveSDKConfig(cfg)
+	if !actual.CodexBasispoints || actual.CodexForceWebsocket || actual.CodexResponseSteering {
+		t.Fatalf("unexpected effective transport: %+v", actual)
+	}
+	if !cfg.Codex.ForceWebsocket || !cfg.Codex.ResponseSteering {
+		t.Fatal("stored native settings were modified")
+	}
+}
+
 func TestEffectiveSDKConfigCopiesCodexOptimizeMultiAgentV2(t *testing.T) {
 	cfg := &config.Config{Codex: config.CodexConfig{OptimizeMultiAgentV2: true}}
 

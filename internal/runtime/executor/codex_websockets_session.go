@@ -61,6 +61,7 @@ type codexWebsocketSession struct {
 	authID                    string
 	proxyURL                  string
 	connectionFingerprint     string
+	continuation              *helps.CodexContinuation
 	multiAgentV2OptimizedConn *websocket.Conn
 	lifecycleBindMu           sync.Mutex
 	lifecycle                 cliproxyexecutor.ExecutionLifecycle
@@ -255,7 +256,15 @@ func (s *codexWebsocketSession) configureConn(conn *websocket.Conn) {
 		return
 	}
 	s.resetUpstreamDisconnectError(conn)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
+	})
 	conn.SetPingHandler(func(appData string) error {
+		// Control frames are consumed inside ReadMessage; refresh liveness even
+		// when no response data arrives between turns.
+		if errDeadline := conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout)); errDeadline != nil {
+			return errDeadline
+		}
 		sessionID := ""
 		if s != nil {
 			sessionID = s.sessionID
@@ -441,7 +450,13 @@ func configureRawCodexWebsocketConn(conn *websocket.Conn, authID string, wsURL s
 	if conn == nil {
 		return
 	}
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
+	})
 	conn.SetPingHandler(func(appData string) error {
+		if errDeadline := conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout)); errDeadline != nil {
+			return errDeadline
+		}
 		log.Debugf("codex websockets: upstream ping received session= session_object=none ping_bytes=%d", len(appData))
 		log.Debugf("codex websockets: upstream pong write started session= session_object=none")
 		start := time.Now()
@@ -657,6 +672,7 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 	sess.authID = authID
 	sess.proxyURL = proxyURL
 	sess.connectionFingerprint = fingerprint
+	sess.continuation = &helps.CodexContinuation{}
 	sess.readerConn = conn
 	sess.connMu.Unlock()
 
@@ -664,6 +680,18 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 	go e.readUpstreamLoop(sess, conn)
 	logCodexWebsocketConnectedWithReused(sess, sess.sessionID, authID, wsURL, false)
 	return conn, closer, resp, nil
+}
+
+func (s *codexWebsocketSession) continuationFor(conn *websocket.Conn) *helps.CodexContinuation {
+	if s == nil {
+		return nil
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.conn != conn {
+		return nil
+	}
+	return s.continuation
 }
 
 func (e *CodexWebsocketsExecutor) readUpstreamLoop(sess *codexWebsocketSession, conn *websocket.Conn) {

@@ -217,6 +217,7 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	}
 
 	meta := make(map[string]any)
+	meta[coreexecutor.CodexTransportMetadataKey] = &coreexecutor.CodexTransportState{}
 	if key != "" {
 		meta[idempotencyKeyMetadataKey] = key
 	}

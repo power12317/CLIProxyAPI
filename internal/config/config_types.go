@@ -180,6 +180,10 @@ type AntigravityConnectionPoolConfig struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
+	// Basispoints switches all Codex model requests to the Basispoints interface.
+	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`
+	// ForceWebsocket prefers ChatGPT Codex WebSockets independently of the downstream transport.
+	ForceWebsocket  bool `yaml:"force-websocket" json:"force-websocket"`
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
 	// DeviceConvergence controls whether Codex installation identities are rewritten to a
 	// stable account-and-system identity. A nil value defaults to enabled.
@@ -227,6 +231,11 @@ type CodexConfig struct {
 	// ResponseSteering enables full-duplex Codex WebSockets, bound to one
 	// upstream model/account/socket for their entire lifetime. Default is false.
 	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
+}
+
+// CodexBasispointsConfig controls the alternative Responses protocol adapter.
+type CodexBasispointsConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // CodexTurnStateTicketConfig controls Codex turn-state retention and timed refresh.

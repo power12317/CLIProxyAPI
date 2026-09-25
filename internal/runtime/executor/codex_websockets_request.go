@@ -63,7 +63,9 @@ func applyCodexPromptCacheHeadersWithContext(ctx context.Context, from sdktransl
 	if cache.ID != "" {
 		rawJSON = helps.SetStringIfDifferent(rawJSON, "prompt_cache_key", cache.ID)
 		setHeaderCasePreserved(headers, "session_id", cache.ID)
-		headers.Set("Conversation_id", cache.ID)
+		if !helps.IsOfficialCodexRequest(rawJSON) {
+			headers.Set("Conversation_id", cache.ID)
+		}
 	}
 
 	return rawJSON, headers, nil

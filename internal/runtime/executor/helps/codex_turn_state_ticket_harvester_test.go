@@ -82,6 +82,40 @@ func (c *ticketProbeTestCalls) snapshot() []string {
 	return append([]string(nil), c.values...)
 }
 
+func TestCodexTicketHarvesterRemainsEnabledWithBasispoints(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := &config.Config{Codex: config.CodexConfig{
+			Basispoints: config.CodexBasispointsConfig{Enabled: true},
+			TurnStateTicket: config.CodexTurnStateTicketConfig{
+				Enabled: true, Models: []string{"gpt-6-astra"}, ProbeIntervalSeconds: 3600,
+			},
+		}}
+		calls := 0
+		h, manager, current := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{
+			ticketProbeTestAuth("basispoints-ticket", "test@example.com", "test"),
+		}, codexRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			return ticketProbeTestResponse(req, http.StatusOK, 780), nil
+		}))
+		synctest.Wait()
+		if calls != 1 {
+			t.Fatalf("Basispoints suppressed the configured ticket probe: calls=%d", calls)
+		}
+		for _, enabled := range []bool{false, true} {
+			next := *cfg
+			next.Codex.Basispoints.Enabled = enabled
+			current.Store(&next)
+			h.ConfigChanged()
+			synctest.Wait()
+			ticket := codexTurnStateTicketForAuth(manager.List()[0], "gpt-6-astra")
+			if ticket == nil || !ticket.valid(time.Now()) || calls != 1 {
+				t.Fatal("changing Basispoints invalidated the independently harvested ticket")
+			}
+		}
+		h.Stop()
+	})
+}
+
 func TestCodexTicketHarvesterStartsImmediatelyAndSerializesProbes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{Enabled: true, ProbeIntervalSeconds: 3600}}}

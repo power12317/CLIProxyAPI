@@ -30,7 +30,11 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
-	defer reporter.TrackFailure(ctx, &err)
+	defer func() {
+		if err != cliproxyexecutor.ErrCodexWebsocketFallback {
+			reporter.TrackFailure(ctx, &err)
+		}
+	}()
 
 	prepared, err := e.prepareCodexWebsocketStream(ctx, auth, req, opts)
 	if err != nil {
@@ -95,7 +99,6 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		AuthType:  authType,
 		AuthValue: authValue,
 	}
-	helps.RecordAPIWebsocketRequest(ctx, e.cfg, wsReqLog)
 
 	var conn *websocket.Conn
 	var closer *websocketConnectionCloser
@@ -117,6 +120,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		upstreamHeaders = helps.StripCodexInternalResponseHeaders(respHS.Header)
 	}
 	if errDial != nil {
+		if errDial == cliproxyexecutor.ErrCodexWebsocketFallback {
+			unlockStreamSession()
+			return nil, errDial
+		}
 		bodyErr := websocketHandshakeBody(respHS)
 		if respHS != nil {
 			helps.RecordAPIWebsocketUpgradeRejection(ctx, e.cfg, websocketUpgradeRequestLog(wsReqLog), respHS.StatusCode, respHS.Header.Clone(), bodyErr)
@@ -148,7 +155,16 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return nil, errBind
 	}
 	recordAPIWebsocketHandshake(ctx, e.cfg, respHS)
-	turnState.ObserveResponse(respHS)
+	if cliproxyexecutor.CodexTransport(ctx) == nil {
+		turnState.ObserveResponse(respHS)
+	}
+	var continuation *helps.CodexContinuation
+	if cliproxyexecutor.CodexTransport(ctx) != nil {
+		continuation = sess.continuationFor(conn)
+		wsReqBody = helps.CodexWebsocketTransportBody(continuation.Prepare(wsReqBody))
+	}
+	wsReqLog.Body = wsReqBody
+	helps.RecordAPIWebsocketRequest(ctx, e.cfg, wsReqLog)
 	helps.RecordCodexTurnStateTicketOnResponse(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, respHS)
 	logTurnStateOnReturn = true
 	reporter.StartResponseTTFT()
@@ -165,7 +181,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
-		errSend = mapCodexWebsocketWriteError(sess, conn, errSend)
+		errSend = helps.GuardCodexWebsocketFailure(ctx, mapCodexWebsocketWriteError(sess, conn, errSend))
 		helps.RecordAPIWebsocketError(ctx, e.cfg, "send", errSend)
 		if sess != nil && !isEphemeralSession {
 			if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
@@ -299,7 +315,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			}
 			msgType, payload, errRead := readCodexWebsocketMessage(ctx, sess, conn, readCh)
 			if errRead != nil {
-				mappedErr := mapCodexWebsocketReadError(errRead)
+				mappedErr := helps.GuardCodexWebsocketFailure(ctx, mapCodexWebsocketReadError(errRead))
 				if sess != nil {
 					e.invalidateUpstreamConn(sess, conn, "read_error", mappedErr)
 					sess.clearActive(conn, readCh)
@@ -465,6 +481,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			completedPayload := payload
 			if eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" {
 				completedPayload = normalizeCodexWebsocketCompletion(completedPayload)
+				continuation.Complete(upstreamBody, patchCodexCompletedOutput(completedPayload, outputItemsByIndex, outputItemsFallback))
 				if !preserveNativeOutput {
 					completedPayload = patchCodexCompletedOutput(completedPayload, outputItemsByIndex, outputItemsFallback)
 				}
@@ -566,6 +583,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		defer close(out)
 		defer turnState.LogResponse(ctx, e.cfg, true)
 		defer func() {
+			if cliproxyexecutor.CodexTransport(ctx) != nil && terminateReason != "completed" {
+				e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, terminateReason, terminateErr)
+			}
 			if sess != nil {
 				sess.clearActive(conn, readCh)
 				unlockStreamSession()
@@ -608,7 +628,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					_ = send(cliproxyexecutor.StreamChunk{Err: ctx.Err()})
 					return
 				}
-				mappedErr := mapCodexWebsocketReadError(errRead)
+				mappedErr := helps.GuardCodexWebsocketFailure(ctx, mapCodexWebsocketReadError(errRead))
 				terminateReason = "read_error"
 				terminateErr = mappedErr
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "read", mappedErr)
@@ -706,6 +726,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			completedPayload := payload
 			if eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" {
 				completedPayload = normalizeCodexWebsocketCompletion(completedPayload)
+				continuation.Complete(upstreamBody, patchCodexCompletedOutput(completedPayload, outputItemsByIndex, outputItemsFallback))
 				if !preserveNativeOutput {
 					completedPayload = patchCodexCompletedOutput(completedPayload, outputItemsByIndex, outputItemsFallback)
 				}
@@ -807,6 +828,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
+	body = helps.NormalizeCodexServiceTier(body)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
@@ -850,7 +872,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	helps.RestoreCodexMetadataHeaders(wsHeaders, upstreamBody)
 	if officialOAuthRequest {
 		ua, beta := codexHeaderDefaults(e.cfg, auth)
-		helps.ApplyCodexOAuthHeaders(wsHeaders, oauthIdentity, true, ua, beta)
+		helps.ApplyCodexOAuthWebsocketHeaders(wsHeaders, oauthIdentity, ua, beta)
 		// Keep only one spelling of the routing session header on the wire.
 		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
 	}
@@ -859,10 +881,12 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
 	}
 	applyModelHeaderOverrides(wsHeaders, baseModel)
-	ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
+	if !officialOAuthRequest {
+		ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
+	}
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
-	turnState.ApplyHeaders(wsHeaders)
+	turnState.ApplyWebsocketHeaders(wsHeaders)
 	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, wsHeaders); errTicket != nil {
 		return nil, errTicket

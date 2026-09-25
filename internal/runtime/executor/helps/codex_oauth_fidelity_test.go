@@ -1,6 +1,7 @@
 package helps
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -8,6 +9,56 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
+
+func TestCodexOAuthFidelityPrewarmTurnIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, generate, kind, turn string
+		wantEmpty                  bool
+	}{
+		{"native prewarm", "false", "prewarm", "", true},
+		{"explicit prewarm turn", "false", "prewarm", "explicit", false},
+		{"generation", "true", "generation", "", false},
+		{"compat warmup", "false", "", "", false},
+		{"invalid generate type", `"false"`, "prewarm", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"generate":%s,"client_metadata":{"turn_id":%q,"x-codex-turn-metadata":{"request_kind":%q,"turn_id":%q}}}`, tc.generate, tc.turn, tc.kind, tc.turn))
+			updated, identity, ok := ApplyCodexOAuthFidelity(body, "test-account", "mac", false)
+			if !ok || (identity.TurnID == "") != tc.wantEmpty || tc.turn != "" && identity.TurnID != tc.turn {
+				t.Fatalf("identity=%+v ok=%t", identity, ok)
+			}
+			outer := gjson.GetBytes(updated, "client_metadata.turn_id")
+			nested := gjson.Get(gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String(), "turn_id")
+			if outer.Type != gjson.String || nested.Type != gjson.String || outer.String() != identity.TurnID || nested.String() != identity.TurnID {
+				t.Fatalf("inconsistent turn metadata: %s", updated)
+			}
+		})
+	}
+}
+
+func TestCodexOAuthTransportAcceptHeaders(t *testing.T) {
+	for _, explicit := range []string{"", "custom/accept"} {
+		headers := make(http.Header)
+		if explicit != "" {
+			headers.Set("Accept", explicit)
+		}
+		ApplyCodexOAuthWebsocketHeaders(headers, CodexOAuthIdentity{}, "", "")
+		if got := headers.Get("Accept"); got != explicit {
+			t.Fatalf("WS Accept=%q, want %q", got, explicit)
+		}
+	}
+	for _, stream := range []bool{false, true} {
+		headers := make(http.Header)
+		ApplyCodexOAuthHeaders(headers, CodexOAuthIdentity{}, stream, "", "")
+		want := "application/json"
+		if stream {
+			want = "text/event-stream"
+		}
+		if got := headers.Get("Accept"); got != want {
+			t.Fatalf("HTTP Accept=%q, want %q", got, want)
+		}
+	}
+}
 
 func TestApplyCodexOAuthFidelityReconstructsIdentityAndWindowsSystem(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-terra","prompt_cache_key":"session-1","tools":[{"type":"function","description":"Windows safety rules: do not delete files"}],"client_metadata":{"x-codex-turn-metadata":"{\"sandbox\":\"linux\",\"turn_id\":\"turn-1\"}"}}`)

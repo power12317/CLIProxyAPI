@@ -121,6 +121,10 @@ func preferredExecutionAttemptError(fallback, upstream error) error {
 func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
 	req, opts = cliproxysession.Enrich(req, opts)
+	ctx, opts, releaseTransport := m.prepareCodexTransport(ctx, providers, req, opts)
+	if releaseTransport != nil {
+		defer releaseTransport()
+	}
 	WithCodexClientSystemMetadata(&opts, req.Payload)
 	m.withCodexSystemPairMetadata(&opts)
 	normalized := m.normalizeProviders(providers)
@@ -235,9 +239,20 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 
 // ExecuteStream performs a streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
-func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (transportResult *cliproxyexecutor.StreamResult, transportError error) {
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
 	req, opts = cliproxysession.Enrich(req, opts)
+	ctx, opts, releaseTransport := m.prepareCodexTransport(ctx, providers, req, opts)
+	defer func() {
+		if releaseTransport == nil {
+			return
+		}
+		if transportError != nil {
+			releaseTransport()
+			return
+		}
+		transportResult = cliproxyexecutor.ReleaseSessionAfterStream(ctx, transportResult, releaseTransport)
+	}()
 	WithCodexClientSystemMetadata(&opts, req.Payload)
 	m.withCodexSystemPairMetadata(&opts)
 	if m.HomeEnabled() {

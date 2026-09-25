@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +12,67 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
+
+func TestCodexTurnStatePrefersStandardMetadataAcrossRequests(t *testing.T) {
+	for _, firstValue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("first_value=%t", firstValue), func(t *testing.T) {
+			cache := newCodexTurnStateCache(func() time.Time { return time.Unix(100, 0) })
+			auth := &cliproxyauth.Auth{ID: "metadata-priority", Metadata: map[string]any{"account_id": "owner-1"}}
+			const target = "wss://chatgpt.com/backend-api/codex/responses"
+			body := turnStateBody("turn-1")
+			for _, step := range []struct{ kind, value, want string }{
+				{"codex.response.metadata", "fallback-first", "fallback-first"},
+				{"response.metadata", "", "fallback-first"},
+				{"response.metadata", "standard-first", "standard-first"},
+				{"codex.response.metadata", "fallback-later", "standard-first"},
+			} {
+				state := cache.request(auth, target, body, nil)
+				state.firstValue = firstValue
+				state.ObserveEvent([]byte(fmt.Sprintf(`{"type":%q,"headers":{"X-Codex-Turn-State":%q}}`, step.kind, step.value)))
+				reader := cache.request(auth, target, body, nil)
+				if got := gjson.GetBytes(reader.ApplyWebsocketBody(body), "client_metadata.x-codex-turn-state").String(); got != step.want {
+					t.Fatalf("after %s=%q: state=%q, want %q", step.kind, step.value, got, step.want)
+				}
+			}
+			state := cache.request(auth, target, body, nil)
+			state.firstValue = firstValue
+			state.ObserveEvent([]byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"standard-later"}}`))
+			want := "standard-later"
+			if firstValue {
+				want = "standard-first"
+			}
+			if got, _ := state.cached(); got != want {
+				t.Fatalf("same-source retention=%q, want %q", got, want)
+			}
+			if got, exists := cache.request(auth, target, turnStateBody("turn-2"), nil).cached(); exists {
+				t.Fatalf("new turn inherited %q", got)
+			}
+			auth.Metadata["account_id"] = "owner-2"
+			if got, exists := cache.request(auth, target, body, nil).cached(); exists {
+				t.Fatalf("new owner inherited %q", got)
+			}
+			state.ObserveEvent([]byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"late-old-owner"}}`))
+			if _, exists := cache.request(auth, target, body, nil).cached(); exists {
+				t.Fatal("late old-owner event resurrected state")
+			}
+		})
+	}
+}
+
+func TestCodexTurnStateFrameIdentityOverridesStaleHandshake(t *testing.T) {
+	cache := newCodexTurnStateCache(time.Now)
+	auth := &cliproxyauth.Auth{ID: t.Name()}
+	headers := http.Header{"X-Codex-Turn-Metadata": {`{"turn_id":"old-turn"}`}}
+	for _, body := range []string{
+		`{"client_metadata":{"turn_id":""}}`,
+		`{"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"\"}"}}`,
+	} {
+		state := cache.requestWithIdentity(auth, "wss://chatgpt.com", []byte(body), headers, true)
+		if state.key.turnID != "" || state.bucket != nil {
+			t.Fatalf("prewarm inherited handshake turn: %q", state.key.turnID)
+		}
+	}
+}
 
 func TestCodexTurnStateCachesAndReplaysResponseHeader(t *testing.T) {
 	now := time.Unix(100, 0)

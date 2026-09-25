@@ -1799,6 +1799,9 @@ func (m *Manager) CloseExecutionSession(sessionID string) {
 	if m == nil || sessionID == "" {
 		return
 	}
+	if sessionID == CloseAllExecutionSessionsID {
+		m.drainCodexSessionPool()
+	}
 
 	m.mu.Lock()
 	var selections []*HomeDispatchSelection

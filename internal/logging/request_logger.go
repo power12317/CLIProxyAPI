@@ -18,6 +18,7 @@ const (
 	APIResponseSourceContextKey          = "API_RESPONSE_SOURCE"
 	APIResponseCapturedContextKey        = "API_RESPONSE_CAPTURED"
 	APIWebsocketTimelineSourceContextKey = "API_WEBSOCKET_TIMELINE_SOURCE"
+	ForceErrorLogContextKey              = "FORCE_ERROR_LOG"
 )
 
 // DeferredAPIRequest builds an upstream request log only when an error log needs it.

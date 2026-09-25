@@ -4,14 +4,19 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	"github.com/tidwall/gjson"
 )
 
 // CodexWebsocketsExecutor executes Codex Responses requests using a WebSocket transport.
@@ -31,20 +36,20 @@ func NewCodexWebsocketsExecutor(cfg *config.Config) *CodexWebsocketsExecutor {
 	}
 }
 
-// CodexAutoExecutor routes Codex requests to the websocket transport only when:
-//  1. The downstream transport is websocket, and
-//  2. The selected auth enables websockets.
-//
-// For non-websocket downstream requests, it always uses the legacy HTTP implementation.
+// CodexAutoExecutor selects upstream transport without changing downstream framing.
 type CodexAutoExecutor struct {
-	httpExec *CodexExecutor
-	wsExec   *CodexWebsocketsExecutor
+	httpExec        *CodexExecutor
+	wsExec          *CodexWebsocketsExecutor
+	basispointsExec *BasispointsExecutor
+	poolOnce        sync.Once
+	pool            *cliproxyexecutor.ExecutionSessionPool
 }
 
 func NewCodexAutoExecutor(cfg *config.Config) *CodexAutoExecutor {
 	return &CodexAutoExecutor{
-		httpExec: NewCodexExecutor(cfg),
-		wsExec:   NewCodexWebsocketsExecutor(cfg),
+		httpExec:        NewCodexExecutor(cfg),
+		wsExec:          NewCodexWebsocketsExecutor(cfg),
+		basispointsExec: NewBasispointsExecutor(cfg),
 	}
 }
 
@@ -65,8 +70,33 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 }
 
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if e != nil && e.httpExec != nil && e.httpExec.cfg != nil && e.httpExec.cfg.Codex.Basispoints.Enabled {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
+			helps.LogBasispointsNativeToolRoute(ctx, reason)
+		} else {
+			return e.basispointsExec.Execute(ctx, auth, req, opts)
+		}
+	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return cliproxyexecutor.Response{}, fmt.Errorf("codex auto executor: executor is nil")
+	}
+	if e.forceWebsocket(auth) && opts.Alt != "responses/compact" {
+		ctx, opts, release := e.prepareForcedWebsocket(ctx, req, opts)
+		defer release()
+		state := cliproxyexecutor.CodexTransport(ctx)
+		if !state.HTTPFallback.Load() {
+			cliproxyexecutor.ReportUpstreamWebsocket(ctx, true)
+			response, err := e.wsExec.Execute(ctx, auth, req, opts)
+			if !errors.Is(err, cliproxyexecutor.ErrCodexWebsocketFallback) {
+				return response, err
+			}
+		}
+		if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) || gjson.GetBytes(req.Payload, "previous_response_id").String() != "" {
+			return cliproxyexecutor.Response{}, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
+		}
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		return e.httpExec.Execute(ctx, auth, req, opts)
 	}
 	if cliproxyexecutor.DownstreamWebsocket(ctx) && codexWebsocketsEnabled(auth) {
 		return e.wsExec.Execute(ctx, auth, req, opts)
@@ -78,8 +108,44 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	if e != nil && e.httpExec != nil && e.httpExec.cfg != nil && e.httpExec.cfg.Codex.Basispoints.Enabled {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
+			helps.LogBasispointsNativeToolRoute(ctx, reason)
+		} else {
+			return e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
+		}
+	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return nil, fmt.Errorf("codex auto executor: executor is nil")
+	}
+	if e.forceWebsocket(auth) && opts.Alt != "responses/compact" {
+		ctx, opts, release := e.prepareForcedWebsocket(ctx, req, opts)
+		state := cliproxyexecutor.CodexTransport(ctx)
+		var result *cliproxyexecutor.StreamResult
+		var err error
+		if !state.HTTPFallback.Load() {
+			cliproxyexecutor.ReportUpstreamWebsocket(ctx, true)
+			result, err = e.wsExec.ExecuteStream(ctx, auth, req, opts)
+		}
+		if state.HTTPFallback.Load() && (err == nil || errors.Is(err, cliproxyexecutor.ErrCodexWebsocketFallback)) {
+			if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) || gjson.GetBytes(req.Payload, "previous_response_id").String() != "" {
+				release()
+				return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
+			}
+			cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+			result = helps.CodexWebsocketPrewarmFallback(ctx, req)
+			if result == nil {
+				result, err = e.httpExec.ExecuteStream(ctx, auth, req, opts)
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
+			release()
+			return nil, err
+		}
+		return cliproxyexecutor.ReleaseSessionAfterStream(ctx, result, release), nil
 	}
 	if cliproxyexecutor.DownstreamWebsocket(ctx) && codexWebsocketsEnabled(auth) {
 		return e.wsExec.ExecuteStream(ctx, auth, req, opts)
@@ -108,6 +174,10 @@ func (e *CodexAutoExecutor) CloseExecutionSession(sessionID string) {
 	if e == nil || e.wsExec == nil {
 		return
 	}
+	if sessionID == cliproxyauth.CloseAllExecutionSessionsID {
+		e.poolOnce.Do(func() { e.pool = cliproxyexecutor.NewExecutionSessionPool(e.CloseExecutionSession) })
+		e.pool.Drain()
+	}
 	e.wsExec.CloseExecutionSession(sessionID)
 }
 
@@ -115,7 +185,34 @@ func (e *CodexAutoExecutor) UpstreamDisconnectChan(sessionID string) <-chan erro
 	if e == nil || e.wsExec == nil {
 		return nil
 	}
+	// Forced mode owns recovery in the ordered request stream. An asynchronous
+	// upstream close must not close a healthy downstream connection first.
+	if e.httpExec.cfg != nil && (e.httpExec.cfg.Codex.ForceWebsocket || e.httpExec.cfg.Codex.Basispoints.Enabled) {
+		return nil
+	}
 	return e.wsExec.UpstreamDisconnectChan(sessionID)
+}
+
+func (e *CodexAutoExecutor) forceWebsocket(auth *cliproxyauth.Auth) bool {
+	return e.httpExec.cfg != nil && e.httpExec.cfg.Codex.ForceWebsocket && auth != nil &&
+		cliproxyexecutor.ChatGPTCodexDestination(auth.Provider, auth.Attributes["base_url"])
+}
+
+func (e *CodexAutoExecutor) prepareForcedWebsocket(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (context.Context, cliproxyexecutor.Options, func()) {
+	state := cliproxyexecutor.EnsureCodexTransport(&opts)
+	ctx = cliproxyexecutor.WithCodexTransport(ctx, state)
+	if executionSessionIDFromOptions(opts) != "" {
+		return ctx, opts, func() {}
+	}
+	e.poolOnce.Do(func() { e.pool = cliproxyexecutor.NewExecutionSessionPool(e.CloseExecutionSession) })
+	id, release := e.pool.Acquire(cliproxyexecutor.CodexSessionPoolKey(req, opts))
+	metadata := make(map[string]any, len(opts.Metadata)+1)
+	for key, value := range opts.Metadata {
+		metadata[key] = value
+	}
+	metadata[cliproxyexecutor.ExecutionSessionMetadataKey] = id
+	opts.Metadata = metadata
+	return ctx, opts, release
 }
 
 func codexWebsocketsEnabled(auth *cliproxyauth.Auth) bool {

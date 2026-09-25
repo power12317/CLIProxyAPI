@@ -757,5 +757,10 @@ func hasActionableError(c *gin.Context, statusCode int, apiErrors []*interfaces.
 	if isContextCanceled(c) && statusCode < http.StatusBadRequest {
 		return false
 	}
+	if c != nil {
+		if forced, exists := c.Get(logging.ForceErrorLogContextKey); exists && forced == true {
+			return true
+		}
+	}
 	return statusCode >= http.StatusBadRequest
 }

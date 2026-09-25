@@ -91,7 +91,9 @@ func ApplyCodexOAuthFidelity(body []byte, accountID, credentialSystem string, de
 		identity.ResponsesSessionID = identity.SessionID
 	}
 	identity.TurnID = firstString(stringValue(clientMetadata["turn_id"]), stringValue(turnMetadata["turn_id"]))
-	if identity.TurnID == "" {
+	// Native prewarm runs before a turn exists. Do not invent a routing identity.
+	prewarm := document["generate"] == false && stringValue(turnMetadata["request_kind"]) == "prewarm"
+	if identity.TurnID == "" && !prewarm {
 		identity.TurnID = uuid.NewString()
 	}
 	windowNumber := "0"
@@ -210,6 +212,24 @@ func RewriteCodexTurnMetadataInstallation(raw, installationID string) string {
 }
 
 func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, stream bool, configuredUserAgent, configuredBeta string) {
+	applyCodexOAuthIdentityHeaders(headers, identity, configuredUserAgent, configuredBeta)
+	if headers == nil {
+		return
+	}
+	if stream {
+		headers.Set("Accept", "text/event-stream")
+	} else {
+		headers.Set("Accept", "application/json")
+	}
+}
+
+// ApplyCodexOAuthWebsocketHeaders applies identity without HTTP response negotiation.
+// Explicit Accept overrides already present in the header map are preserved.
+func ApplyCodexOAuthWebsocketHeaders(headers http.Header, identity CodexOAuthIdentity, configuredUserAgent, configuredBeta string) {
+	applyCodexOAuthIdentityHeaders(headers, identity, configuredUserAgent, configuredBeta)
+}
+
+func applyCodexOAuthIdentityHeaders(headers http.Header, identity CodexOAuthIdentity, configuredUserAgent, configuredBeta string) {
 	if headers == nil {
 		return
 	}
@@ -245,11 +265,6 @@ func ApplyCodexOAuthHeaders(headers http.Header, identity CodexOAuthIdentity, st
 	headers.Set("X-Client-Request-Id", identity.ClientRequestID)
 	headers.Set("Session-Id", firstString(identity.ResponsesSessionID, identity.SessionID))
 	headers.Set("Thread-Id", identity.ThreadID)
-	if stream {
-		headers.Set("Accept", "text/event-stream")
-	} else {
-		headers.Set("Accept", "application/json")
-	}
 }
 
 // ApplyCodexOAuthRoutingHint derives routing from the final uncompressed body.
