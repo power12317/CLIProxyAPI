@@ -17,9 +17,33 @@ func TestCodexNativeOptionalFieldsRemainCallerOwned(t *testing.T) {
 		translated := []byte(`{"include":["reasoning.encrypted_content"]}`)
 		got := PreserveCodexProtocolFields([]byte(original), translated)
 		for _, key := range []string{"include", "service_tier"} {
-			if gjson.GetBytes(got, key).Raw != gjson.Get(original, key).Raw {
+			want := gjson.Get(original, key).Raw
+			if key == "service_tier" && gjson.Get(original, key).String() == "default" {
+				want = ""
+			}
+			if gjson.GetBytes(got, key).Raw != want {
 				t.Errorf("%s changed: %s", key, got)
 			}
+		}
+	}
+}
+
+func TestCodexProtocolFieldsCannotRestoreOrdinaryServiceTier(t *testing.T) {
+	for _, tier := range []string{`null`, `""`, `"default"`, `"auto"`, `"standard"`, `"flex"`, `"unknown"`, `42`, `true`} {
+		for _, native := range []bool{false, true} {
+			original := []byte(`{"service_tier":` + tier + `,"include":[]}`)
+			translated := []byte(`{"service_tier":` + tier + `}`)
+			got := PreserveCodexProtocolFields(original, translated, native)
+			if gjson.GetBytes(got, "service_tier").Exists() {
+				t.Errorf("ordinary tier survived translation (native=%v): %s", native, got)
+			}
+		}
+	}
+	for _, tier := range []string{"priority", "ultrafast"} {
+		original := []byte(`{"service_tier":"` + tier + `"}`)
+		got := PreserveCodexProtocolFields(original, []byte(`{}`), true)
+		if gjson.GetBytes(got, "service_tier").String() != tier {
+			t.Errorf("explicit accelerated tier lost: %s", got)
 		}
 	}
 }

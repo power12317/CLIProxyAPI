@@ -203,8 +203,15 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 					if gjson.GetBytes(got.body, "include").Raw != include {
 						t.Errorf("include changed: %s", gjson.GetBytes(got.body, "include").Raw)
 					}
-					if gjson.GetBytes(got.body, "service_tier").String() != tc.tier {
+					wantTier := tc.tier
+					if wantTier == "default" {
+						wantTier = ""
+					}
+					if gjson.GetBytes(got.body, "service_tier").String() != wantTier {
 						t.Errorf("tier changed: %s", gjson.GetBytes(got.body, "service_tier").Raw)
+					}
+					if wantTier == "" && gjson.GetBytes(got.body, "service_tier").Exists() {
+						t.Errorf("ordinary request sent service_tier: %s", got.body)
 					}
 					if gjson.GetBytes(got.body, "reasoning.effort").String() != "high" {
 						t.Error("explicit reasoning changed")

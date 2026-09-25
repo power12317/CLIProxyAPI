@@ -55,6 +55,9 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if got := gjson.GetBytes(second, "input.2"); got.Get("id").String() != "native_item" || got.Get("arguments").String() != nativeWeather()["arguments"] {
 		t.Fatalf("native item not restored: %s", second)
 	}
+	if gjson.GetBytes(second, "input.3.id").String() != "fc_call_weather" || gjson.GetBytes(second, "input.3.output").String() != "18C" {
+		t.Fatalf("tool output identity or value changed: %s", second)
+	}
 	if gjson.GetBytes(body, "metadata.turn_id").String() != gjson.GetBytes(second, "metadata.turn_id").String() {
 		t.Fatal("tool result changed turn")
 	}

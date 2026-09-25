@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexwire"
 )
 
 const ResponsesURL = "https://bps.openai.com/basispoints/api/responses"
@@ -299,6 +300,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	bridge.scope = digest([]string{scope, session, stringValue(body["model"])})
 	turnIndex, iteration := -1, 1
 	var turnContent any
+	translatedInput := make([]any, 0, len(input))
 	for i, value := range input {
 		item, ok := value.(object)
 		if !ok {
@@ -309,23 +311,34 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			turnIndex, iteration, turnContent = i, 1, item["content"]
 		}
 		kind := stringValue(item["type"])
+		if kind == "item_reference" {
+			continue
+		}
+		if kind == "reasoning" {
+			if encrypted := stringValue(item["encrypted_content"]); encrypted != "" {
+				translatedInput = append(translatedInput, object{"type": "reasoning", "summary": []any{}, "encrypted_content": encrypted})
+			}
+			continue
+		}
 		callID := stringValue(item["call_id"])
 		if kind == "function_call" || kind == "custom_tool_call" {
 			native := cache.get(bridge.scope + "/" + callID)
 			if native == nil {
 				return nil, nil, failure(400, "tool_replay_missing", "native Basispoints tool item is unavailable; start a new conversation")
 			}
-			input[i] = native
+			item = native
 		}
 		if kind == "function_call_output" || kind == "custom_tool_call_output" {
 			if cache.get(bridge.scope+"/"+callID) == nil {
 				return nil, nil, failure(400, "tool_replay_missing", "native Basispoints tool item is unavailable; start a new conversation")
 			}
 			item["type"] = "function_call_output"
+			item["id"] = functionItemID(callID)
 			delete(item, "name")
 			delete(item, "namespace")
 			iteration++
 		}
+		translatedInput = append(translatedInput, item)
 	}
 	var prologue []any
 	if instructions := stringValue(body["instructions"]); instructions != "" {
@@ -344,24 +357,33 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		instructions += " Return assistant text; do not call tools."
 	}
 	prologue = append(prologue, message("developer", instructions))
-	body["input"] = append(prologue, input...)
-	body["model_selection"] = "explicit"
-	body["store"] = false
-	metadata, _ := body["metadata"].(object)
-	if metadata == nil {
-		metadata = object{}
+	// Basispoints uses its own request schema. Build that envelope explicitly;
+	// forwarding arbitrary Responses/Codex fields causes HTTP 422 validation errors.
+	output := object{
+		"model": body["model"], "model_selection": "explicit",
+		"stream": body["stream"] == true, "store": false,
+		"input": append(prologue, translatedInput...),
 	}
+	if effort, exists := body["reasoning_effort"]; exists {
+		output["reasoning_effort"] = effort
+	}
+	if key := stringValue(body["prompt_cache_key"]); key != "" {
+		output["prompt_cache_key"] = key
+	}
+	if tier := codexwire.ServiceTier(stringValue(body["service_tier"])); tier != "" {
+		output["service_tier"] = tier
+	}
+	if policy := body["context_management"]; policy != nil {
+		if entries, isArray := policy.([]any); !isArray || len(entries) > 0 {
+			output["context_management"] = policy
+		}
+	}
+	metadata := requestMetadata(body["metadata"])
 	metadata["task_id"] = uuid.NewSHA1(uuid.NameSpaceURL, []byte(bridge.scope)).String()
 	metadata["turn_id"] = uuid.NewSHA1(uuid.NameSpaceURL, []byte(bridge.scope+"/"+strconv.Itoa(turnIndex)+"/"+digest(turnContent))).String()
 	metadata["agent_iteration"] = strconv.Itoa(iteration)
-	body["metadata"] = metadata
-	for _, key := range []string{"instructions", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "previous_response_id", "stream_options", "client_metadata", "generate"} {
-		delete(body, key)
-	}
-	if entries, ok := body["context_management"].([]any); ok && len(entries) == 0 {
-		delete(body, "context_management")
-	}
-	payload, err := json.Marshal(body)
+	output["metadata"] = metadata
+	payload, err := json.Marshal(output)
 	return payload, bridge, err
 }
 
