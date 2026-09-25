@@ -8,13 +8,12 @@ import (
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
-func TestBasispointsPinsToolCredentialWithoutWebsocketPreference(t *testing.T) {
+func TestBasispointsDoesNotPinToolCredential(t *testing.T) {
 	caller := t.Name()
 	_, bridge, err := basispoints.Prepare([]byte(`{"model":"gpt-6-astra","input":"hi","tools":[{"type":"function","name":"weather"}]}`), caller, "session", &basispoints.SharedCache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge.BindCredential(caller, "tool-account")
 	_, err = bridge.Response([]byte(`{"output":[{"id":"native_bps_pin","call_id":"call_bps_pin","type":"function_call","name":"run_officejs","arguments":"{\"code\":\"{\\\"tool\\\":\\\"weather\\\",\\\"args\\\":{}}\"}"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -27,8 +26,8 @@ func TestBasispointsPinsToolCredentialWithoutWebsocketPreference(t *testing.T) {
 	if release != nil || coreexecutor.PreferredUpstreamWebsocket(ctx) {
 		t.Fatal("native transport preference remains enabled")
 	}
-	if prepared.Metadata[coreexecutor.PinnedAuthMetadataKey] != "tool-account" {
-		t.Fatal("tool result is not pinned to its account")
+	if prepared.Metadata[coreexecutor.PinnedAuthMetadataKey] != nil {
+		t.Fatal("Basispoints must not bind requests to an account")
 	}
 	if opts.Metadata[coreexecutor.PinnedAuthMetadataKey] != nil {
 		t.Fatal("caller metadata was mutated")

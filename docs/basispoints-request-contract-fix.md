@@ -60,7 +60,8 @@ types. Strict serialized-request tests then check Codex and Responses inputs,
 streaming and nonstreaming execution, ordinary mode, Fast and Ultra, and the
 unchanged propagation of an upstream 422. Existing native HTTP/SSE/WebSocket/
 compact tests now require ordinary tiers to be absent, including after payload
-overrides. Tool replay and account pinning tests remain in the suite.
+overrides. Tool replay tests remain in the suite. Subsequent user-directed repair
+removes Basispoints account pinning and tests ordinary account rotation instead.
 
 Reference sources:
 

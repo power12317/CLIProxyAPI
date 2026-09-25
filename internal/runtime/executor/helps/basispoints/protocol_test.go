@@ -30,7 +30,6 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 		t.Fatal("missing tool catalog")
 	}
 	response := object{"model": "gpt-6-astra", "status": "completed", "output": []any{nativeWeather()}}
-	bridge.BindCredential("caller", "account")
 	raw, _ := json.Marshal(response)
 	converted, err := bridge.Response(raw)
 	if err != nil {
@@ -45,9 +44,6 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	_ = json.Unmarshal(converted, &result)
 	client["input"] = append(client["input"].([]any), result["output"].([]any)[0], object{"type": "function_call_output", "call_id": "call_weather", "output": "18C"})
 	replay, _ := json.Marshal(client)
-	if cache.Owner("caller", replay) != "account" || cache.Owner("other-caller", replay) != "" {
-		t.Fatal("tool credential ownership is not isolated")
-	}
 	second, _, err := Prepare(replay, "account/caller", "session", cache)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +51,7 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if got := gjson.GetBytes(second, "input.2"); got.Get("id").String() != "native_item" || got.Get("arguments").String() != nativeWeather()["arguments"] {
 		t.Fatalf("native item not restored: %s", second)
 	}
-	if gjson.GetBytes(second, "input.3.id").String() != "fc_call_weather" || gjson.GetBytes(second, "input.3.output").String() != "18C" {
+	if !strings.HasPrefix(gjson.GetBytes(second, "input.3.id").String(), "fc_") || gjson.GetBytes(second, "input.3.id").String() == gjson.GetBytes(second, "input.2.id").String() || gjson.GetBytes(second, "input.3.output").String() != "18C" {
 		t.Fatalf("tool output identity or value changed: %s", second)
 	}
 	if gjson.GetBytes(body, "metadata.turn_id").String() != gjson.GetBytes(second, "metadata.turn_id").String() {
@@ -77,8 +73,9 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if gjson.GetBytes(third, "metadata.turn_id").String() == gjson.GetBytes(second, "metadata.turn_id").String() {
 		t.Fatal("identical new user text reused the old turn")
 	}
-	if _, _, err = Prepare(replay, "other-account", "session", cache); err == nil {
-		t.Fatal("cross-account replay accepted")
+	rotated, _, err := Prepare(replay, "other-account", "session", cache)
+	if err != nil || gjson.GetBytes(rotated, "input.2.id").String() == "native_item" {
+		t.Fatalf("cross-account replay must rebuild complete client history: %s %v", rotated, err)
 	}
 }
 

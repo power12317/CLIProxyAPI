@@ -45,17 +45,17 @@ type tool struct {
 	Type        string `json:"type"`
 	Description string `json:"description,omitempty"`
 	Parameters  any    `json:"parameters,omitempty"`
+	Format      any    `json:"format,omitempty"`
+	Strict      any    `json:"strict,omitempty"`
 }
 
 // Cache retains complete native items. It never contains credentials and is
 // bounded by both count and bytes, with no timer-based expiration.
 type Cache struct {
-	mu         sync.Mutex
-	items      map[string][]byte
-	order      []string
-	bytes      int
-	owners     map[string]string
-	ownerOrder []string
+	mu    sync.Mutex
+	items map[string][]byte
+	order []string
+	bytes int
 }
 
 func (c *Cache) put(key string, item object) error {
@@ -91,8 +91,7 @@ func (c *Cache) get(key string) object {
 	c.mu.Lock()
 	raw := c.items[key]
 	c.mu.Unlock()
-	var item object
-	_ = json.Unmarshal(raw, &item)
+	item, _ := decode(raw)
 	return item
 }
 
@@ -103,61 +102,8 @@ type Bridge struct {
 	tools   map[string]tool
 	choice  string
 	emitted map[string]object
-	caller  string
-	authID  string
-}
-
-// BindCredential enables subsequent tool results to select their original credential.
-func (b *Bridge) BindCredential(caller, authID string) { b.caller, b.authID = caller, authID }
-
-// Owner returns the credential that produced tool calls in this caller's history.
-// Conflicting histories are left to the request validator rather than repinned.
-func (c *Cache) Owner(caller string, payload []byte) string {
-	body, err := decode(payload)
-	if err != nil {
-		return ""
-	}
-	input, _ := body["input"].([]any)
-	owner := ""
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, value := range input {
-		item, ok := value.(object)
-		if !ok {
-			continue
-		}
-		callID := stringValue(item["call_id"])
-		if callID == "" {
-			continue
-		}
-		if id := c.owners[Scope(caller, callID)]; id != "" {
-			if owner != "" && owner != id {
-				return ""
-			}
-			owner = id
-		}
-	}
-	return owner
-}
-
-func (b *Bridge) rememberOwner(callID string) {
-	if b.authID == "" {
-		return
-	}
-	key := Scope(b.caller, callID)
-	b.cache.mu.Lock()
-	defer b.cache.mu.Unlock()
-	if b.cache.owners == nil {
-		b.cache.owners = make(map[string]string)
-	}
-	if _, exists := b.cache.owners[key]; !exists {
-		b.cache.ownerOrder = append(b.cache.ownerOrder, key)
-	}
-	b.cache.owners[key] = b.authID
-	for len(b.cache.ownerOrder) > 1024 {
-		delete(b.cache.owners, b.cache.ownerOrder[0])
-		b.cache.ownerOrder = b.cache.ownerOrder[1:]
-	}
+	// ObserveEvent receives untouched upstream events for the existing CPA logs.
+	ObserveEvent func([]byte)
 }
 
 func decode(raw []byte) (object, error) {
@@ -202,6 +148,9 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if cache == nil {
+		cache = &Cache{}
+	}
 	if value := stringValue(body["previous_response_id"]); value != "" {
 		return nil, nil, failure(400, "full_history_required", "Basispoints requires full input history instead of previous_response_id")
 	}
@@ -235,10 +184,20 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			if name == "" || nativeName(key) {
 				return failure(400, "invalid_tool", "client tool name is empty or reserved")
 			}
-			if _, exists := bridge.tools[key]; exists {
-				return failure(400, "invalid_tool", "duplicate client tool name: "+key)
+			parameters := item["parameters"]
+			if parameters == nil {
+				parameters = item["inputSchema"]
 			}
-			entry := tool{Name: name, Namespace: namespace, Type: kind, Description: stringValue(item["description"]), Parameters: item["parameters"]}
+			if parameters == nil {
+				parameters = item["input_schema"]
+			}
+			entry := tool{Name: name, Namespace: namespace, Type: kind, Description: stringValue(item["description"]), Parameters: parameters, Format: item["format"], Strict: item["strict"]}
+			if previous, exists := bridge.tools[key]; exists {
+				if digest(previous) != digest(entry) {
+					return failure(400, "invalid_tool", "conflicting client tool declaration: "+key)
+				}
+				continue
+			}
 			bridge.tools[key] = entry
 			catalog = append(catalog, entry)
 		}
@@ -247,6 +206,16 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	tools, _ := body["tools"].([]any)
 	if err = collect(tools, ""); err != nil {
 		return nil, nil, err
+	}
+	if items, ok := body["input"].([]any); ok {
+		for _, value := range items {
+			if item, ok := value.(object); ok && item["type"] == "additional_tools" {
+				additional, _ := item["tools"].([]any)
+				if err = collect(additional, ""); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 	}
 	switch choice := body["tool_choice"].(type) {
 	case string:
@@ -297,10 +266,11 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			}
 		}
 	}
-	bridge.scope = digest([]string{scope, session, stringValue(body["model"])})
+	bridge.scope = digest([]string{scope, session})
 	turnIndex, iteration := -1, 1
 	var turnContent any
 	translatedInput := make([]any, 0, len(input))
+	seenCalls := make(map[string]bool)
 	for i, value := range input {
 		item, ok := value.(object)
 		if !ok {
@@ -311,6 +281,9 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			turnIndex, iteration, turnContent = i, 1, item["content"]
 		}
 		kind := stringValue(item["type"])
+		if kind == "additional_tools" {
+			continue
+		}
 		if kind == "item_reference" {
 			continue
 		}
@@ -324,16 +297,31 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		if kind == "function_call" || kind == "custom_tool_call" {
 			native := cache.get(bridge.scope + "/" + callID)
 			if native == nil {
-				return nil, nil, failure(400, "tool_replay_missing", "native Basispoints tool item is unavailable; start a new conversation")
+				native, err = rebuildToolCall(item)
+				if err != nil {
+					return nil, nil, err
+				}
+				if err = cache.put(bridge.scope+"/"+callID, native); err != nil {
+					return nil, nil, err
+				}
 			}
 			item = native
+			seenCalls[callID] = true
 		}
 		if kind == "function_call_output" || kind == "custom_tool_call_output" {
-			if cache.get(bridge.scope+"/"+callID) == nil {
+			native := cache.get(bridge.scope + "/" + callID)
+			if native == nil {
 				return nil, nil, failure(400, "tool_replay_missing", "native Basispoints tool item is unavailable; start a new conversation")
 			}
+			if !seenCalls[callID] {
+				translatedInput = append(translatedInput, native)
+				seenCalls[callID] = true
+			}
 			item["type"] = "function_call_output"
-			item["id"] = functionItemID(callID)
+			item["id"] = "fc_result_" + digest(callID)[:54]
+			if (native["name"] == "update_plan" || native["name"] == "functions.update_plan") && item["output"] == "Plan updated" {
+				item["output"] = `{"status":"ok"}`
+			}
 			delete(item, "name")
 			delete(item, "namespace")
 			iteration++
@@ -346,8 +334,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	}
 	instructions := "This is an external Responses client. Do not execute Office or workbook operations. Only tools in the client catalog are available."
 	if len(catalog) > 0 && bridge.choice != "none" {
-		encoded, _ := json.Marshal(catalog)
-		instructions += " To invoke a client tool, call run_officejs once per tool. Its code field must be a JSON string encoding exactly one object: {\"tool\":\"namespace.name\",\"args\":{...}}. Use the catalog name without a namespace when none is declared. For custom tools, args is the raw input string. Include summary, extended_summary, destructive=false and references=[] in the outer arguments. The proxy intercepts this call, decodes the JSON, and sends the tool request to the client; code is never executed as JavaScript or OfficeJS. Read replayed outputs as the client's tool results and do not repeat completed calls. Client tool catalog: " + string(encoded)
+		instructions += toolInstructions(catalog)
 		if bridge.choice == "required" {
 			instructions += " You must invoke a client tool."
 		} else if bridge.choice != "" && bridge.choice != "auto" {
@@ -388,58 +375,10 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 }
 
 func (b *Bridge) convertItem(item object) (object, error) {
-	kind := stringValue(item["type"])
-	if kind != "function_call" && kind != "custom_tool_call" {
+	if !isTool(item) {
 		return item, nil
 	}
-	if !nativeName(stringValue(item["name"])) {
-		return nil, failure(502, "unexpected_tool", "Basispoints returned a tool outside the client relay")
-	}
-	arguments, err := decode([]byte(stringValue(item["arguments"])))
-	if err != nil {
-		return nil, failure(502, "invalid_tool_envelope", "invalid run_officejs arguments")
-	}
-	envelope, err := decode([]byte(stringValue(arguments["code"])))
-	if err != nil {
-		return nil, failure(502, "invalid_tool_envelope", "run_officejs code must encode one JSON object")
-	}
-	name := stringValue(envelope["tool"])
-	spec, ok := b.tools[name]
-	if !ok || b.choice == "none" || (b.choice != "" && b.choice != "auto" && b.choice != "required" && b.choice != name) {
-		return nil, failure(502, "unexpected_tool", "Basispoints returned a tool outside the selected client catalog")
-	}
-	callID := stringValue(item["call_id"])
-	if callID == "" || stringValue(item["id"]) == "" {
-		return nil, failure(502, "invalid_tool_envelope", "native tool item is missing its id or call_id")
-	}
-	result := clone(item)
-	result["name"] = spec.Name
-	if spec.Namespace != "" {
-		result["namespace"] = spec.Namespace
-	}
-	if spec.Type == "custom" {
-		input, ok := envelope["args"].(string)
-		if !ok {
-			return nil, failure(502, "invalid_tool_arguments", "custom tool input must be a string")
-		}
-		result["type"], result["input"] = "custom_tool_call", input
-		delete(result, "arguments")
-	} else {
-		args, ok := envelope["args"].(object)
-		if !ok {
-			return nil, failure(502, "invalid_tool_arguments", "function tool arguments must be an object")
-		}
-		encoded, errMarshal := json.Marshal(args)
-		if errMarshal != nil {
-			return nil, errMarshal
-		}
-		result["type"], result["arguments"] = "function_call", string(encoded)
-	}
-	if err = b.cache.put(b.scope+"/"+callID, item); err != nil {
-		return nil, err
-	}
-	b.rememberOwner(callID)
-	return result, nil
+	return b.convertTool(item)
 }
 
 func (b *Bridge) convertResponse(response object) error {

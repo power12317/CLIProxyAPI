@@ -72,7 +72,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 	}
 }
 
-func TestBasispointsManagerToolReplayStaysOnOriginalAccount(t *testing.T) {
+func TestBasispointsManagerToolReplayAllowsAccountRotation(t *testing.T) {
 	const model = "basispoints-account-replay"
 	cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}}
 	manager := coreauth.NewManager(nil, nil, nil)
@@ -96,10 +96,10 @@ func TestBasispointsManagerToolReplayStaysOnOriginalAccount(t *testing.T) {
 			firstAccount = r.Header.Get("Chatgpt-Account-Id")
 			payload = `{"status":"completed","output":[{"type":"function_call","id":"native_account_replay","call_id":"call_account_replay","name":"run_officejs","arguments":"{\"summary\":\"test\",\"references\":[],\"code\":\"{\\\"tool\\\":\\\"weather\\\",\\\"args\\\":{}}\"}"}]}`
 		} else {
-			if r.Header.Get("Chatgpt-Account-Id") != firstAccount {
-				t.Error("tool result rotated accounts")
+			if r.Header.Get("Chatgpt-Account-Id") == firstAccount {
+				t.Error("Basispoints must preserve normal account rotation")
 			}
-			if gjson.GetBytes(raw, "input.2.id").String() != "native_account_replay" || gjson.GetBytes(raw, "input.2.name").String() != "run_officejs" {
+			if gjson.GetBytes(raw, "input.2.id").String() == "native_account_replay" || gjson.GetBytes(raw, "input.2.name").String() != "run_officejs" {
 				t.Errorf("native item missing: %s", raw)
 			}
 		}

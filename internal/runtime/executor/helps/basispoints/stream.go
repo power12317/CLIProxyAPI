@@ -17,6 +17,7 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 	sequence := 0
 	terminal := false
 	toolBytes := 0
+	pending := make(map[string]bool)
 	send := func(event object) error {
 		raw, err := eventBytes(event, sequence)
 		if err != nil {
@@ -27,6 +28,9 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 	}
 	sendTool := func(item object, index any) error {
 		id := stringValue(item["id"])
+		if id == "" {
+			id = functionItemID(stringValue(item["call_id"]))
+		}
 		if previous := b.emitted[id]; previous != nil {
 			return nil
 		}
@@ -65,6 +69,9 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("[DONE]")) {
 			return nil
 		}
+		if b.ObserveEvent != nil {
+			b.ObserveEvent(raw)
+		}
 		event, err := decode(raw)
 		if err != nil {
 			return failure(502, "invalid_stream", "Basispoints returned invalid SSE JSON")
@@ -77,11 +84,17 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 			return nil
 		case "response.output_item.added":
 			if item, ok := event["item"].(object); ok && isTool(item) {
+				if id := stringValue(item["id"]); id != "" {
+					pending[id] = true
+				}
 				return nil
 			}
 		case "response.output_item.done":
 			if item, ok := event["item"].(object); ok && isTool(item) {
-				return sendTool(item, event["output_index"])
+				if id := stringValue(item["id"]); id != "" {
+					pending[id] = true
+				}
+				return nil
 			}
 		case "response.completed", "response.done", "response.incomplete", "response.failed":
 			response, ok := event["response"].(object)
@@ -89,6 +102,22 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 				return failure(502, "invalid_stream", "terminal event has no response object")
 			}
 			items, _ := response["output"].([]any)
+			// The complete terminal item is authoritative; output_item.done can
+			// contain an unfinished run_officejs envelope. Text still streams live.
+			for _, value := range items {
+				if item, ok := value.(object); ok && isTool(item) {
+					if kind == "response.failed" || kind == "response.incomplete" {
+						return failure(502, "incomplete_tools", "Basispoints did not complete the tool response")
+					}
+					if _, errConvert := b.convertItem(item); errConvert != nil {
+						return errConvert
+					}
+					delete(pending, stringValue(item["id"]))
+				}
+			}
+			if len(pending) != 0 {
+				return failure(502, "incomplete_tools", "Basispoints terminal response omitted a tool item")
+			}
 			for i, value := range items {
 				item, ok := value.(object)
 				if !ok {

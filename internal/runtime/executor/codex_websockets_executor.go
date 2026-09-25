@@ -13,6 +13,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/tidwall/gjson"
@@ -71,7 +72,11 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	if e != nil && e.httpExec != nil && e.httpExec.cfg != nil && e.httpExec.cfg.Codex.Basispoints.Enabled {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
-		return e.basispointsExec.Execute(ctx, auth, req, opts)
+		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
+			helps.LogBasispointsNativeToolRoute(ctx, reason)
+		} else {
+			return e.basispointsExec.Execute(ctx, auth, req, opts)
+		}
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return cliproxyexecutor.Response{}, fmt.Errorf("codex auto executor: executor is nil")
@@ -105,7 +110,11 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	if e != nil && e.httpExec != nil && e.httpExec.cfg != nil && e.httpExec.cfg.Codex.Basispoints.Enabled {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
-		return e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
+		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
+			helps.LogBasispointsNativeToolRoute(ctx, reason)
+		} else {
+			return e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
+		}
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return nil, fmt.Errorf("codex auto executor: executor is nil")
@@ -185,7 +194,7 @@ func (e *CodexAutoExecutor) UpstreamDisconnectChan(sessionID string) <-chan erro
 }
 
 func (e *CodexAutoExecutor) forceWebsocket(auth *cliproxyauth.Auth) bool {
-	return e.httpExec.cfg != nil && !e.httpExec.cfg.Codex.Basispoints.Enabled && e.httpExec.cfg.Codex.ForceWebsocket && auth != nil &&
+	return e.httpExec.cfg != nil && e.httpExec.cfg.Codex.ForceWebsocket && auth != nil &&
 		cliproxyexecutor.ChatGPTCodexDestination(auth.Provider, auth.Attributes["base_url"])
 }
 

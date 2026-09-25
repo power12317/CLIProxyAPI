@@ -4,25 +4,11 @@ import (
 	"context"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
 func (m *Manager) prepareCodexTransport(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (context.Context, cliproxyexecutor.Options, func()) {
 	cfg := m.runtimeConfigSnapshot()
-	hasCodex := false
-	for _, provider := range providers {
-		hasCodex = hasCodex || strings.EqualFold(provider, "codex")
-	}
-	if cfg != nil && cfg.Codex.Basispoints.Enabled && hasCodex {
-		caller, _ := opts.Metadata[cliproxyexecutor.CallerScopeMetadataKey].(string)
-		if owner := basispoints.SharedCache.Owner(caller, req.Payload); owner != "" {
-			if pinned, _ := opts.Metadata[cliproxyexecutor.PinnedAuthMetadataKey].(string); pinned == "" {
-				opts.Metadata = cloneRequestMetadata(opts.Metadata)
-				opts.EnsureMetadata()[cliproxyexecutor.PinnedAuthMetadataKey] = owner
-			}
-		}
-	}
 	if cfg == nil || cfg.Codex.Basispoints.Enabled || !cfg.Codex.ForceWebsocket || opts.Alt == "responses/compact" || len(providers) != 1 || !strings.EqualFold(providers[0], "codex") {
 		return ctx, opts, nil
 	}

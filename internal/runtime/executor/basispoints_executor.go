@@ -78,7 +78,6 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		return nil, nil, nil, err
 	}
 	token, _ := codexCreds(auth)
-	bridge.BindCredential(caller, authID)
 	accountID := helps.CodexOAuthAccountID(auth)
 	if accountID == "" {
 		accountID = basispoints.AccountID(token)
@@ -91,16 +90,32 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		return nil, nil, nil, err
 	}
 	httpReq.Header = basispoints.Headers(token, accountID)
+	turnState := helps.NewBasispointsLogState(ctx, auth, basispoints.ResponsesURL, req.Payload, body, opts.Headers, baseModel)
+	turnState.ObserveRequest(httpReq.Header, nil)
 	reporter.SetTranslatedReasoningEffort(body, "openai")
-	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{URL: httpReq.URL.String(), Method: httpReq.Method, Headers: httpReq.Header.Clone(), Body: body, Provider: "codex", AuthID: authID})
+	var authLabel, authType, authValue string
+	if auth != nil {
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{URL: httpReq.URL.String(), Method: httpReq.Method, Headers: httpReq.Header.Clone(), Body: body, Provider: "codex", AuthID: authID, AuthLabel: authLabel, AuthType: authType, AuthValue: authValue})
 	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client = reporter.TrackHTTPClient(client)
 	response, err := client.Do(httpReq)
 	if err != nil {
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return nil, nil, nil, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, response.StatusCode, response.Header.Clone())
+	turnState.ObserveResponse(response)
+	turnState.LogResponse(ctx, e.cfg, false)
+	bridge.ObserveEvent = func(raw []byte) {
+		turnState.ObserveEvent(raw)
+		if !strings.Contains(response.Header.Get("Content-Type"), "application/json") {
+			helps.AppendAPIResponseChunk(ctx, e.cfg, append(append([]byte("data: "), raw...), '\n', '\n'))
+		}
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer func() {
 			if errClose := response.Body.Close(); errClose != nil {
@@ -112,6 +127,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 			return nil, nil, nil, errRead
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, raw)
+		helps.LogBasispointsRejection(ctx, response.StatusCode, body, response.Header)
 		requestScoped := (&basispoints.Error{Status: response.StatusCode}).IsRequestScoped()
 		return nil, nil, nil, statusErr{code: response.StatusCode, msg: string(raw), requestScoped: requestScoped, retryAfter: openAICompatRetryAfter(response.StatusCode, response.Header, raw, time.Now())}
 	}
@@ -236,10 +252,7 @@ func (e *BasispointsExecutor) read(ctx context.Context, response *http.Response,
 		wrapped, _ = sjson.SetBytes(wrapped, "type", kind)
 		return bridge.Stream(bytes.NewReader(append(append([]byte("data: "), wrapped...), '\n', '\n')), emit)
 	}
-	return bridge.Stream(response.Body, func(event []byte) error {
-		helps.AppendAPIResponseChunk(ctx, e.cfg, event)
-		return emit(event)
-	})
+	return bridge.Stream(response.Body, emit)
 }
 
 func (e *BasispointsExecutor) publish(ctx context.Context, reporter *helps.UsageReporter, response []byte) {
