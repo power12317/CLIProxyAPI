@@ -118,11 +118,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		replaceCodexRequestBody(httpReq, upstreamBody)
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
-	if helps.CodexAuthUsesOAuthCookieJar(auth) {
-		helps.ApplyCodexOAuthRoutingHint(httpReq.Header, turnStateBody)
-	}
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
+	applyCodexRoutingHint(ctx, httpReq.Header, auth, baseModel, turnStateBody, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
 	if officialOAuthRequest {
 		configuredUA, configuredBeta := codexHeaderDefaults(e.cfg, auth)

@@ -48,6 +48,7 @@ delivery controls. Background HTTP requests are not WS generation requests.
 | `x-codex-turn-state` | Prefer a valid `response.metadata` value; use `codex.response.metadata` only as a fallback. In forced mode, retain the first value from the preferred source for the same credential owner, origin, and turn. A standard event may replace an earlier fallback value. Replay it in `client_metadata` on subsequent frames and in HTTP headers on fallback. New turns and changed owners do not inherit it. |
 | WS handshake turn-state | Native CLI passes no turn-state capture to its connect operation. Forced mode does not promote a handshake-only token into the turn cache. Dynamic state belongs in frames, not reconnect handshake headers. Explicit header/model overrides and the separately configured ticket feature retain their existing precedence. |
 | Metadata on reused connections | Rebuild each frame's metadata from the current request. Reusing a socket does not mean reusing the previous turn's metadata. |
+| Fast / `service_tier` changes | Reuse an eligible live OAuth socket when only the tier changes. Send the new tier in the request frame; the existing handshake remains unchanged. The next fresh connection uses the current model/tier routing hint. |
 | ETags, rate limits, model and usage events | Preserve existing event/usage handling. These response values are not blindly copied into request headers. |
 | Connection closed | Invalidate the socket and connection-local response continuation. A later request dials again. No detached reconnect task runs. |
 
@@ -149,6 +150,11 @@ HTTP cannot transparently resume an active steering exchange.
 HTTP clients use exclusive execution-session leases, isolated by authenticated
 caller scope, canonical session, route model, and request proxy. The socket also
 checks credential owner, endpoint, resolved proxy, and handshake fingerprint.
+The fingerprint ignores only the tier component of a standard OAuth
+`model=...;tier=...` routing hint. Model changes, custom routing fields, credential
+revisions, and proxy or identity changes still require a fresh connection.
+This follows official CPA v7.3.17 Fast-toggle reuse while retaining fork isolation.
+It does not establish how the backend bills or schedules a mid-connection tier change.
 Requests without an authenticated caller scope do not reuse connections across
 requests. At most 128 idle leases are retained per pool; active requests continue
 to use the existing credential concurrency controls. There is no new idle timer

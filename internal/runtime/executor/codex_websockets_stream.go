@@ -877,9 +877,9 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
 	}
 	if helps.CodexAuthUsesOAuthCookieJar(auth) {
-		helps.ApplyCodexOAuthRoutingHint(wsHeaders, upstreamBody)
 		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
 	}
+	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	if !officialOAuthRequest {
 		ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
