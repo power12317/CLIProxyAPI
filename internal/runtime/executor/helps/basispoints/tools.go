@@ -67,7 +67,9 @@ func (b *Bridge) transportEnvelope(arguments object) (object, error) {
 		}
 		envelope, err := toolObject(arguments["code"], "transport_code")
 		if err != nil {
-			if recovered, ok := b.recoverToolEnvelope(arguments["code"]); ok {
+			if recovered, ok := b.recoverCustomExecEnvelope(arguments["code"]); ok {
+				envelope = recovered
+			} else if recovered, ok := b.recoverToolEnvelope(arguments["code"]); ok {
 				envelope = recovered
 			} else {
 				return nil, err

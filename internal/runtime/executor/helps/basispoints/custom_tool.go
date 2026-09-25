@@ -2,12 +2,38 @@ package basispoints
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
 func isClientExecTool(spec tool) bool {
 	key := toolKey(spec)
 	return spec.Type == "custom" && (key == "functions.exec" || (key == "exec" && strings.Contains(strings.ToLower(spec.Description), "javascript")))
+}
+
+var clientProgramStart = regexp.MustCompile(`(?s)^(?:\s|//[^\n]*\n|/\*.*?\*/)*(?:(?:const|let|var|await|return|for|if|try|switch|while|do|throw|async|function)\b|(?:tools\s*[.\[]|ALL_TOOLS\b|(?:text|image|audio|generatedImage|store|load|notify|exit|yield_control|setTimeout|clearTimeout)\s*\())`)
+var clientRuntimeUse = regexp.MustCompile(`\b(?:tools\s*[.\[]|ALL_TOOLS\b|(?:text|image|audio|generatedImage|store|load|notify|exit|yield_control|setTimeout|clearTimeout)\s*\()`)
+
+// Recover unmarked programs only for the declared client JavaScript runtime.
+// Keep the whole program: JSON objects inside it can be data, not tool calls.
+func (b *Bridge) recoverCustomExecEnvelope(value any) (object, bool) {
+	program, ok := value.(string)
+	if !ok || !clientProgramStart.MatchString(program) || !clientRuntimeUse.MatchString(program) {
+		return nil, false
+	}
+	var name string
+	for _, spec := range b.tools {
+		if isClientExecTool(spec) {
+			if name != "" {
+				return nil, false
+			}
+			name = toolKey(spec)
+		}
+	}
+	if name == "" {
+		return nil, false
+	}
+	return object{"name": name, "input": program}, true
 }
 
 // customToolInput keeps raw text intact and accepts the existing envelope

@@ -131,7 +131,6 @@ func TestToolEnvelopeStillRejectsIncompleteOrMultipleCalls(t *testing.T) {
 		"functions.shell(" + call + ", " + call + ")",
 		"unknown_tool(" + call + ")",
 		"const first = " + call + "; const second = " + call + ";",
-		"await tools.exec_command({cmd: 'pwd'});",
 	} {
 		_, bridge, err := Prepare(catalogRequest(), "account", "session", &Cache{})
 		if err != nil {

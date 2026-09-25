@@ -19,8 +19,9 @@ import (
 
 func TestBasispointsHandoffAndCustomExecThroughExecutor(t *testing.T) {
 	const handoff = "<codex_delegation>\nKeep the complete handoff and all original tool capabilities.\n</codex_delegation>"
-	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+	for _, mode := range []struct{ unmarked, stream bool }{{false, false}, {false, true}, {true, false}, {true, true}} {
+		unmarked, stream := mode.unmarked, mode.stream
+		t.Run(fmt.Sprintf("unmarked=%v/stream=%v", unmarked, stream), func(t *testing.T) {
 			cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}}
 			executor := NewCodexAutoExecutor(cfg)
 			auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "fixture-token", "account_id": "fixture-account"}}
@@ -52,6 +53,9 @@ func TestBasispointsHandoffAndCustomExecThroughExecutor(t *testing.T) {
 					t.Fatal("custom invocation guide missing from upstream request")
 				}
 				code, _ := json.Marshal(map[string]any{"name": "functions.exec", "arguments": map[string]any{"cmd": "pwd", "workdir": "/tmp/project", "yield_time_ms": 10000, "max_output_tokens": 12000}})
+				if unmarked {
+					code = []byte("const result = await tools.exec_command({cmd: 'pwd'}); text(result);")
+				}
 				args, _ := json.Marshal(map[string]any{"summary": "Inspect project and apps", "code": string(code)})
 				response := map[string]any{"status": "completed", "model": "gpt-5.6-luna", "output": []any{map[string]any{"type": "function_call", "name": "run_officejs", "id": "fc_fixture", "call_id": "call_fixture", "arguments": string(args)}}}
 				var payload strings.Builder
