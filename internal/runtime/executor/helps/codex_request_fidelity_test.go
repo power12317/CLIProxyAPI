@@ -8,7 +8,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestCodexNativeOptionalFieldsRemainCallerOwned(t *testing.T) {
+func TestCodexNativeIncludeRemainsCallerOwned(t *testing.T) {
 	for _, original := range []string{
 		`{"client_metadata":{"x-codex-turn-metadata":"{}"}}`,
 		`{"client_metadata":{"x-codex-turn-metadata":"{}"},"include":[],"service_tier":"default"}`,
@@ -16,14 +16,8 @@ func TestCodexNativeOptionalFieldsRemainCallerOwned(t *testing.T) {
 	} {
 		translated := []byte(`{"include":["reasoning.encrypted_content"]}`)
 		got := PreserveCodexProtocolFields([]byte(original), translated)
-		for _, key := range []string{"include", "service_tier"} {
-			want := gjson.Get(original, key).Raw
-			if key == "service_tier" && gjson.Get(original, key).String() == "default" {
-				want = ""
-			}
-			if gjson.GetBytes(got, key).Raw != want {
-				t.Errorf("%s changed: %s", key, got)
-			}
+		if gjson.GetBytes(got, "include").Raw != gjson.Get(original, "include").Raw {
+			t.Errorf("include changed: %s", got)
 		}
 	}
 }
@@ -39,11 +33,18 @@ func TestCodexProtocolFieldsCannotRestoreOrdinaryServiceTier(t *testing.T) {
 			}
 		}
 	}
-	for _, tier := range []string{"priority", "ultrafast"} {
+	for _, tier := range []string{"default", "auto", "priority", "ultrafast"} {
 		original := []byte(`{"service_tier":"` + tier + `"}`)
 		got := PreserveCodexProtocolFields(original, []byte(`{}`), true)
+		if gjson.GetBytes(got, "service_tier").Exists() {
+			t.Errorf("service_tier must never be restored from the original body: %s", got)
+		}
+	}
+	for _, tier := range []string{"priority", "ultrafast"} {
+		translated := []byte(`{"service_tier":"` + tier + `"}`)
+		got := PreserveCodexProtocolFields([]byte(`{"service_tier":"default"}`), translated, true)
 		if gjson.GetBytes(got, "service_tier").String() != tier {
-			t.Errorf("explicit accelerated tier lost: %s", got)
+			t.Errorf("translated accelerated tier was overwritten by the original body: %s", got)
 		}
 	}
 }

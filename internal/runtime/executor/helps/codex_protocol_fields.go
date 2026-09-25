@@ -8,7 +8,7 @@ import (
 )
 
 // PreserveCodexProtocolFields carries explicit native intent through format translation.
-// Payload configuration still runs afterwards and retains its existing precedence.
+// Payload configuration runs afterwards; outbound wire rules still apply.
 func PreserveCodexProtocolFields(original, translated []byte, nativeHeaders ...bool) []byte {
 	native := len(nativeHeaders) > 0 && nativeHeaders[0]
 	if !native && !IsOfficialCodexRequest(original) && util.CodexResponsesLiteHeaderValue(original, nil) == "" && gjson.GetBytes(original, "reasoning.context").String() != "all_turns" {
@@ -21,17 +21,14 @@ func PreserveCodexProtocolFields(original, translated []byte, nativeHeaders ...b
 			}
 		}
 	}
-	// Ordinary service tiers must never be restored from the native request.
-	// Normalize before copying optional fields, including absence semantics.
-	original = NormalizeCodexServiceTier(original)
-	for _, path := range []string{"service_tier", "include"} {
-		if value := gjson.GetBytes(original, path); value.Exists() {
-			if updated, err := sjson.SetRawBytes(translated, path, []byte(value.Raw)); err == nil {
-				translated = updated
-			}
-		} else if updated, err := sjson.DeleteBytes(translated, path); err == nil {
+	// Include remains caller-owned. Service tiers come only from format
+	// translation; never copy a tier back from the original native request.
+	if value := gjson.GetBytes(original, "include"); value.Exists() {
+		if updated, err := sjson.SetRawBytes(translated, "include", []byte(value.Raw)); err == nil {
 			translated = updated
 		}
+	} else if updated, err := sjson.DeleteBytes(translated, "include"); err == nil {
+		translated = updated
 	}
 	return NormalizeCodexServiceTier(translated)
 }

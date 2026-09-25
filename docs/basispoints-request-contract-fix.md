@@ -21,7 +21,8 @@ when the caller omitted it. Two paths nevertheless allowed it onto the wire:
 The repaired shared wire rule emits only explicit accelerated tiers: `fast`
 becomes `priority`; `priority` and `ultrafast` are retained. All other values,
 including omitted, null, empty, `default`, `auto`, and `standard`, result in an
-absent field. Native field preservation normalizes before copying, and native
+absent field. The native preservation function does not read or copy the original
+`service_tier` at all; it only retains the translator's result. Native
 HTTP, SSE, WebSocket, compact, and image execution normalize again after payload
 overrides. Basispoints uses the same rule when constructing its envelope.
 
@@ -72,7 +73,7 @@ fallbacks. The request contract is validated with a local strict upstream fixtur
 no real OAuth credentials are available in this checkout for a live account test.
 
 Validation completed: `go test -p 4 ./...`, the required server build, targeted
-race suites for the adapter/executors/management protocol handlers/auth manager,
+race suites for the adapter/executors/OpenAI protocol handlers/auth manager,
 and the Docker workflow's actionlint check. Publish this repair on the existing
-Basispoints branch with the immutable `basispoints/v2026.09.25-4` tag. CPAMP does
+Basispoints branch with the immutable `basispoints/v2026.09.25-5` tag. CPAMP does
 not need another build for this backend-only change.
