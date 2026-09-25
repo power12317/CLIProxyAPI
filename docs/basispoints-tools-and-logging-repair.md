@@ -64,3 +64,28 @@ publishing `basispoints/v2026.09.25-6`.
 Live account generation is not exercised: this checkout contains no OAuth
 credentials. The tests use controlled HTTP/SSE upstream responses and actual CPA
 execution/logging paths; they do not claim to prove every upstream 422 resolved.
+
+## Tool envelope follow-up — basispoints/v2026.09.25-7
+
+The local `invalid_tool_envelope` error exposed gaps in response decoding rather
+than an upstream HTTP 422. Regression cases reproduced failures with prose-prefixed
+JSON, CRLF/case-varied JSON fences, literal line breaks and illegal JSON escapes,
+explicit client-call wrappers, and nested raw-custom markers.
+
+The decoder now handles those formatting variants. Valid JSON is decoded first
+with exact numeric precision. Only failed decoding invokes string repair; valid
+escapes retain their existing meanings. Marked custom input bypasses JSON recovery
+at every supported wrapper level, preserving its raw content and the original
+cached replay item. Explicitly named single-call wrappers can recover a declared
+tool envelope or function arguments without executing their surrounding text.
+
+Errors retain the existing code and add the parsing stage, format, byte length,
+and JSON error category/offset where available, without exposing argument content.
+Truncated JSON, multiple calls, and raw code with no identifiable tool continue to
+return an error. The prompt explicitly reiterates the custom marker and JSON
+escaping rules. Account selection, hosted-tool routing, model names, reasoning
+suffixes, service tiers, and CPAMP remain unchanged by this follow-up.
+
+Verification includes before/after reproductions, full Go tests, focused race
+tests, and the required server build. Real upstream account generation is not
+part of these local regressions.

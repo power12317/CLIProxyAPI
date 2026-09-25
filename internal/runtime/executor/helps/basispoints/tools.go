@@ -33,34 +33,8 @@ func toolInstructions(catalog []tool) string {
 			fmt.Fprintf(&out, "Raw transport summary: %s%s\n", rawCustomPrefix, toolKey(spec))
 		}
 	}
+	out.WriteString("\nUse the exact catalog tool name. The CUSTOM summary marker is mandatory for raw input. Do not nest run_officejs wrappers. For FUNCTION tools, serialize code as one JSON object and escape quotes, backslashes, newlines, carriage returns and tabs inside JSON strings.")
 	return out.String()
-}
-
-func toolObject(value any) (object, error) {
-	if item, ok := value.(object); ok && item != nil {
-		return item, nil
-	}
-	text, ok := value.(string)
-	if !ok {
-		return nil, failure(502, "invalid_tool_envelope", "tool arguments must encode a JSON object")
-	}
-	for depth := 0; depth < 3; depth++ {
-		text = strings.TrimSpace(text)
-		for _, prefix := range []string{"```json\n", "```\n"} {
-			if strings.HasPrefix(text, prefix) && strings.HasSuffix(text, "```") {
-				text = strings.TrimSuffix(strings.TrimPrefix(text, prefix), "```")
-			}
-		}
-		if item, err := decode([]byte(text)); err == nil {
-			return item, nil
-		}
-		var nested string
-		if json.Unmarshal([]byte(text), &nested) != nil {
-			break
-		}
-		text = nested
-	}
-	return nil, failure(502, "invalid_tool_envelope", "tool transport must contain one JSON object")
 }
 
 func envelopeField(envelope object, primary, alias string) (any, error) {
@@ -75,21 +49,26 @@ func envelopeField(envelope object, primary, alias string) (any, error) {
 	return second, nil
 }
 
-func transportEnvelope(arguments object) (object, error) {
-	for _, prefix := range []string{rawCustomPrefix, "codex2api.custom/"} {
-		if summary := stringValue(arguments["summary"]); strings.HasPrefix(summary, prefix) {
-			input, ok := arguments["code"].(string)
-			if !ok {
-				return nil, failure(502, "invalid_tool_arguments", "raw custom input must be a string")
-			}
-			return object{"name": strings.TrimPrefix(summary, prefix), "input": input}, nil
-		}
-	}
-	value := arguments["code"]
+func (b *Bridge) transportEnvelope(arguments object) (object, error) {
 	for depth := 0; depth < 3; depth++ {
-		envelope, err := toolObject(value)
+		// Every nested wrapper can carry a raw custom marker. Its input must
+		// bypass JSON recovery so code, patches and grammar input stay exact.
+		for _, prefix := range []string{rawCustomPrefix, "codex2api.custom/"} {
+			if summary := stringValue(arguments["summary"]); strings.HasPrefix(summary, prefix) {
+				input, ok := arguments["code"].(string)
+				if !ok {
+					return nil, failure(502, "invalid_tool_arguments", "raw custom input must be a string")
+				}
+				return object{"name": strings.TrimPrefix(summary, prefix), "input": input}, nil
+			}
+		}
+		envelope, err := toolObject(arguments["code"], "transport_code")
 		if err != nil {
-			return nil, err
+			if recovered, ok := b.recoverToolEnvelope(arguments["code"]); ok {
+				envelope = recovered
+			} else {
+				return nil, err
+			}
 		}
 		name, err := envelopeField(envelope, "name", "tool")
 		if err != nil || !nativeName(stringValue(name)) {
@@ -99,11 +78,11 @@ func transportEnvelope(arguments object) (object, error) {
 		if err != nil {
 			return nil, err
 		}
-		nested, err := toolObject(args)
+		nested, err := toolObject(args, "nested_arguments")
 		if err != nil {
 			return nil, err
 		}
-		value = nested["code"]
+		arguments = nested
 	}
 	return nil, failure(502, "invalid_tool_envelope", "tool transport nesting exceeds two wrappers")
 }
@@ -114,11 +93,11 @@ func (b *Bridge) convertTool(native object) (object, error) {
 	var envelope object
 	var err error
 	if wrapped {
-		arguments, errParse := toolObject(native["arguments"])
+		arguments, errParse := toolObject(native["arguments"], "outer_arguments")
 		if errParse != nil {
 			return nil, errParse
 		}
-		envelope, err = transportEnvelope(arguments)
+		envelope, err = b.transportEnvelope(arguments)
 		if err != nil {
 			return nil, err
 		}
@@ -136,13 +115,7 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		return nil, err
 	}
 	key := stringValue(nameValue)
-	spec, ok := b.tools[key]
-	if !ok && strings.HasPrefix(key, "functions.") {
-		spec, ok = b.tools[strings.TrimPrefix(key, "functions.")]
-	}
-	if !ok && key == "update_plan" {
-		spec, ok = b.tools["functions.update_plan"]
-	}
+	spec, ok := b.lookupTool(key)
 	if !ok || b.choice == "none" || (b.choice != "" && b.choice != "auto" && b.choice != "required" && b.choice != toolKey(spec)) {
 		return nil, failure(502, "unexpected_tool", "Basispoints returned a tool outside the selected client catalog")
 	}
@@ -173,7 +146,7 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		if errArgs != nil {
 			return nil, errArgs
 		}
-		arguments, errParse := toolObject(args)
+		arguments, errParse := toolObject(args, "function_arguments")
 		if errParse != nil {
 			return nil, errParse
 		}
@@ -194,6 +167,17 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func (b *Bridge) lookupTool(key string) (tool, bool) {
+	spec, ok := b.tools[key]
+	if !ok && strings.HasPrefix(key, "functions.") {
+		spec, ok = b.tools[strings.TrimPrefix(key, "functions.")]
+	}
+	if !ok && key == "update_plan" {
+		spec, ok = b.tools["functions.update_plan"]
+	}
+	return spec, ok
 }
 
 func rebuildToolCall(call object) (object, error) {
