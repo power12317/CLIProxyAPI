@@ -166,6 +166,8 @@ x-basispoints-auth-mode: chatgpt
 
 ## 8. 参考
 
+2026-09-25 回归修复：CPAMP 原分支基于旧功能分支，缺少 fork `main` 的原生门票探测设置、凭证门票状态及其他更新。修复版本合入 CPAMP `main` 的 `3453e7ab`，相对该提交只增加两个传输开关及配套支持，不删除主线功能。同时移除 CPA 中 Basispoints 自动关闭 `turn-state-ticket` 的联动：探测由自己的开关决定，配置和票据状态继续保留。回归测试覆盖配置往返、管理 API 和实际探测器；发布使用新的 `basispoints/v2026.09.25-3` tag。原有模型名称、实际推理强度和后缀解析器保持不变。
+
 分支镜像由 `basispoints/vYYYY.MM.DD-N` tag 自动构建。Git tag 中的 `basispoints/` 前缀在构建时移除，因此镜像 tag 为 `vYYYY.MM.DD-N`。CPA 发布到 `ghcr.io/power12317/cliproxyapi-basispoints`，CPAMP 发布到 `ghcr.io/power12317/cpa-manager-plus-basispoints`，均包含 `linux/amd64` 和 `linux/arm64`。这些工作流不更新主线镜像或其 `latest` 标签。首次支持自动构建的 tag 为 `basispoints/v2026.09.25-2`；`-1` 仅为原始代码快照，其提交中尚无对应工作流。
 
 - [cpa-plugin-oai-basispoints](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/tree/708082da2f851569984de395d25405e61c2bbc34)，研究提交 `708082da2f851569984de395d25405e61c2bbc34`。参考认证头、请求体和工具往返转换；不照搬其别名、虚拟认证副本、档位映射及全量 SSE 缓冲。

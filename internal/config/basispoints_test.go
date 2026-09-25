@@ -23,8 +23,8 @@ func TestBasispointsConfigRoundTripAndTicketIsolation(t *testing.T) {
 	if !cfg.Codex.Basispoints.Enabled || !cfg.Codex.ForceWebsocket {
 		t.Fatal("configuration was not parsed")
 	}
-	if cfg.Codex.EffectiveTurnStateTicket().Enabled {
-		t.Fatal("native ticket harvester remains active")
+	if !cfg.Codex.EffectiveTurnStateTicket().Enabled {
+		t.Fatal("Basispoints must not disable the independently configured ticket harvester")
 	}
 	encoded, err := yaml.Marshal(&cfg)
 	if err != nil {
@@ -39,6 +39,13 @@ func TestBasispointsConfigRoundTripAndTicketIsolation(t *testing.T) {
 	}
 	saved.Codex.Basispoints.Enabled = false
 	if !saved.Codex.EffectiveTurnStateTicket().Enabled {
-		t.Fatal("original ticket setting not restored")
+		t.Fatal("disabling Basispoints changed the ticket setting")
+	}
+	saved.Codex.TurnStateTicket.Enabled = false
+	for _, enabled := range []bool{false, true} {
+		saved.Codex.Basispoints.Enabled = enabled
+		if saved.Codex.EffectiveTurnStateTicket().Enabled {
+			t.Fatal("Basispoints must not enable the independently disabled ticket harvester")
+		}
 	}
 }

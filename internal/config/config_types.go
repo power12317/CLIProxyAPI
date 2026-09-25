@@ -276,9 +276,6 @@ func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
 	var out CodexTurnStateTicketConfig
 	if c != nil {
 		out = c.TurnStateTicket
-		if c.Basispoints.Enabled {
-			out.Enabled = false
-		}
 	}
 	// TargetLength is retained for older config files; all plans use one shape.
 	out.TargetLength = DefaultCodexTurnStateTicketTargetLength
