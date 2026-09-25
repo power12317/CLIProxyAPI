@@ -6,6 +6,7 @@ on:
     tags:
       - '*'
       - '!websocket-har-alignment-v*'
+      - '!basispoints/**'
 
 permissions:
   contents: write

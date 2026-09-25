@@ -166,6 +166,8 @@ x-basispoints-auth-mode: chatgpt
 
 ## 8. 参考
 
+分支镜像由 `basispoints/vYYYY.MM.DD-N` tag 自动构建。Git tag 中的 `basispoints/` 前缀在构建时移除，因此镜像 tag 为 `vYYYY.MM.DD-N`。CPA 发布到 `ghcr.io/power12317/cliproxyapi-basispoints`，CPAMP 发布到 `ghcr.io/power12317/cpa-manager-plus-basispoints`，均包含 `linux/amd64` 和 `linux/arm64`。这些工作流不更新主线镜像或其 `latest` 标签。首次支持自动构建的 tag 为 `basispoints/v2026.09.25-2`；`-1` 仅为原始代码快照，其提交中尚无对应工作流。
+
 - [cpa-plugin-oai-basispoints](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/tree/708082da2f851569984de395d25405e61c2bbc34)，研究提交 `708082da2f851569984de395d25405e61c2bbc34`。参考认证头、请求体和工具往返转换；不照搬其别名、虚拟认证副本、档位映射及全量 SSE 缓冲。
 - [ghcp_proxy](https://github.com/Nonary/ghcp_proxy/tree/950e1eb96bca3a630a5c078541832e12e473a50d)，研究提交 `950e1eb96bca3a630a5c078541832e12e473a50d`。重点参考 `excel_upstream.py` 与 `proxy.py` 的工具 item、会话和流式处理；不照搬模型表和档位限制。
 - 用户两张图片：接口、认证头及 `run_officejs` 桥接示例。图片中的模型结果仅作为观测，不转化为本地模型白名单。
