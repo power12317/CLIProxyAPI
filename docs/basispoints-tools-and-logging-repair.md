@@ -1,5 +1,30 @@
 # Basispoints tools and logging repair — 2026-09-25
 
+## Handoff and custom exec compatibility — v2026.09.25-3
+
+Two supplied request logs contained a Codex cross-thread handoff represented as a
+function result with a codex_app/create_thread identity and no call_id. At the
+Basispoints serialization boundary, recognized idless create_thread and
+send_message_to_thread delegation outputs now become source-labelled user context
+with their complete output preserved in place. They do not require a subagent
+header, enter the native-call cache, or count as a tool iteration. Paired and
+unrelated tool results retain the existing replay behavior.
+
+The third log returned a cmd/workdir argument object for the custom functions.exec
+tool. That JavaScript client tool now receives a program invoking its own
+tools.exec_command with every original parameter serialized as data. CPA does not
+execute the program. Raw input/args/arguments string aliases remain exact; other
+custom tools do not receive this command-object adaptation. The upstream tool
+catalog includes a concrete JavaScript example and distinguishes exec from
+exec_command. Native replay items remain intact and account rotation still works.
+
+Validation replays all three supplied payloads offline, covers cold/warm cache and
+another selected account, verifies SSE and non-streaming executor delivery, and
+executes the generated JavaScript against a stub that checks all original command
+parameters without invoking a shell. Regression fixtures contain synthetic data.
+HTTP/SSE commit timing, models, reasoning, suffixes and account selection are not
+changed. No live OAuth generation is claimed by these checks.
+
 Reference: [ranxi2001/sub2api, d215eddd](https://github.com/ranxi2001/sub2api/tree/d215eddd9831cbf9933aaca6c89d6bf13bb561ec/backend/internal/service/basispoints).
 The reference converts client tools into the Excel transport; it does not send
 arbitrary client declarations as native Basispoints tools. Its complete catalog,

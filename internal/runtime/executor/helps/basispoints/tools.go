@@ -31,6 +31,9 @@ func toolInstructions(catalog []tool) string {
 		}
 		if spec.Type == "custom" {
 			fmt.Fprintf(&out, "Raw transport summary: %s%s\n", rawCustomPrefix, toolKey(spec))
+			if isClientExecTool(spec) {
+				out.WriteString("This custom tool runs JavaScript that calls client tools. For a shell command, use raw code such as: const result = await tools.exec_command({\"cmd\":\"pwd\"}); text(result); Put that JavaScript directly in code with the raw transport summary above. The cmd/workdir object belongs to tools.exec_command; it is not the input of this custom tool.\n")
+			}
 		}
 	}
 	out.WriteString("\nUse the exact catalog tool name. The CUSTOM summary marker is mandatory for raw input. Do not nest run_officejs wrappers. For FUNCTION tools, serialize code as one JSON object and escape quotes, backslashes, newlines, carriage returns and tabs inside JSON strings.")
@@ -132,15 +135,11 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		result["namespace"] = spec.Namespace
 	}
 	if spec.Type == "custom" {
-		input, errInput := envelopeField(envelope, "input", "args")
+		input, errInput := customToolInput(spec, envelope, !wrapped && native["type"] == "function_call")
 		if errInput != nil {
 			return nil, errInput
 		}
-		text, ok := input.(string)
-		if !ok {
-			return nil, failure(502, "invalid_tool_arguments", "custom tool input must be a string")
-		}
-		result["type"], result["input"] = "custom_tool_call", text
+		result["type"], result["input"] = "custom_tool_call", input
 	} else {
 		args, errArgs := envelopeField(envelope, "arguments", "args")
 		if errArgs != nil {

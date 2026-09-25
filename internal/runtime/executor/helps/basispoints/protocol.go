@@ -290,6 +290,10 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		if kind == "item_reference" {
 			continue
 		}
+		if handoff, ok := delegationContext(item); ok {
+			translatedInput = append(translatedInput, handoff)
+			continue
+		}
 		if kind == "reasoning" {
 			if encrypted := stringValue(item["encrypted_content"]); encrypted != "" {
 				translatedInput = append(translatedInput, object{"type": "reasoning", "summary": []any{}, "encrypted_content": encrypted})
