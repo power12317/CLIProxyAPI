@@ -143,6 +143,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Codex.ForceWebsocket != newCfg.Codex.ForceWebsocket {
 		changes = append(changes, fmt.Sprintf("codex.force-websocket: %t -> %t", oldCfg.Codex.ForceWebsocket, newCfg.Codex.ForceWebsocket))
 	}
+	if oldCfg.Codex.Basispoints.Enabled != newCfg.Codex.Basispoints.Enabled {
+		changes = append(changes, fmt.Sprintf("codex.basispoints.enabled: %t -> %t", oldCfg.Codex.Basispoints.Enabled, newCfg.Codex.Basispoints.Enabled))
+	}
 	if oldCfg.Codex.DeviceConvergenceEnabled() != newCfg.Codex.DeviceConvergenceEnabled() {
 		changes = append(changes, fmt.Sprintf("codex.device-convergence: %t -> %t", oldCfg.Codex.DeviceConvergenceEnabled(), newCfg.Codex.DeviceConvergenceEnabled()))
 	}

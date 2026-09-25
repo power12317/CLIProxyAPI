@@ -16,7 +16,7 @@ import (
 // A replay bridge materializes the client's history before choosing upstream
 // transport. The executor can still compress it into a connection-local delta.
 func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName string) bool {
-	if h == nil || h.Cfg == nil || !h.Cfg.CodexForceWebsocket || h.Cfg.CodexResponseSteering {
+	if h == nil || h.Cfg == nil || (!h.Cfg.CodexBasispoints && (!h.Cfg.CodexForceWebsocket || h.Cfg.CodexResponseSteering)) {
 		return false
 	}
 	providers, _ := responsesWebsocketProviderSetForModel(responsesWebsocketResolvedModelName(modelName))
@@ -25,6 +25,9 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName stri
 	}
 	if _, ok := providers["codex"]; !ok {
 		return false
+	}
+	if h.Cfg.CodexBasispoints {
+		return true
 	}
 	if h.AuthManager.HomeEnabled() {
 		return true
@@ -42,6 +45,9 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName stri
 }
 
 func (h *OpenAIResponsesAPIHandler) websocketAuthEnabled(auth *coreauth.Auth) bool {
+	if h != nil && h.Cfg != nil && h.Cfg.CodexBasispoints && auth != nil && strings.EqualFold(auth.Provider, "codex") {
+		return false
+	}
 	return responsesWebsocketAuthSupportsIncrementalInput(auth) ||
 		(h != nil && h.Cfg != nil && h.Cfg.CodexForceWebsocket && auth != nil && coreexecutor.ChatGPTCodexDestination(auth.Provider, auth.Attributes["base_url"]))
 }
@@ -78,6 +84,9 @@ func websocketUpstreamSupportsIncrementalInput(attributes map[string]string, met
 func (h *OpenAIResponsesAPIHandler) websocketUpstreamSupportsIncrementalInputForModel(modelName string) bool {
 	auths, _ := h.responsesWebsocketAvailableAuthsForModel(modelName)
 	for _, auth := range auths {
+		if h.Cfg != nil && h.Cfg.CodexBasispoints && auth != nil && strings.EqualFold(auth.Provider, "codex") {
+			continue
+		}
 		if responsesWebsocketAuthSupportsIncrementalInput(auth) {
 			return true
 		}

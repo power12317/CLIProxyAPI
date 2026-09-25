@@ -180,6 +180,8 @@ type AntigravityConnectionPoolConfig struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
+	// Basispoints switches all Codex model requests to the Basispoints interface.
+	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`
 	// ForceWebsocket prefers ChatGPT Codex WebSockets independently of the downstream transport.
 	ForceWebsocket  bool `yaml:"force-websocket" json:"force-websocket"`
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
@@ -231,6 +233,11 @@ type CodexConfig struct {
 	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
 }
 
+// CodexBasispointsConfig controls the alternative Responses protocol adapter.
+type CodexBasispointsConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+}
+
 // CodexTurnStateTicketConfig controls Codex turn-state retention and timed refresh.
 // Tickets are stored independently per credential and model.
 type CodexTurnStateTicketConfig struct {
@@ -269,6 +276,9 @@ func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
 	var out CodexTurnStateTicketConfig
 	if c != nil {
 		out = c.TurnStateTicket
+		if c.Basispoints.Enabled {
+			out.Enabled = false
+		}
 	}
 	// TargetLength is retained for older config files; all plans use one shape.
 	out.TargetLength = DefaultCodexTurnStateTicketTargetLength

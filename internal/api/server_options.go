@@ -47,8 +47,9 @@ func effectiveSDKConfig(cfg *config.Config) *config.SDKConfig {
 	sdkCfg := cfg.SDKConfig
 	sdkCfg.CodexOptimizeMultiAgentV2 = cfg.Codex.OptimizeMultiAgentV2
 	sdkCfg.CodexOrphanDelegationCompatibility = cfg.Codex.OrphanDelegationCompatibility
-	sdkCfg.CodexResponseSteering = cfg.Codex.ResponseSteering
-	sdkCfg.CodexForceWebsocket = cfg.Codex.ForceWebsocket
+	sdkCfg.CodexBasispoints = cfg.Codex.Basispoints.Enabled
+	sdkCfg.CodexResponseSteering = cfg.Codex.ResponseSteering && !cfg.Codex.Basispoints.Enabled
+	sdkCfg.CodexForceWebsocket = cfg.Codex.ForceWebsocket && !cfg.Codex.Basispoints.Enabled
 	if cfg.CommercialMode {
 		sdkCfg.RequestLog = false
 	}

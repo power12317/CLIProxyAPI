@@ -271,7 +271,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		return
 	}
 	var duplexInput <-chan cliproxyexecutor.WebsocketInput
-	if h != nil && h.Cfg != nil && h.Cfg.CodexResponseSteering {
+	if h != nil && h.Cfg != nil && h.Cfg.CodexResponseSteering && !h.Cfg.CodexBasispoints {
 		socketCtx, cancelSocket := context.WithCancel(c.Request.Context())
 		defer cancelSocket()
 		c.Request = c.Request.WithContext(socketCtx)

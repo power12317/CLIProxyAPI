@@ -161,7 +161,7 @@ func (m *Manager) setConfigSnapshotLocked(cfg *internalconfig.Config) bool {
 		m.homeSessionAliases.clear()
 	}
 	m.runtimeConfig.Store(cfg)
-	if previousCfg != nil && previousCfg.Codex.ForceWebsocket && !cfg.Codex.ForceWebsocket {
+	if previousCfg != nil && ((previousCfg.Codex.ForceWebsocket && !cfg.Codex.ForceWebsocket) || previousCfg.Codex.Basispoints.Enabled != cfg.Codex.Basispoints.Enabled) {
 		m.drainCodexSessionPool()
 	}
 	clearedCooldowns := m.clearDisabledCooldownStates(cfg)

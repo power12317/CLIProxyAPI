@@ -274,6 +274,9 @@ routing:
 
 # Codex provider behavior.
 codex:
+  # Route all Codex models through Basispoints, preserving model names and effort values.
+  basispoints:
+    enabled: false
   # Prefer WebSockets for ChatGPT Codex generation, regardless of client transport.
   # Five failed handshake attempts fall back to HTTP for this request only.
   force-websocket: false
