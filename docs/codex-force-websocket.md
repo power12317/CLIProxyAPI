@@ -48,7 +48,7 @@ delivery controls. Background HTTP requests are not WS generation requests.
 | `x-codex-turn-state` | Prefer a valid `response.metadata` value; use `codex.response.metadata` only as a fallback. In forced mode, retain the first value from the preferred source for the same credential owner, origin, and turn. A standard event may replace an earlier fallback value. Replay it in `client_metadata` on subsequent frames and in HTTP headers on fallback. New turns and changed owners do not inherit it. |
 | WS handshake turn-state | Native CLI passes no turn-state capture to its connect operation. Forced mode does not promote a handshake-only token into the turn cache. Dynamic state belongs in frames, not reconnect handshake headers. Explicit header/model overrides and the separately configured ticket feature retain their existing precedence. |
 | Metadata on reused connections | Rebuild each frame's metadata from the current request. Reusing a socket does not mean reusing the previous turn's metadata. |
-| Fast / `service_tier` changes | Reuse an eligible live OAuth socket when only the tier changes. Send the new tier in the request frame; the existing handshake remains unchanged. The next fresh connection uses the current model/tier routing hint. |
+| Model, tier, and handshake options | Model/tier changes, client version/beta headers, and added/removed custom headers do not close a healthy socket. Send current model/tier and metadata in the request frame. The original handshake stays fixed until a replacement is otherwise required; a fresh connection uses the current headers. |
 | ETags, rate limits, model and usage events | Preserve existing event/usage handling. These response values are not blindly copied into request headers. |
 | Connection closed | Invalidate the socket and connection-local response continuation. A later request dials again. No detached reconnect task runs. |
 
@@ -183,6 +183,18 @@ lookup must not overwrite execution metadata used to generate upstream IDs.
 A request without a resolvable topic retains the previous execution-session
 behavior rather than being grouped with unrelated requests.
 
+For WS handshakes, explicit `X-Client-Request-Id`, `Session-Id`, and `Thread-Id`
+are preserved before configured overrides. Legacy session/thread underscore
+aliases are normalized to the hyphenated names. Missing fields use the existing
+prepared cache/OAuth identity; missing request ID follows the resolved thread ID.
+Native OAuth body reconstruction must not overwrite an explicit client header.
+This step does not modify body identifiers or generate another identity. If all
+incoming topic identifiers are absent, the original execution/derived-session,
+native UUID fallback, and legacy connection ownership paths remain in effect.
+A generic request with no recoverable identity keeps its original absence of IDs.
+Configured header overrides and the existing optional identity-confusion policy
+retain precedence. HTTP request handling is unchanged.
+
 ### Connection lifetime
 
 A topic holds one upstream socket. Later rounds and reconnected downstream
@@ -199,15 +211,18 @@ current native response; it is not treated as a transport failure.
 
 Request-level overloads and response failures do not close a healthy topic
 socket. Configuration reload and downstream-session cleanup do not close it
-either when connection settings remain compatible. Per-turn metadata and an
-OAuth tier-only change use current request frames. As in the CLI's
-[connection compatibility check](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/client.rs#L1525),
-topic identity alone does not make a physical connection reusable. Changed
-authorization, stable handshake headers (including model/custom routing), or
-resolved proxy retire the old socket before dialing a replacement under the same
-topic lock. The existing connection fingerprint excludes per-turn metadata and
-infrastructure cookies. A physical replacement also resets connection-local
-response continuation. There is no background reconnect. Existing liveness deadlines
+either when authentication and the resolved proxy remain compatible. The reuse
+fingerprint contains credential ownership, the outgoing Authorization value, and
+the resolved proxy. Other handshake headers do not trigger proactive replacement,
+including OpenAI-Beta, User-Agent, Originator, Version, X-Codex-Beta-Features,
+model/custom routing hints, and arbitrary headers added or removed between calls.
+These headers are sent at connection establishment and are not renegotiated on a
+live socket. Current model, tier, and metadata continue to travel in request frames.
+This is the fork's explicit reuse policy, not a claim that every CLI connection
+compatibility rule is identical. Authentication/proxy changes still retire the old
+socket before dialing a replacement under the same topic lock. A physical
+replacement resets connection-local response continuation. There is no background
+reconnect. Existing liveness deadlines
 remain in effect; this change adds no post-handshake network deadline.
 
 Physical connection logs include `scope=topic`, a stable hashed `topic`, and a
@@ -217,13 +232,14 @@ physical ID and reason. Shutdown and explicit credential removal still release
 resources.
 
 The September 26 follow-up fixes two regressions in the initial topic repair:
-topic sockets no longer bypass the existing compatibility checks, and the
+topic sockets no longer bypass authentication/proxy compatibility checks, and the
 internal topic key no longer changes generated wire identity. The custom log
 formatter now includes topic connection diagnostics; generic auth and URL fields
 on unrelated log entries remain hidden. Reuse remains silent.
 
-Local regression tests exercise unchanged-socket reuse, token/header/proxy
-replacement, closure before a replacement handshake, concurrent dial attempts,
+Local regression tests exercise unchanged-socket reuse, continued reuse after
+header/model changes, token/proxy replacement, closure before a replacement
+handshake, concurrent dial attempts,
 continuation reset, and actual WS frames from both executor entry points. Wire
 identity fixtures retain the pre-topic baseline's generated values and explicit
 native IDs. These tests establish the repaired behavior without claiming to

@@ -20,7 +20,7 @@ import (
 )
 
 func TestCodexTopicConnectionCompatibility(t *testing.T) {
-	for _, change := range []string{"unchanged", "turn_and_tier", "token", "beta", "model_route", "proxy"} {
+	for _, change := range []string{"unchanged", "turn_and_tier", "token", "beta", "model_route", "client_headers", "custom_added", "custom_removed", "proxy"} {
 		t.Run(change, func(t *testing.T) {
 			var connections atomic.Int32
 			var first atomic.Pointer[websocket.Conn]
@@ -76,11 +76,20 @@ func TestCodexTopicConnectionCompatibility(t *testing.T) {
 				headers.Set("OpenAI-Beta", "responses_websockets=next")
 			case "model_route":
 				headers.Set("X-Codex-Routing-Hint", "model=gpt-6-luna")
+			case "client_headers":
+				for _, name := range []string{"User-Agent", "Originator", "Version", "X-Codex-Beta-Features"} {
+					headers.Set(name, "new-value")
+				}
+			case "custom_added":
+				headers.Set("X-Custom-Route", "operator-route")
+			case "custom_removed":
+				headers.Del("OpenAI-Beta")
+				headers.Del("X-Codex-Routing-Hint")
 			case "proxy":
 				// Both routes reach the local server; the resolved route changed.
 				credential.ProxyURL = "direct"
 			}
-			wantReplace := change != "unchanged" && change != "turn_and_tier"
+			wantReplace := change == "token" || change == "proxy"
 			proxyURL := executionProxyURL(t.Context(), e.cfg, credential)
 			fingerprint := helps.CodexConnectionFingerprint(credential, headers, proxyURL)
 			existing, _ := existingWebsocketSessionConn(sess, credential.ID, url, proxyURL, fingerprint)
@@ -198,8 +207,9 @@ func TestCodexTopicLookupPreservesWireIdentity(t *testing.T) {
 					t.Fatalf("topic lookup changed wire cache identity: %q, want %q", got, wantCache)
 				}
 				sessionHeader := "Session-Id"
+				wantSession := wantCache
 				if kind == "header_only" {
-					sessionHeader = "session_id"
+					wantSession = "native-session"
 					if wireHeaders.Get("Conversation_id") != wantCache {
 						t.Fatal("topic lookup changed the generated conversation header")
 					}
@@ -210,8 +220,8 @@ func TestCodexTopicLookupPreservesWireIdentity(t *testing.T) {
 						}
 					}
 				}
-				if wireHeaders.Get(sessionHeader) != wantCache {
-					t.Fatalf("handshake %s=%q, want %q", sessionHeader, wireHeaders.Get(sessionHeader), wantCache)
+				if wireHeaders.Get(sessionHeader) != wantSession {
+					t.Fatalf("handshake %s=%q, want %q", sessionHeader, wireHeaders.Get(sessionHeader), wantSession)
 				}
 				if req.Metadata[core.ExecutionSessionMetadataKey] != "old-execution-session" || opts.Metadata[core.ExecutionSessionMetadataKey] != "old-execution-session" {
 					t.Fatal("topic lookup mutated execution metadata")

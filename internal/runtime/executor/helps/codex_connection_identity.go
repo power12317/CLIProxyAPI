@@ -33,39 +33,11 @@ func CodexOwnerFingerprint(auth *cliproxyauth.Auth) string {
 	return codexIdentityDigest(parts)
 }
 
-// CodexConnectionFingerprint contains only handshake-stable settings. Per-turn
-// headers and infrastructure cookies must not force a reconnect on every request.
-// proxyURL is the final execution proxy resolved by the caller.
+// CodexConnectionFingerprint tracks authentication and the resolved proxy only.
+// Other handshake headers are fixed for the life of the socket. Changes to model
+// routing, client versions, beta flags, or custom headers must not close it.
 func CodexConnectionFingerprint(auth *cliproxyauth.Auth, headers http.Header, proxyURL string) string {
-	stable := make(http.Header)
-	for key, values := range headers {
-		switch strings.ToLower(key) {
-		case "cookie", "x-codex-turn-state", "x-codex-turn-metadata", "x-client-request-id", "x-codex-window-id", "session-id", "session_id", "thread-id", "conversation_id":
-			continue
-		case "x-codex-routing-hint":
-			if CodexAuthUsesOAuthCookieJar(auth) {
-				stable[strings.ToLower(key)] = make([]string, len(values))
-				for i, value := range values {
-					stable[strings.ToLower(key)][i] = codexConnectionRoutingHint(value)
-				}
-				continue
-			}
-		}
-		stable[strings.ToLower(key)] = values
-	}
-	return codexIdentityDigest([]any{CodexOwnerFingerprint(auth), stable, strings.TrimSpace(proxyURL)})
-}
-
-// Fast is a per-request body setting even on an existing websocket. Ignore only
-// the tier in a standard routing hint; model and custom routing changes still
-// require a new handshake, as do credential, identity, and proxy changes.
-func codexConnectionRoutingHint(value string) string {
-	model, tier, found := strings.Cut(value, ";tier=")
-	if found && strings.HasPrefix(model, "model=") && len(model) > len("model=") &&
-		!strings.Contains(model, ";") && tier != "" && !strings.Contains(tier, ";") {
-		return model
-	}
-	return value
+	return codexIdentityDigest([]any{CodexOwnerFingerprint(auth), topicHeader(headers, "Authorization"), strings.TrimSpace(proxyURL)})
 }
 
 func codexIdentityDigest(value any) string {

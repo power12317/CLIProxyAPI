@@ -880,7 +880,8 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		upstreamBody, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
 	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, toolHeaders)
-	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, opts.Headers)
+	wsClientHeaders := helps.CodexWebsocketClientHeaders(ctx, opts.Headers)
+	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, preserveNativeOutput, wsClientHeaders)
 	helps.RestoreCodexMetadataHeaders(wsHeaders, upstreamBody)
 	if officialOAuthRequest {
 		ua, beta := codexHeaderDefaults(e.cfg, auth)
@@ -888,9 +889,8 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		// Keep only one spelling of the routing session header on the wire.
 		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
 	}
-	if helps.CodexAuthUsesOAuthCookieJar(auth) {
-		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
-	}
+	helps.RestoreCodexWebsocketIdentityHeaders(wsHeaders, wsClientHeaders, upstreamBody)
+	applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, wsClientHeaders)
 	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	if !officialOAuthRequest {

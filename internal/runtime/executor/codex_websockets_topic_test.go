@@ -46,7 +46,7 @@ func TestCodexTopicReusesAcrossConnectionsTurnsModelsAndReload(t *testing.T) {
 	e := NewCodexWebsocketsExecutor(forceWebsocketTestConfig())
 	e.store = &codexWebsocketSessionStore{sessions: map[string]*codexWebsocketSession{}}
 	t.Cleanup(func() { e.CloseExecutionSession(auth.CloseAllExecutionSessionsID) })
-	credential := &auth.Auth{ID: t.Name(), Provider: "codex", Attributes: map[string]string{"base_url": server.URL, "api_key": "key"}}
+	credential := &auth.Auth{ID: t.Name(), Provider: "codex", Attributes: map[string]string{"base_url": server.URL}, Metadata: map[string]any{"access_token": "key", "account_id": "topic-owner", "codex_client_system": "windows"}}
 	execute := func(name, topic, turn, model, downstream string, overload bool) []byte {
 		t.Helper()
 		req := core.Request{Model: model, Payload: []byte(fmt.Sprintf(`{"model":%q,"input":[{"role":"user","content":%q}],"prompt_cache_key":"shared-cache","client_metadata":{"thread_id":%q,"session_id":"root","turn_id":%q}}`, model, name, topic, turn))}
@@ -88,6 +88,9 @@ func TestCodexTopicReusesAcrossConnectionsTurnsModelsAndReload(t *testing.T) {
 	replacement.store = e.store
 	e = replacement
 	second := execute("second", "root", "turn-1", "model-b", "downstream-2", false)
+	if gjson.GetBytes(second, "model").String() != "model-b" {
+		t.Fatal("reused OAuth connection did not send the new model")
+	}
 	if got := gjson.GetBytes(second, "client_metadata.x-codex-turn-state").String(); got != "standard-state" {
 		t.Fatalf("metadata priority lost: %q", got)
 	}

@@ -105,7 +105,8 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, toolHeaders)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	reporter.SetCodexFastMode(e.cfg)
-	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, nativeRequest, opts.Headers)
+	wsClientHeaders := helps.CodexWebsocketClientHeaders(ctx, opts.Headers)
+	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, nativeRequest, wsClientHeaders)
 	helps.RestoreCodexMetadataHeaders(wsHeaders, upstreamBody)
 	if officialOAuthRequest {
 		ua, beta := codexHeaderDefaults(e.cfg, auth)
@@ -113,9 +114,8 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		// Keep only one spelling of the routing session header on the wire.
 		deleteHeaderCaseInsensitive(wsHeaders, "session_id")
 	}
-	if helps.CodexAuthUsesOAuthCookieJar(auth) {
-		applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, opts.Headers)
-	}
+	helps.RestoreCodexWebsocketIdentityHeaders(wsHeaders, wsClientHeaders, upstreamBody)
+	applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, wsClientHeaders)
 	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	if !officialOAuthRequest {

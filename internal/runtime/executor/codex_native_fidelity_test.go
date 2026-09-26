@@ -110,10 +110,13 @@ func testCodexNativeStreamFidelity(t *testing.T, source sdktranslator.Format) {
 						if got := upstreamHeaders.Get(codexResponsesLiteHeader); got != wantLiteHeader {
 							t.Errorf("upstream Lite header = %q, want %q", got, wantLiteHeader)
 						}
-						alias := headerValueCaseInsensitive(upstreamHeaders, "session_id")
-						t.Logf("upstream session alias: %q", alias)
-						if (alias == "") != native {
-							t.Errorf("session alias = %q, native = %t", alias, native)
+						if alias := headerValueCaseInsensitive(upstreamHeaders, "session_id"); alias != "" {
+							t.Errorf("unexpected legacy session alias: %q", alias)
+						}
+						for key, want := range map[string]string{"Session-Id": "session-1", "Thread-Id": "thread-1", "X-Client-Request-Id": "thread-1"} {
+							if got := upstreamHeaders.Get(key); got != want {
+								t.Errorf("%s = %q, want %q", key, got, want)
+							}
 						}
 					}
 					t.Logf("downstream metadata: %q", metadataEvents)

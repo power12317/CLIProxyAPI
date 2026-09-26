@@ -153,7 +153,7 @@ func TestCodexConnectionReuseRequiresProxyAndIdentity(t *testing.T) {
 		t.Fatal("wrong proxy reused")
 	}
 	headers.Set("User-Agent", "codex-tui/changed")
-	if got, _ := existingWebsocketSessionConn(sess, auth.ID, sess.wsURL, proxy, helps.CodexConnectionFingerprint(auth, headers, proxy)); got != nil {
-		t.Fatal("changed identity reused")
+	if got, _ := existingWebsocketSessionConn(sess, auth.ID, sess.wsURL, proxy, helps.CodexConnectionFingerprint(auth, headers, proxy)); got != conn {
+		t.Fatal("client version change prevented reuse")
 	}
 }

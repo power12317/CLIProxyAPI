@@ -1,10 +1,12 @@
 package helps
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
@@ -42,5 +44,55 @@ func RestoreCodexMetadataHeaders(headers http.Header, body []byte) {
 			raw = CodexTurnMetadataHeader(raw)
 		}
 		headers.Set(key, raw)
+	}
+}
+
+// CodexWebsocketClientHeaders resolves the same inbound header source used by
+// the existing handshake pipeline. Callers must not mutate the returned map.
+func CodexWebsocketClientHeaders(ctx context.Context, explicit http.Header) http.Header {
+	if explicit != nil {
+		return explicit
+	}
+	if ctx != nil {
+		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+			return ginCtx.Request.Header
+		}
+	}
+	return nil
+}
+
+// RestoreCodexWebsocketIdentityHeaders preserves explicit client identities and
+// fills missing headers from the existing preparation/fidelity results. It does
+// not generate IDs or change the body, execution metadata, or topic ownership.
+// Configured header overrides and identity-confusion policy run afterwards.
+func RestoreCodexWebsocketIdentityHeaders(headers, source http.Header, body []byte) {
+	if headers == nil {
+		return
+	}
+	root := gjson.ParseBytes(body)
+	metadata := gjson.Parse(root.Get("client_metadata.x-codex-turn-metadata").String())
+	sessionID := firstString(
+		topicHeader(source, "Session-Id", "Session_id"),
+		topicHeader(headers, "Session-Id", "Session_id"),
+		root.Get("prompt_cache_key").String(),
+		root.Get("client_metadata.session_id").String(), metadata.Get("session_id").String(), root.Get("session_id").String(),
+		root.Get("client_metadata.thread_id").String(), metadata.Get("thread_id").String(), root.Get("thread_id").String(),
+		topicHeader(source, "Thread-Id", "Thread_id"),
+	)
+	threadID := firstString(
+		topicHeader(source, "Thread-Id", "Thread_id"), topicHeader(headers, "Thread-Id", "Thread_id"),
+		root.Get("client_metadata.thread_id").String(), metadata.Get("thread_id").String(), root.Get("thread_id").String(), sessionID,
+	)
+	requestID := firstString(topicHeader(source, "X-Client-Request-Id"), threadID, topicHeader(headers, "X-Client-Request-Id"))
+	for key, value := range map[string]string{"Session-Id": sessionID, "Thread-Id": threadID, "X-Client-Request-Id": requestID} {
+		if value == "" {
+			continue
+		}
+		for existing := range headers {
+			if strings.EqualFold(existing, key) || key == "Session-Id" && strings.EqualFold(existing, "session_id") || key == "Thread-Id" && strings.EqualFold(existing, "thread_id") {
+				delete(headers, existing)
+			}
+		}
+		headers.Set(key, value)
 	}
 }
