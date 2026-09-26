@@ -178,6 +178,7 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 		Model:                record.Model,
 		Alias:                record.Alias,
 		ResponseModel:        record.ResponseModel,
+		OaiLBNode:            record.OaiLBNode,
 		APIKey:               record.APIKey,
 		SessionID:            sessionID,
 		TurnID:               record.TurnID,

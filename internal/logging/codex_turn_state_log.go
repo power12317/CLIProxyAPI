@@ -7,6 +7,29 @@ import (
 )
 
 const codexTurnStateLogKey = "__codex_turn_state_log__"
+const codexTurnStateLogModelsKey = "__codex_turn_state_log_models__"
+
+type codexTurnStateLogModels struct {
+	requested string
+	response  string
+}
+
+const codexOaiLBNodeLogKey = "__codex_oailb_node__"
+
+func SetCodexOaiLBNode(c *gin.Context, node string) {
+	if c != nil {
+		c.Set(codexOaiLBNodeLogKey, node)
+	}
+}
+
+func CodexOaiLBNode(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, _ := c.Get(codexOaiLBNodeLogKey)
+	node, _ := value.(string)
+	return node
+}
 
 // CodexTicketProbeLogField selects the ticket probe marker instead of a source location.
 const CodexTicketProbeLogField = "codex_ticket_probe"
@@ -40,13 +63,22 @@ func ShortCodexIdentifier(value string) string {
 	return value
 }
 
-// SetCodexTurnStateLogFields stores the latest Codex turn-state statistics on
-// the request so GinLogrusLogger can append them to the access-log line.
+// SetCodexTurnStateLogFields initializes the access-log fields for an upstream
+// attempt, clearing any response model left by a previous attempt.
 func SetCodexTurnStateLogFields(c *gin.Context, fields CodexTurnStateLogFields) {
 	if c == nil {
 		return
 	}
 	c.Set(codexTurnStateLogKey, fields)
+	c.Set(codexTurnStateLogModelsKey, codexTurnStateLogModels{fields.RequestedModel, fields.ResponseModel})
+}
+
+// UpdateCodexTurnStateLogFields updates turn-state statistics without replacing
+// the independently reported models, including during final deferred updates.
+func UpdateCodexTurnStateLogFields(c *gin.Context, fields CodexTurnStateLogFields) {
+	if c != nil {
+		c.Set(codexTurnStateLogKey, fields)
+	}
 }
 
 // UpdateCodexTurnStateLogModels updates only the model fields already attached
@@ -56,13 +88,11 @@ func UpdateCodexTurnStateLogModels(c *gin.Context, requestedModel, responseModel
 	if c == nil {
 		return
 	}
-	fields, exists := codexTurnStateLogFields(c)
+	_, exists := c.Get(codexTurnStateLogKey)
 	if !exists {
 		return
 	}
-	fields.RequestedModel = requestedModel
-	fields.ResponseModel = responseModel
-	c.Set(codexTurnStateLogKey, fields)
+	c.Set(codexTurnStateLogModelsKey, codexTurnStateLogModels{requestedModel, responseModel})
 }
 
 // CodexTurnStateLogFieldsForContext returns the latest Codex request fields
@@ -80,5 +110,11 @@ func codexTurnStateLogFields(c *gin.Context) (CodexTurnStateLogFields, bool) {
 		return CodexTurnStateLogFields{}, false
 	}
 	fields, ok := value.(CodexTurnStateLogFields)
+	if modelsValue, exists := c.Get(codexTurnStateLogModelsKey); exists {
+		if models, valid := modelsValue.(codexTurnStateLogModels); valid {
+			fields.RequestedModel = models.requested
+			fields.ResponseModel = models.response
+		}
+	}
 	return fields, ok
 }

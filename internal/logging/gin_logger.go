@@ -88,7 +88,11 @@ func GinLogrusLogger() gin.HandlerFunc {
 		logLine := fmt.Sprintf("%3d | %13v | %15s | %-7s \"%s\"", statusCode, latency, clientIP, method, path)
 		if turnState, ok := codexTurnStateLogFields(c); ok {
 			modelPair := strings.TrimSpace(turnState.RequestedModel) + "/" + strings.TrimSpace(turnState.ResponseModel)
-			logLine = fmt.Sprintf("%3d | %13v | %s | %d/%d | %15s | %-7s \"%s\"", statusCode, latency, modelPair, turnState.RequestTurnStateLen, turnState.ResponseTurnStateLen, clientIP, method, path)
+			node := CodexOaiLBNode(c)
+			if node == "" {
+				node = "-"
+			}
+			logLine = fmt.Sprintf("%3d | %v | %s | %s | %d/%d | %15s | %-7s \"%s\"", statusCode, latency, node, modelPair, turnState.RequestTurnStateLen, turnState.ResponseTurnStateLen, clientIP, method, path)
 			entryFields["auth_file"] = turnState.AuthFile
 			entryFields["session_id"] = ShortCodexIdentifier(turnState.SessionID)
 			entryFields["turn_id"] = ShortCodexIdentifier(turnState.TurnID)

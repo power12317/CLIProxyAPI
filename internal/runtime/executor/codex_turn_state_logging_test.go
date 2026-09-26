@@ -36,15 +36,17 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 
 	for _, transport := range []string{"http", "sse", "compact", "websocket", "websocket-stream"} {
 		for _, tc := range []struct {
-			name        string
-			plan        string
-			model       string
-			ticketLen   int
-			passiveLen  int
-			responseLen int
-			missingTurn bool
+			name          string
+			plan          string
+			model         string
+			responseModel string
+			ticketLen     int
+			passiveLen    int
+			responseLen   int
+			missingTurn   bool
 		}{
 			{name: "personal-ticket", model: "gpt-6-astra", ticketLen: 780},
+			{name: "substituted-model", model: "gpt-6-sol", responseModel: "gpt-5.6-luna", responseLen: 780},
 			{name: "retained-ticket-replaced", model: "gpt-6-astra", ticketLen: 780, responseLen: 780},
 			{name: "312-preserves-ticket", model: "gpt-6-astra", ticketLen: 780, responseLen: 312},
 			{name: "replace-passive-312", model: "gpt-6-astra", ticketLen: 780, passiveLen: 312},
@@ -60,7 +62,16 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 				isWebsocket := strings.HasPrefix(transport, "websocket")
 				captured := make(chan string, 2)
 				var handshakes atomic.Int32
-				response := `{"id":"resp_1","model":"` + tc.model + `","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+				servedModel := tc.responseModel
+				if servedModel == "" {
+					servedModel = tc.model
+				}
+				response := `{"id":"resp_1","model":"` + servedModel + `","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+				if transport == "compact" {
+					// Compaction responses do not report a served model.
+					servedModel = ""
+					response = `{"id":"resp_1","object":"response.compaction","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+				}
 				completed := `{"type":"response.completed","response":` + response + `}`
 				responseState := strings.Repeat("r", tc.responseLen)
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +208,9 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 						t.Fatalf("outbound length = %d, want %d", wireLen, wantLen)
 					}
 					record := capture.await(t)
+					if record.ResponseModel != servedModel {
+						t.Errorf("usage response model = %q, want %q", record.ResponseModel, servedModel)
+					}
 					if record.RequestTurnStateLen != wireLen || record.ResponseTurnStateLen != tc.responseLen {
 						t.Errorf("usage lengths = %d/%d, want %d/%d", record.RequestTurnStateLen, record.ResponseTurnStateLen, wireLen, tc.responseLen)
 					}
@@ -205,6 +219,9 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 					for _, entry := range hook.AllEntries() {
 						if strings.Contains(entry.Message, `"/v1/responses"`) && strings.Contains(entry.Message, wantPair) {
 							found = true
+							if !strings.Contains(entry.Message, " | "+tc.model+"/"+servedModel+" | ") {
+								t.Errorf("access log lost response model: %s", entry.Message)
+							}
 						}
 					}
 					if !found {

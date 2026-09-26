@@ -104,7 +104,7 @@ func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target stri
 			state.override, state.configured = value, true
 		}
 	}
-	state.updateLogFields()
+	state.updateLogFields(true)
 	return state
 }
 
@@ -246,7 +246,7 @@ func (s *CodexTurnState) ApplyHeaders(headers http.Header) {
 		s.requestLen = len(value)
 		s.fieldsMu.Unlock()
 	}
-	s.updateLogFields()
+	s.updateLogFields(false)
 }
 
 // ApplyWebsocketBody mirrors state into each frame because a reused websocket
@@ -281,7 +281,7 @@ func (s *CodexTurnState) ApplyWebsocketBody(body []byte) []byte {
 	if errSet != nil {
 		return body
 	}
-	s.updateLogFields()
+	s.updateLogFields(false)
 	return updated
 }
 
@@ -299,7 +299,7 @@ func (s *CodexTurnState) ObserveRequest(headers http.Header, websocketBody []byt
 	s.fieldsMu.Lock()
 	s.requestLen = len(value)
 	s.fieldsMu.Unlock()
-	s.updateLogFields()
+	s.updateLogFields(false)
 }
 
 func (s *CodexTurnState) observe(value string) {
@@ -313,7 +313,7 @@ func (s *CodexTurnState) observeMetadata(value string, preferred bool) {
 	s.fieldsMu.Lock()
 	s.responseLen = len(value)
 	s.fieldsMu.Unlock()
-	s.updateLogFields()
+	s.updateLogFields(false)
 	if s.bucket == nil || strings.TrimSpace(value) == "" {
 		return
 	}
@@ -344,14 +344,14 @@ func (s *CodexTurnState) ObserveResponse(resp *http.Response) {
 		s.fieldsMu.Lock()
 		s.responseLen = 0
 		s.fieldsMu.Unlock()
-		s.updateLogFields()
+		s.updateLogFields(false)
 		return
 	}
 	if resp.Request != nil && resp.Request.URL != nil && codexTurnOrigin(resp.Request.URL.String()) != s.key.origin {
 		s.fieldsMu.Lock()
 		s.responseLen = 0
 		s.fieldsMu.Unlock()
-		s.updateLogFields()
+		s.updateLogFields(false)
 		return
 	}
 	s.observe(codexTurnHeaderValue(resp.Header, codexTurnStateHeader))
@@ -384,7 +384,7 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 	if ctx != nil {
 		s.ctx = ctx
 	}
-	s.updateLogFields()
+	s.updateLogFields(false)
 	ginCtx := ginContextFrom(ctx)
 	if !requestLogCaptureEnabled(cfg) {
 		return
@@ -394,6 +394,9 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 	}
 	requestLen, responseLen := s.turnStateLengths()
 	fields := []byte(fmt.Sprintf("\nauth_file: %q\nsession_id: %q\nturn_id: %q\nrequest_turn_state_len: %d\nresponse_turn_state_len: %d\n\n", s.authFile, logging.ShortCodexIdentifier(s.sessionID), logging.ShortCodexIdentifier(s.key.turnID), requestLen, responseLen))
+	if node := logging.CodexOaiLBNode(ginCtx); node != "" {
+		fields = append(fields, []byte("oailb_node: "+node+"\n")...)
+	}
 	if websocket {
 		appendAPIWebsocketTimeline(ginCtx, fields)
 		return
@@ -413,7 +416,7 @@ func (s *CodexTurnState) turnStateLengths() (int, int) {
 	return s.requestLen, s.responseLen
 }
 
-func (s *CodexTurnState) updateLogFields() {
+func (s *CodexTurnState) updateLogFields(resetModels bool) {
 	if s == nil || s.ctx == nil {
 		return
 	}
@@ -422,14 +425,19 @@ func (s *CodexTurnState) updateLogFields() {
 		return
 	}
 	requestLen, responseLen := s.turnStateLengths()
-	logging.SetCodexTurnStateLogFields(ginCtx, logging.CodexTurnStateLogFields{
+	fields := logging.CodexTurnStateLogFields{
 		AuthFile:             s.authFile,
 		SessionID:            s.sessionID,
 		TurnID:               s.key.turnID,
 		RequestedModel:       s.requestedModel,
 		RequestTurnStateLen:  requestLen,
 		ResponseTurnStateLen: responseLen,
-	})
+	}
+	if resetModels {
+		logging.SetCodexTurnStateLogFields(ginCtx, fields)
+	} else {
+		logging.UpdateCodexTurnStateLogFields(ginCtx, fields)
+	}
 }
 
 // InvalidateCodexTurnStates drops state for removed or replaced credentials.

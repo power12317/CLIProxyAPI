@@ -173,6 +173,7 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 			RequestTurnStateLen:  7,
 			ResponseTurnStateLen: 42,
 		})
+		SetCodexOaiLBNode(c, "unified-96")
 		c.Status(http.StatusBadRequest)
 	})
 
@@ -186,12 +187,18 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 	message := entries[0].Message
 	for _, want := range []string{
 		`POST    "/v1/responses"`,
-		"gpt-6-astra/gpt-5.6-luna",
-		"7/42",
+		" | unified-96 | gpt-6-astra/gpt-5.6-luna | 7/42 | ",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("access log = %q, missing %q", message, want)
 		}
+	}
+	columns := strings.Split(message, " | ")
+	if len(columns) != 7 || columns[0] != "400" || columns[1] != strings.TrimSpace(columns[1]) {
+		t.Fatalf("unexpected access-log column layout or padded duration: %q", message)
+	}
+	if strings.Contains(message, "oailb_node=") {
+		t.Fatalf("access log contains obsolete node suffix: %q", message)
 	}
 	if strings.Contains(message, "codex upstream response") || strings.Contains(message, "codex turn state") {
 		t.Fatalf("unexpected separate turn-state log message in access log = %q", message)
@@ -266,6 +273,9 @@ func TestGinLogrusLoggerPrintsBothTurnStateLengths(t *testing.T) {
 			entries := hook.AllEntries()
 			if len(entries) != 1 || !strings.Contains(entries[0].Message, tc.want) {
 				t.Fatalf("access log entries = %#v, want length %q", entries, tc.want)
+			}
+			if !strings.Contains(entries[0].Message, " | - | gpt-6-astra/gpt-5.6-luna | ") {
+				t.Fatalf("access log missing unknown-node placeholder: %q", entries[0].Message)
 			}
 		})
 	}

@@ -28,9 +28,10 @@ var globalCodexWebsocketSessionStore = &codexWebsocketSessionStore{
 }
 
 type websocketConnectionCloser struct {
-	conn *websocket.Conn
-	once sync.Once
-	err  error
+	conn      *websocket.Conn
+	oaiLBNode string
+	once      sync.Once
+	err       error
 }
 
 func newWebsocketConnectionCloser(conn *websocket.Conn) *websocketConnectionCloser {
@@ -683,6 +684,7 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 			go e.readUpstreamLoop(sess, conn)
 		}
 		logCodexWebsocketConnectedWithReused(sess, sess.sessionID, authID, wsURL, true)
+		helps.RecordCodexOaiLBNode(ctx, sess.oaiLBNodeFor(conn))
 		return conn, closer, nil, nil
 	}
 
@@ -700,6 +702,7 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 			log.Errorf("codex websockets executor: close websocket error: %v", errClose)
 		}
 		logCodexWebsocketConnectedWithReused(sess, sess.sessionID, authID, wsURL, true)
+		helps.RecordCodexOaiLBNode(ctx, sess.oaiLBNodeFor(previous))
 		return previous, previousCloser, nil, nil
 	}
 	sess.conn = conn
@@ -718,6 +721,20 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 	go e.readUpstreamLoop(sess, conn)
 	logCodexWebsocketConnectedWithReused(sess, sess.sessionID, authID, wsURL, false)
 	return conn, closer, resp, nil
+}
+
+// oaiLBNodeFor belongs to the handshake that established this socket. A newer
+// cookie jar must not change the node recorded for a reused socket.
+func (s *codexWebsocketSession) oaiLBNodeFor(conn *websocket.Conn) string {
+	if s == nil || conn == nil {
+		return ""
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.conn != conn || s.connCloser == nil {
+		return ""
+	}
+	return s.connCloser.oaiLBNode
 }
 
 func (s *codexWebsocketSession) continuationFor(conn *websocket.Conn) *helps.CodexContinuation {

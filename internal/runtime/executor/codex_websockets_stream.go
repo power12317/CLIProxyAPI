@@ -30,6 +30,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
+	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
 	defer func() {
 		if err != cliproxyexecutor.ErrCodexWebsocketFallback {
 			reporter.TrackFailure(ctx, &err)
@@ -118,6 +119,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	dialCtx := ctx
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
 		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth), helps.CodexConnectionFingerprint(auth, wsHeaders, executionProxyURL(ctx, e.cfg, auth)))
+		if conn != nil {
+			helps.RecordCodexOaiLBNode(ctx, sess.oaiLBNodeFor(conn))
+		}
 		if conn == nil {
 			unlockStreamSession()
 			return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
