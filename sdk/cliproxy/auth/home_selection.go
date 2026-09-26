@@ -154,6 +154,7 @@ type HomeDispatchSelection struct {
 	attemptCancels   *attemptCancels
 	once             sync.Once
 	retained         atomic.Bool
+	topicWebsocket   atomic.Bool
 	runtimeAuthBound atomic.Bool
 	ended            atomic.Bool
 }
@@ -221,6 +222,20 @@ func (s *HomeDispatchSelection) Retain() {
 		return
 	}
 	s.retained.Store(true)
+}
+
+// RetainTopicWebsocket transfers ownership to an upstream topic connection,
+// whose lifetime may outlast the downstream execution session.
+func (s *HomeDispatchSelection) RetainTopicWebsocket() {
+	if s != nil {
+		s.Retain()
+		s.topicWebsocket.Store(true)
+	}
+}
+
+// TopicWebsocketRetained excludes an active transport owner from downstream cleanup.
+func (s *HomeDispatchSelection) TopicWebsocketRetained() bool {
+	return s != nil && s.topicWebsocket.Load() && s.Retained()
 }
 
 // Retained reports whether an executor transferred this selection to a session.

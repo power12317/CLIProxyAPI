@@ -25,6 +25,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return e.CodexExecutor.executeCompact(ctx, auth, req, opts)
 	}
 
+	req, opts = e.prepareTopicIdentity(auth, req, opts)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	apiKey, baseURL := codexCreds(auth)
 	if baseURL == "" {
@@ -138,19 +139,21 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		authType, authValue = auth.AccountInfo()
 	}
 
-	executionSessionID := executionSessionIDFromOptions(opts)
+	executionSessionID := e.websocketSessionID(auth, req, opts, wsURL)
 	var sess *codexWebsocketSession
 	isEphemeralSession := false
 	sessionLocked := false
 	unlockSession := func() {
 		if sess != nil && sessionLocked {
-			sess.reqMu.Unlock()
+			sess.releaseRequest()
 			sessionLocked = false
 		}
 	}
 	if executionSessionID != "" {
 		sess = e.getOrCreateSession(executionSessionID)
-		sess.reqMu.Lock()
+		if errAcquire := sess.acquireRequest(ctx); errAcquire != nil {
+			return resp, errAcquire
+		}
 		sessionLocked = true
 		defer unlockSession()
 	} else {
@@ -158,6 +161,14 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		sess = newEphemeralCodexWebsocketSession()
 	}
 
+	if sess.isTopicSession() {
+		var errState error
+		upstreamBody, errState = e.refreshTopicTurnState(auth, turnState, upstreamBody, wsHeaders, baseModel)
+		if errState != nil {
+			unlockSession()
+			return resp, errState
+		}
+	}
 	wsReqBody := buildCodexWebsocketRequestBody(upstreamBody)
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
@@ -176,7 +187,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	var respHS *http.Response
 	var errDial error
 	dialCtx := ctx
-	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) && !e.usesCredentialSockets(auth) {
+	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
 		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth), helps.CodexConnectionFingerprint(auth, wsHeaders, executionProxyURL(ctx, e.cfg, auth)))
 		if conn == nil {
 			return resp, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
@@ -244,6 +255,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	if sess != nil {
 		readCh = sess.activate(conn)
 		defer func() {
+			if sess.isTopicSession() && err != nil {
+				e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "request_failed", err)
+			}
 			sess.clearActive(conn, readCh)
 		}()
 	}

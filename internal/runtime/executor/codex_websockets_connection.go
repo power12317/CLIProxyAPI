@@ -128,7 +128,7 @@ func mapCodexWebsocketWriteError(sess *codexWebsocketSession, conn *websocket.Co
 	if err == nil || sess == nil || conn == nil {
 		return err
 	}
-	if sess.credentialLaneFor(conn) != nil {
+	if sess.isTopicSession() {
 		return &cliproxyexecutor.CodexReplayUnsafeError{Cause: err}
 	}
 	upstreamErr := sess.upstreamDisconnectError(conn)
@@ -194,13 +194,6 @@ func buildCodexWebsocketRequestBody(body []byte) []byte {
 }
 
 func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession, conn *websocket.Conn, readCh chan codexWebsocketRead) (int, []byte, error) {
-	if lane := sess.credentialLaneFor(conn); lane != nil {
-		payload, err := lane.Read(ctx)
-		if err != nil {
-			return 0, nil, &cliproxyexecutor.CodexReplayUnsafeError{Cause: err}
-		}
-		return websocket.TextMessage, payload, nil
-	}
 	if sess == nil {
 		if conn == nil {
 			return 0, nil, fmt.Errorf("codex websockets executor: websocket conn is nil")

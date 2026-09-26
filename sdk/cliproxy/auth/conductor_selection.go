@@ -1821,6 +1821,9 @@ func (m *Manager) CloseExecutionSession(sessionID string) {
 	m.mu.Unlock()
 
 	for _, selection := range selections {
+		if sessionID != CloseAllExecutionSessionsID && selection.TopicWebsocketRetained() {
+			continue
+		}
 		selection.End("session_closed")
 	}
 	for i := range executors {

@@ -263,7 +263,7 @@ func TestCodex156FinalCacheAffinitySurvivesCacheHelpers(t *testing.T) {
 	}
 }
 
-func TestCodex156CustomWebsocketCredentialRevisionReconnects(t *testing.T) {
+func TestCodex156WebsocketCredentialRevisionReconnects(t *testing.T) {
 	captured := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
@@ -285,7 +285,7 @@ func TestCodex156CustomWebsocketCredentialRevisionReconnects(t *testing.T) {
 	executor.store = &codexWebsocketSessionStore{sessions: map[string]*codexWebsocketSession{}}
 	sess := executor.getOrCreateSession(t.Name())
 	defer executor.CloseExecutionSession(t.Name())
-	auth := &cliproxyauth.Auth{ID: "stable-id", Provider: "codex", Attributes: map[string]string{"base_url": server.URL}, Metadata: map[string]any{"access_token": "old", "account_id": "account"}}
+	auth := &cliproxyauth.Auth{ID: "stable-id", Provider: "codex", Metadata: map[string]any{"access_token": "old", "account_id": "account"}}
 	target := "ws" + strings.TrimPrefix(server.URL, "http")
 	headers := http.Header{"Authorization": {"Bearer old"}}
 	first, _, _, err := executor.ensureUpstreamConn(context.Background(), auth, sess, auth.ID, target, headers)
