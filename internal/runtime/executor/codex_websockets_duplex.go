@@ -140,6 +140,13 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 			}
 		}
 		processCreatePayload := func(payload []byte) bool {
+			if sess.isTopicSession() {
+				initialTopic := helps.CodexWebsocketTopic(initial.originalPayload, opts.Headers)
+				nextTopic := helps.CodexWebsocketTopic(payload, opts.Headers)
+				if nextTopic != "" && nextTopic != initialTopic {
+					return reject("a different thread requires its own websocket connection")
+				}
+			}
 			metadataMu.Lock()
 			isAppend := gjson.GetBytes(payload, "type").String() == "response.append"
 			prevID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
@@ -346,8 +353,8 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 		defer func() { current.turnState.LogResponse(ctx, e.cfg, true) }()
 		defer func() {
 			cancel()
-			// Retire this logical session and join its writer. A shared credential
-			// socket remains alive; only its transport owner may close it.
+			// Join the writer before releasing this topic. Healthy topic sockets
+			// remain open and the reader drains any unfinished response.
 			e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "duplex_closed", nil)
 			<-writerDone
 			sess.clearActive(conn, readCh)
@@ -591,11 +598,10 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "upstream_error", terminalErr)
 				eventReporter.PublishFailure(ctx, terminalErr)
 				if firstResponse {
-					if sess.credentialLaneFor(conn) == nil || !helps.CodexWebsocketRequestOverloaded(payload) {
+					if !helps.CodexWebsocketRequestOverloaded(payload) {
 						send(cliproxyexecutor.StreamChunk{Err: terminalErr})
 						return
 					}
-					// A capacity rejection finishes one create, not the shared socket.
 					metadataMu.Lock()
 					if len(pending) > 0 {
 						pending = pending[1:]

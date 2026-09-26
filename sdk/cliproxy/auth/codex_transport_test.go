@@ -63,3 +63,41 @@ func TestForcedWebsocketHomeOwnershipWithSSEClient(t *testing.T) {
 		t.Fatalf("release count=%d active=%v", closed.Load(), selection.Active())
 	}
 }
+
+func TestTopicWebsocketHomeSelectionOutlivesDownstream(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	m.SetConfig(&config.Config{Home: config.HomeConfig{Enabled: true}})
+	reg := executionregistry.New()
+	pending, err := reg.BeginDispatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := reg.Install(pending, executionregistry.ScopeSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := newHomeDispatchSelection(&Auth{ID: "topic-home", Provider: "codex"}, nil, "codex", scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection.accountedModel = "gpt-5.4"
+	var closed atomic.Int32
+	if err := selection.Bind(func() error { closed.Add(1); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	selection.RetainTopicWebsocket()
+	ctx := coreexecutor.WithDownstreamWebsocket(t.Context())
+	opts := coreexecutor.Options{Metadata: map[string]any{coreexecutor.ExecutionSessionMetadataKey: "downstream"}}
+	if !m.retainHomeWebsocketSelection(ctx, opts, "gpt-5.4", selection) {
+		t.Fatal("selection not retained")
+	}
+	m.CloseExecutionSession("downstream")
+	if closed.Load() != 0 || !selection.Active() {
+		t.Fatal("downstream closed the topic selection")
+	}
+	selection.End("transport_closed")
+	selection.End("transport_closed")
+	if closed.Load() != 1 || selection.Active() {
+		t.Fatal("transport failed to release its selection exactly once")
+	}
+}
