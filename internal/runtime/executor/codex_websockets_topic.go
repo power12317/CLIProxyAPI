@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"strings"
 
@@ -10,34 +9,6 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
-
-// Carry the topic identity through generated cache headers as well as connection
-// lookup, without modifying the caller's metadata maps or explicit wire IDs.
-func (e *CodexWebsocketsExecutor) prepareTopicIdentity(auth *cliproxyauth.Auth, req core.Request, opts core.Options) (core.Request, core.Options) {
-	_, baseURL := codexCreds(auth)
-	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api/codex"
-	}
-	upstreamURL, err := buildCodexResponsesWebsocketURL(strings.TrimSuffix(baseURL, "/") + "/responses")
-	if err != nil {
-		return req, opts
-	}
-	id := e.websocketSessionID(auth, req, opts, upstreamURL)
-	if !strings.HasPrefix(id, helps.CodexTopicSessionPrefix) {
-		return req, opts
-	}
-	req.Metadata = maps.Clone(req.Metadata)
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
-	}
-	opts.Metadata = maps.Clone(opts.Metadata)
-	if opts.Metadata == nil {
-		opts.Metadata = make(map[string]any)
-	}
-	req.Metadata[core.ExecutionSessionMetadataKey] = id
-	opts.Metadata[core.ExecutionSessionMetadataKey] = id
-	return req, opts
-}
 
 // A waiting request must read the latest same-turn metadata immediately before
 // sending. Explicit ticket/header overrides keep their existing precedence.
@@ -52,6 +23,8 @@ func (e *CodexWebsocketsExecutor) refreshTopicTurnState(auth *cliproxyauth.Auth,
 	return body, nil
 }
 
+// Topic ownership is only a connection lookup key. Keep execution metadata
+// unchanged so connection reuse cannot alter the existing wire identity pipeline.
 func (e *CodexWebsocketsExecutor) websocketSessionID(auth *cliproxyauth.Auth, req core.Request, opts core.Options, upstreamURL string) string {
 	if auth != nil && (e.cfg != nil && e.cfg.Codex.ForceWebsocket || core.ChatGPTCodexDestination(auth.Provider, auth.Attributes["base_url"])) {
 		if id := helps.CodexWebsocketTopicSessionID(auth, req, opts, upstreamURL); id != "" {

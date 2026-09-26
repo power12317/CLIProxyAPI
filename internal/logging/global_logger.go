@@ -54,6 +54,10 @@ var quotedLogFields = map[string]struct{}{
 
 var pluginPathFieldOrder = []string{"path", "active_path", "retired_path"}
 
+// Keep connection diagnostics scoped to these events; generic auth/URL fields
+// elsewhere may contain credentials and must not become globally visible.
+var codexWebsocketFieldOrder = []string{"scope", "topic", "auth", "url", "last_event", "is_terminal"}
+
 func formatLogFieldValue(key string, value any) string {
 	if _, quoted := quotedLogFields[key]; quoted {
 		if stringValue, ok := value.(string); ok {
@@ -93,6 +97,17 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 		for _, k := range logFieldOrder {
 			if v, ok := entry.Data[k]; ok {
 				fields = append(fields, fmt.Sprintf("%s=%s", k, formatLogFieldValue(k, v)))
+			}
+		}
+		if entry.Data["scope"] == "topic" && strings.HasPrefix(message, "codex websockets: upstream ") {
+			for _, k := range codexWebsocketFieldOrder {
+				if v, ok := entry.Data[k]; ok {
+					if value, isString := v.(string); isString {
+						fields = append(fields, fmt.Sprintf("%s=%s", k, strconv.Quote(value)))
+					} else {
+						fields = append(fields, fmt.Sprintf("%s=%v", k, v))
+					}
+				}
 			}
 		}
 		if pluginID, ok := entry.Data["plugin_id"]; ok && strings.TrimSpace(fmt.Sprint(pluginID)) != "" {

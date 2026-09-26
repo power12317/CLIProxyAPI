@@ -178,7 +178,8 @@ The internal topic key is scoped by downstream caller, credential owner, and
 upstream endpoint. It is never inserted into the upstream protocol. It excludes
 the model, turn, and temporary downstream connection ID. Client-supplied wire
 identifiers retain the existing fidelity/identity pipeline; generated cache
-identity uses the stable topic instead of the temporary downstream connection.
+identity retains the pre-topic execution-session/derived-session rules. The topic
+lookup must not overwrite execution metadata used to generate upstream IDs.
 A request without a resolvable topic retains the previous execution-session
 behavior rather than being grouped with unrelated requests.
 
@@ -198,10 +199,15 @@ current native response; it is not treated as a transport failure.
 
 Request-level overloads and response failures do not close a healthy topic
 socket. Configuration reload and downstream-session cleanup do not close it
-either. Model and per-turn changes use current request frames, while the existing
-handshake remains fixed. Existing model routing and steering replay checks still
-apply. Current connection settings are used when an actual disconnect requires a
-new connection. There is no background reconnect. Existing liveness deadlines
+either when connection settings remain compatible. Per-turn metadata and an
+OAuth tier-only change use current request frames. As in the CLI's
+[connection compatibility check](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/client.rs#L1525),
+topic identity alone does not make a physical connection reusable. Changed
+authorization, stable handshake headers (including model/custom routing), or
+resolved proxy retire the old socket before dialing a replacement under the same
+topic lock. The existing connection fingerprint excludes per-turn metadata and
+infrastructure cookies. A physical replacement also resets connection-local
+response continuation. There is no background reconnect. Existing liveness deadlines
 remain in effect; this change adds no post-handshake network deadline.
 
 Physical connection logs include `scope=topic`, a stable hashed `topic`, and a
@@ -209,6 +215,19 @@ fresh `connection` ID for each physical socket. A connected log means a new
 handshake succeeded. Reuse emits no connected log. Disconnect logs preserve the
 physical ID and reason. Shutdown and explicit credential removal still release
 resources.
+
+The September 26 follow-up fixes two regressions in the initial topic repair:
+topic sockets no longer bypass the existing compatibility checks, and the
+internal topic key no longer changes generated wire identity. The custom log
+formatter now includes topic connection diagnostics; generic auth and URL fields
+on unrelated log entries remain hidden. Reuse remains silent.
+
+Local regression tests exercise unchanged-socket reuse, token/header/proxy
+replacement, closure before a replacement handshake, concurrent dial attempts,
+continuation reset, and actual WS frames from both executor entry points. Wire
+identity fixtures retain the pre-topic baseline's generated values and explicit
+native IDs. These tests establish the repaired behavior without claiming to
+reproduce every production close/500 reported in the September 26 incident.
 
 Home selection retention follows the upstream topic lifetime. Closing a
 downstream execution session does not end its retained topic selection. A later

@@ -176,3 +176,43 @@ func TestLogFormatterPrintsCodexCredentialAndTurnIdentityPrefix(t *testing.T) {
 		t.Fatalf("formatted line %q missing selected turn-state length", got)
 	}
 }
+
+func TestLogFormatterPrintsCodexTopicConnectionDiagnostics(t *testing.T) {
+	entry := log.NewEntry(log.New())
+	entry.Level = log.InfoLevel
+	entry.Message = "codex websockets: upstream disconnected"
+	entry.Data = log.Fields{
+		"scope": "topic", "topic": "codex-topic/hash", "connection": "physical-1",
+		"auth": "fixture.json", "url": "wss://chatgpt.com/backend-api/codex/responses",
+		"reason": "upstream_disconnected", "last_event": "error", "is_terminal": true,
+		"Authorization": "secret-token", "Cookie": "private-cookie",
+	}
+	formatted, err := (&LogFormatter{}).Format(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := string(formatted)
+	for _, want := range []string{`scope="topic"`, `topic="codex-topic/hash"`, `connection="physical-1"`, `auth="fixture.json"`, `url="wss://chatgpt.com/backend-api/codex/responses"`, `reason="upstream_disconnected"`, `last_event="error"`, `is_terminal=true`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("missing %s in %s", want, line)
+		}
+	}
+	if strings.Contains(line, "secret-token") || strings.Contains(line, "private-cookie") {
+		t.Fatal("sensitive fields were printed")
+	}
+	entry.Data["auth"] = "fixture\nsecondary"
+	formatted, err = (&LogFormatter{}).Format(entry)
+	if err != nil || strings.Count(string(formatted), "\n") != 1 {
+		t.Fatalf("unsafe multiline diagnostic: %q, %v", formatted, err)
+	}
+	entry.Message = "unrelated request"
+	formatted, err = (&LogFormatter{}).Format(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"auth=", "url=", "topic="} {
+		if strings.Contains(string(formatted), field) {
+			t.Fatalf("generic %s field became visible", field)
+		}
+	}
+}

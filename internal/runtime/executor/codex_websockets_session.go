@@ -435,7 +435,7 @@ func existingWebsocketSessionConn(sess *codexWebsocketSession, authID string, ws
 	sess.connMu.Lock()
 	conn := sess.conn
 	closer := sess.connCloser
-	matches := conn != nil && closer != nil && websocketSessionTargetMatches(sess, authID, wsURL, proxyURL) && (sess.isTopicSession() || len(fingerprints) == 0 || sess.connectionFingerprint == fingerprints[0])
+	matches := conn != nil && closer != nil && websocketSessionTargetMatches(sess, authID, wsURL, proxyURL) && (len(fingerprints) == 0 || sess.connectionFingerprint == fingerprints[0])
 	sess.connMu.Unlock()
 	if !matches || sess.upstreamDisconnectError(conn) != nil {
 		return nil, nil
@@ -446,7 +446,7 @@ func existingWebsocketSessionConn(sess *codexWebsocketSession, authID string, ws
 func websocketSessionTargetMatches(sess *codexWebsocketSession, authID string, wsURL string, proxyURL string) bool {
 	return strings.TrimSpace(sess.authID) == strings.TrimSpace(authID) &&
 		strings.TrimSpace(sess.wsURL) == strings.TrimSpace(wsURL) &&
-		(sess.isTopicSession() || strings.TrimSpace(sess.proxyURL) == strings.TrimSpace(proxyURL))
+		strings.TrimSpace(sess.proxyURL) == strings.TrimSpace(proxyURL)
 }
 
 func detachMismatchedWebsocketSessionConn(sess *codexWebsocketSession, authID string, wsURL string, proxyURL string, fingerprints ...string) (*websocket.Conn, *websocketConnectionCloser, string, string, cliproxyexecutor.ExecutionLifecycle) {
@@ -457,7 +457,7 @@ func detachMismatchedWebsocketSessionConn(sess *codexWebsocketSession, authID st
 	sess.connMu.Lock()
 	defer sess.connMu.Unlock()
 	conn := sess.conn
-	if conn == nil || (websocketSessionTargetMatches(sess, authID, wsURL, proxyURL) && (sess.isTopicSession() || len(fingerprints) == 0 || sess.connectionFingerprint == fingerprints[0])) {
+	if conn == nil || (websocketSessionTargetMatches(sess, authID, wsURL, proxyURL) && (len(fingerprints) == 0 || sess.connectionFingerprint == fingerprints[0])) {
 		return nil, nil, "", "", nil
 	}
 
