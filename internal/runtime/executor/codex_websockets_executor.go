@@ -27,6 +27,9 @@ type CodexWebsocketsExecutor struct {
 	*CodexExecutor
 
 	store *codexWebsocketSessionStore
+
+	// An injected registry also enables credential sharing for custom endpoints.
+	credentialSockets *helps.CodexWebsocketRegistry
 }
 
 func NewCodexWebsocketsExecutor(cfg *config.Config) *CodexWebsocketsExecutor {

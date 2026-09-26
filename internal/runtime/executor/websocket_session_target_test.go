@@ -880,6 +880,8 @@ func TestHomeSelectionRegistryDrainClosesRealWebsocketSessions(t *testing.T) {
 				t.Fatalf("SelectHomeAuthByKind() error = %v", errSelect)
 			}
 			auth := selection.CloneAuth()
+			// Custom endpoints retain their original request-owned lifecycle.
+			auth.Attributes["base_url"] = server.URL
 			sess := getSession("real-home-drain")
 			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 			conn := ensureWebsocketTargetConn(t, ensureConn, auth, sess, auth.ID, wsURL)

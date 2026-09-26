@@ -27,9 +27,10 @@ var globalCodexWebsocketSessionStore = &codexWebsocketSessionStore{
 }
 
 type websocketConnectionCloser struct {
-	conn *websocket.Conn
-	once sync.Once
-	err  error
+	conn    *websocket.Conn
+	once    sync.Once
+	err     error
+	closeFn func() error
 }
 
 func newWebsocketConnectionCloser(conn *websocket.Conn) *websocketConnectionCloser {
@@ -44,7 +45,11 @@ func (c *websocketConnectionCloser) Close() error {
 		return nil
 	}
 	c.once.Do(func() {
-		c.err = c.conn.Close()
+		if c.closeFn != nil {
+			c.err = c.closeFn()
+		} else {
+			c.err = c.conn.Close()
+		}
 	})
 	return c.err
 }
@@ -53,6 +58,10 @@ type codexWebsocketSession struct {
 	sessionID string
 
 	reqMu sync.Mutex
+
+	credentialLane        *helps.CodexWebsocketLane
+	credentialConn        *websocket.Conn
+	credentialWatchCancel context.CancelFunc
 
 	connMu                    sync.Mutex
 	conn                      *websocket.Conn
@@ -159,6 +168,9 @@ func (s *codexWebsocketSession) clearActive(conn *websocket.Conn, ch chan codexW
 	}
 	s.activeCancel = nil
 	s.activeDone = nil
+	if lane := s.credentialLaneFor(conn); lane != nil {
+		lane.Release()
+	}
 	return true
 }
 
@@ -176,6 +188,13 @@ func (s *codexWebsocketSession) writeMessage(conn *websocket.Conn, msgType int, 
 	if conn == nil {
 		return fmt.Errorf("codex websockets executor: websocket conn is nil")
 	}
+	if lane := s.credentialLaneFor(conn); lane != nil {
+		return lane.Write(payload, func(frame []byte) error { return s.writeRawMessage(conn, msgType, frame) })
+	}
+	return s.writeRawMessage(conn, msgType, payload)
+}
+
+func (s *codexWebsocketSession) writeRawMessage(conn *websocket.Conn, msgType int, payload []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if testWebsocketWritePayloadHook != nil {
@@ -355,8 +374,12 @@ func (s *codexWebsocketSession) detachConnection(conn *websocket.Conn, lifecycle
 	}
 	s.connMu.Lock()
 	var closer *websocketConnectionCloser
-	matched := s.conn == conn
+	matched := s.conn == conn && (lifecycle == nil || s.lifecycle == lifecycle)
 	if matched {
+		if s.credentialWatchCancel != nil {
+			s.credentialWatchCancel()
+			s.credentialWatchCancel = nil
+		}
 		closer = s.connCloser
 		s.conn = nil
 		s.connCloser = nil
@@ -609,6 +632,9 @@ func (e *CodexWebsocketsExecutor) UpstreamDisconnectChan(sessionID string) <-cha
 }
 
 func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *cliproxyauth.Auth, sess *codexWebsocketSession, authID string, wsURL string, headers http.Header) (*websocket.Conn, *websocketConnectionCloser, *http.Response, error) {
+	if e.usesCredentialSockets(auth) {
+		return e.ensureCredentialSocket(ctx, auth, sess, wsURL, headers)
+	}
 	if sess == nil {
 		conn, closer, resp, err := e.dialCodexWebsocket(ctx, auth, wsURL, headers)
 		if conn != nil {
@@ -769,6 +795,15 @@ func (e *CodexWebsocketsExecutor) invalidateUpstreamConnWithoutDisconnectNotify(
 }
 
 func (e *CodexWebsocketsExecutor) invalidateUpstreamConnWithNotify(sess *codexWebsocketSession, conn *websocket.Conn, reason string, err error, notify bool) {
+	if sess.credentialLaneFor(conn) != nil {
+		// A response failure or cancellation does not own the physical socket.
+		sess.connMu.Lock()
+		if sess.conn == conn {
+			sess.continuation = &helps.CodexContinuation{}
+		}
+		sess.connMu.Unlock()
+		return
+	}
 	if sess == nil || conn == nil {
 		return
 	}
@@ -872,6 +907,10 @@ func closeCodexWebsocketSession(sess *codexWebsocketSession, reason string) {
 	}
 
 	sess.connMu.Lock()
+	if sess.credentialWatchCancel != nil {
+		sess.credentialWatchCancel()
+		sess.credentialWatchCancel = nil
+	}
 	conn := sess.conn
 	authID := sess.authID
 	wsURL := sess.wsURL
@@ -890,7 +929,9 @@ func closeCodexWebsocketSession(sess *codexWebsocketSession, reason string) {
 
 	lastEvent := sess.getLastEventType(conn)
 	if conn != nil {
-		logCodexWebsocketDisconnectedWithLastEvent(sess, sessionID, authID, wsURL, reason, lastEvent, nil)
+		if sess.credentialLaneFor(conn) == nil {
+			logCodexWebsocketDisconnectedWithLastEvent(sess, sessionID, authID, wsURL, reason, lastEvent, nil)
+		}
 		if closer != nil {
 			if errClose := closer.Close(); errClose != nil {
 				log.Errorf("codex websockets executor: close websocket error: %v", errClose)
@@ -920,7 +961,6 @@ func logCodexWebsocketConnectedWithReused(sess *codexWebsocketSession, sessionID
 	sessionStr := strings.TrimSpace(sessionID)
 	sessionKind := sessionObjectKind(sess)
 	if reused {
-		log.Infof("codex websockets: upstream connected session=%s auth=%s url=%s session_object=%s reused=true", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind)
 		return
 	}
 	log.Infof("codex websockets: upstream connected session=%s auth=%s url=%s session_object=%s reused=false", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind)

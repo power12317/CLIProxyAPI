@@ -35,6 +35,73 @@ The actual CLI schema is authoritative for the ChatGPT backend. In particular,
 Removing them based on the public guide would lose native reasoning-summary
 delivery controls. Background HTTP requests are not WS generation requests.
 
+## Credential-owned physical connections
+
+The September 26 correction makes each ChatGPT Codex credential own at most one
+physical WebSocket **per CPA process**, shared across executor instances, models,
+callers, logical sessions, and downstream JSON/SSE/WebSocket transports. Independent
+CPA processes or replicas do not share a socket. The registry key is the stable
+auth ID, never a model, session, token revision, or proxy URL.
+
+Only a failed physical read/write (including a peer close or TCP failure) retires
+the connection. Retirement closes the underlying socket and finishes its sole
+reader before making the credential eligible for another dial. A later request
+may reconnect; there is no background reconnect. Cancellation, a completed
+response, overload, idle time, stream exhaustion, executor replacement, config
+changes, session eviction, and Home selection release cannot close a healthy
+physical connection. Process exit necessarily ends process-owned sockets.
+
+Token refresh, model/tier changes, and proxy configuration changes do not rotate a
+live connection. Its original handshake and transport remain in effect until it
+ends. A request for a different account owner or endpoint under the same auth ID
+fails explicitly instead of using another owner's authenticated socket or opening
+a second connection. A revoked credential is still excluded by normal selection;
+retaining its idle transport does not authorize new requests with it.
+
+Parallelism uses the public Responses WebSocket `stream_id` protocol. The sole
+reader routes events to logical subscribers; the write lock covers only a frame
+write. It does not cover generation. Slots use a fixed set of at most 32 names,
+recycling an idle slot rather than creating a new name or a new connection for
+every conversation. Continuation optimization is invalidated when a slot changes
+owners. Full slots return a request-scoped capacity error without dialing again.
+The public service documents at most 16 active responses; CPA cannot remove an
+upstream concurrency limit or promise unlimited simultaneous generations.
+
+A cancelled subscriber stops receiving events while the physical reader drains
+its response. Its slot cannot be reused before a terminal boundary. Private
+steering that still has unacknowledged or accepted-but-unresolved input retains
+its slot until the corresponding successor/failure establishes that boundary.
+Each subscriber has a bounded buffer (256 events, 8 MiB); a slow reader fails its
+own logical stream while other streams continue. It cannot close the shared
+socket or stall the global read loop.
+
+This multiplexing layer is an extension beyond Codex CLI **0.157.1**:
+
+- [CLI request schema](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/codex-api/src/common.rs#L313)
+  does not declare `stream_id`.
+- [CLI stream lock](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/codex-api/src/endpoint/responses_websocket.rs#L275)
+  is held for the entire response stream, rather than using a multi-stream dispatcher.
+- [The public WebSocket guide](https://developers.openai.com/api/docs/guides/websocket-mode)
+  explicitly documents concurrent named streams and echoed stream IDs on events.
+
+**ChatGPT backend support still requires live verification.** The supplied HAR
+has 11 sequential creates, no `stream_id`, and unlabelled Codex metadata events.
+It does not establish that `chatgpt.com/backend-api/codex/responses` enables the
+public multiplexing extension. The implementation does not guess metadata owners:
+an event without a supported, unambiguous route fails affected requests and marks
+the connection unusable for further requests while keeping the physical socket
+open. It does not silently serialize, switch to SSE, replay, or open another
+connection. Credential-wide rate-limit/timing events are not assigned to a turn.
+Private steering acknowledgements may be routed by their known parent response.
+Internal CPA stream names are removed before forwarding to downstream clients.
+An existing downstream stream name is restored. The existing downstream WS
+execution session represents one logical stream; changing its stream name during
+that session fails explicitly. Independent downstream sessions execute in parallel.
+
+Physical connection logs have `scope=credential` and a stable `connection` ID for
+the lifetime of the socket. Only actual connects/disconnects are logged; logical
+reuse does not emit an `upstream connected` line.
+
 ## Ordering and parameter ownership
 
 | Stage / field | Behavior |
@@ -48,7 +115,7 @@ delivery controls. Background HTTP requests are not WS generation requests.
 | `x-codex-turn-state` | Prefer a valid `response.metadata` value; use `codex.response.metadata` only as a fallback. In forced mode, retain the first value from the preferred source for the same credential owner, origin, and turn. A standard event may replace an earlier fallback value. Replay it in `client_metadata` on subsequent frames and in HTTP headers on fallback. New turns and changed owners do not inherit it. |
 | WS handshake turn-state | Native CLI passes no turn-state capture to its connect operation. Forced mode does not promote a handshake-only token into the turn cache. Dynamic state belongs in frames, not reconnect handshake headers. Explicit header/model overrides and the separately configured ticket feature retain their existing precedence. |
 | Metadata on reused connections | Rebuild each frame's metadata from the current request. Reusing a socket does not mean reusing the previous turn's metadata. |
-| Fast / `service_tier` changes | Reuse an eligible live OAuth socket when only the tier changes. Send the new tier in the request frame; the existing handshake remains unchanged. The next fresh connection uses the current model/tier routing hint. |
+| Model / Fast / `service_tier` changes | Send current settings in each frame while retaining the credential socket and its original handshake. The next connection, after an actual transport closure, uses current handshake settings. |
 | ETags, rate limits, model and usage events | Preserve existing event/usage handling. These response values are not blindly copied into request headers. |
 | Connection closed | Invalidate the socket and connection-local response continuation. A later request dials again. No detached reconnect task runs. |
 
@@ -105,10 +172,10 @@ Other capture-driven corrections:
   the legacy `Conversation_id` alias, or a handshake Lite header from a body-only
   Lite marker. Explicit header overrides remain effective, and each frame keeps
   its Lite mirror. HTTP response negotiation is unchanged.
-- Ping and Pong renew the existing WS read deadline for both pooled and raw
-  connections. The capture's 371-second heartbeat-only gap between prewarm and
-  generation should not close a healthy socket at five minutes. Reconnection
-  remains lazy and begins only when a later request needs a connection.
+- Legacy/custom WS transports retain their heartbeat liveness handling. The
+  credential-owned ChatGPT connection has no post-handshake idle/read deadline
+  and answers Ping without adding a write deadline. Idle time alone never
+  triggers local closure or replacement.
 
 Compression negotiation remains library-specific: the captured CLI offers
 `permessage-deflate; client_max_window_bits`, while Gorilla offers
@@ -147,29 +214,36 @@ Larger full requests still execute; clients must supply a full replay when retai
 history is unavailable. Full-duplex steering remains tied to its live upstream;
 HTTP cannot transparently resume an active steering exchange.
 
-HTTP clients use exclusive execution-session leases, isolated by authenticated
-caller scope, canonical session, route model, and request proxy. The socket also
-checks credential owner, endpoint, resolved proxy, and handshake fingerprint.
-The fingerprint ignores only the tier component of a standard OAuth
-`model=...;tier=...` routing hint. Model changes, custom routing fields, credential
-revisions, and proxy or identity changes still require a fresh connection.
-This follows official CPA v7.3.17 Fast-toggle reuse while retaining fork isolation.
-It does not establish how the backend bills or schedules a mid-connection tier change.
-Requests without an authenticated caller scope do not reuse connections across
-requests. At most 128 idle leases are retained per pool; active requests continue
-to use the existing credential concurrency controls. There is no new idle timer
-or generation timeout; existing WS liveness deadlines remain in effect.
-Disabling the policy drains idle leases immediately and retires active leases
-after their requests finish. Shutdown also drains the pool.
+HTTP clients still use logical execution-session leases to isolate replay and
+request state by caller, canonical session, route model, and request proxy. These
+leases no longer own ChatGPT physical sockets. Missing caller scope disables
+logical continuation reuse, but does not disable credential-level socket reuse.
+Closing/draining a logical pool never drains the credential transport registry.
+Custom upstream endpoints retain their existing handshake-fingerprint lifecycle.
 
-Home retains the selection and its bound resources for the upstream WS lifetime,
-even when the downstream is SSE. Stream completion releases the request attempt,
-not a retained socket's Home ownership. Disconnect, eviction, drain, and explicit
-session closure release ownership. No Home wire message or release tuple format
-is changed. The Home server repository was not available in this workspace;
-integration tests exercise CPA's existing selection/resource contract.
+Home selection callbacks own logical subscriptions. Replacing or draining a
+selection releases that selection and its request resources without closing a
+healthy credential socket. Physical disconnect releases retained selection
+ownership. No Home wire messages or release tuple formats change. A separate
+Home server deployment has not been tested.
 
 ## Validation
+
+The September 26 credential-registry tests use local WebSocket servers. A barrier
+requires all ten independent creates to arrive on one physical connection before
+any response starts, then returns interleaved responses and metadata. Assertions
+cover peak live sockets of one, JSON/SSE/native WS routing, metadata priority and
+turn isolation, active executor replacement, cancellation/draining, overload,
+Home selection release, lazy redial after peer close, non-replay after ambiguous
+failure, slow subscribers, 32-slot capacity, and 96 successive logical sessions
+without creating additional stream names or sockets. Separate credentials retain
+independent connections. These tests do not certify the private ChatGPT endpoint.
+
+Validation for the September 26 correction: `go test ./...`, the required server
+build, and targeted `go test -race` for multiplexing, executor replacement, Home
+selection, fallback, and downstream overload handling passed. No live account was
+used, no management-panel change was needed, and no production image was published.
+
 
 Tests cover the exact five-failure boundary and fresh next-request budget, SSE
 translation, native stream options and identity headers, socket reuse, turn-state
