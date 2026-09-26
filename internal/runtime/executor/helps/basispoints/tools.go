@@ -151,11 +151,20 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		if errParse != nil {
 			return nil, errParse
 		}
-		if !wrapped && (name == "update_plan" || name == "functions.update_plan") {
+		preserveEncryption := !wrapped && native["type"] == "function_call"
+		encrypted := native["encrypted_function_args"]
+		hasEncryptedArguments := preserveEncryption && encrypted != nil && digest(encrypted) != digest([]string{})
+		if !wrapped && !hasEncryptedArguments && (name == "update_plan" || name == "functions.update_plan") {
 			arguments = translatePlanArguments(arguments, spec.Parameters)
 		}
 		encoded, _ := json.Marshal(arguments)
 		result["type"], result["arguments"] = "function_call", string(encoded)
+		// Missing and empty encryption metadata have different client semantics.
+		// Relay arguments are plaintext; wrapper metadata describes the wrapper.
+		result["encrypted_function_args"] = []string{}
+		if preserveEncryption && encrypted != nil {
+			result["encrypted_function_args"] = encrypted
+		}
 	}
 	replay := native
 	if !wrapped && name != "update_plan" && name != "functions.update_plan" {

@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,12 +24,35 @@ import (
 
 // BasispointsExecutor shares the Codex credential lifecycle and changes only the
 // upstream interface and its request/response protocol.
-type BasispointsExecutor struct{ cfg *config.Config }
+type BasispointsExecutor struct {
+	cfg      *config.Config
+	cooldown *basispoints.Cooldown
+}
 
 func NewBasispointsExecutor(cfg *config.Config) *BasispointsExecutor {
-	return &BasispointsExecutor{cfg: cfg}
+	return &BasispointsExecutor{cfg: cfg, cooldown: basispoints.SharedCooldown}
 }
 func (e *BasispointsExecutor) Identifier() string { return "codex" }
+
+func (e *BasispointsExecutor) enabled() bool {
+	return e != nil && e.cfg != nil && e.cfg.Codex.Basispoints.Enabled && e.cooldown.PausedUntil().IsZero()
+}
+
+func (e *BasispointsExecutor) pauseOnForbidden(ctx context.Context, status int) {
+	if status != http.StatusForbidden {
+		return
+	}
+	if until, started := e.cooldown.Pause(); started {
+		helps.LogBasispointsProtocolPause(ctx, until)
+	}
+}
+
+func (e *BasispointsExecutor) observeError(ctx context.Context, err error) {
+	var status interface{ StatusCode() int }
+	if errors.As(err, &status) {
+		e.pauseOnForbidden(ctx, status.StatusCode())
+	}
+}
 
 func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter) (*http.Response, *basispoints.Bridge, []byte, error) {
 	if opts.Alt != "" {
@@ -101,6 +125,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	client = reporter.TrackHTTPClient(client)
 	body, err = basispoints.UploadInputImages(ctx, client, body, headers, basispoints.Scope(caller, authID), &basispoints.SharedAttachments)
 	if err != nil {
+		e.observeError(ctx, err)
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		helps.RecordBasispointsFailure(ctx, e.cfg, original, nil, nil, "attachment_upload", err)
 		return nil, nil, nil, err
@@ -122,6 +147,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		return nil, nil, nil, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, response.StatusCode, response.Header.Clone())
+	e.pauseOnForbidden(ctx, response.StatusCode)
 	turnState.ObserveResponse(response)
 	turnState.LogResponse(ctx, e.cfg, false)
 	bridge.ObserveEvent = func(raw []byte) {
@@ -172,6 +198,7 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 		return nil
 	})
 	if err != nil {
+		e.observeError(ctx, err)
 		original := req.Payload
 		if len(opts.OriginalRequest) > 0 {
 			original = opts.OriginalRequest
@@ -241,6 +268,7 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 			return nil
 		})
 		if errRead != nil {
+			e.observeError(ctx, errRead)
 			original := req.Payload
 			if len(opts.OriginalRequest) > 0 {
 				original = opts.OriginalRequest

@@ -1,5 +1,35 @@
 # Basispoints tools and logging repair — 2026-09-25
 
+## Function encryption metadata and temporary 403 fallback — 2026-09-26
+
+Function calls decoded from the Basispoints transport now explicitly declare
+`encrypted_function_args: []`. Missing and empty metadata are different to Codex
+collaboration clients. Direct function calls retain their upstream encryption
+declaration, and genuinely encrypted arguments are not renamed by the native
+plan adapter. Wrapper encryption metadata remains in native replay only; it
+does not describe the decoded client arguments. SSE item events and the
+completed/non-streaming response carry the same declaration. Existing reasoning
+ciphertext, agent messages, custom input and account rotation stay intact.
+
+An upstream Basispoints HTTP 403 pauses the protocol globally within the running
+CPA process for 30 minutes, including attachment-upload rejections. The current
+request retains its error and is not replayed. Subsequent requests use the
+existing native Codex HTTP/WebSocket selection while paused. Other HTTP statuses
+do not start this pause. Concurrent rejections do not extend an active window.
+The warning log includes the request ID and the automatic recovery time.
+
+The pause is separate from `codex.basispoints.enabled` and survives executor
+replacement during configuration reloads. Once the deadline passes, new
+requests use Basispoints only if that setting is still enabled. A manual disable
+therefore remains authoritative. The pause is in-memory and resets on process
+restart; no config file, credential state, account binding or timer callback
+enables Basispoints.
+
+Regression coverage uses a controlled clock for expiry, concurrent 403s,
+configuration reload, manual disable and account rotation. It also covers
+plaintext collaboration calls and direct encryption declarations across response
+modes; it does not claim live upstream decryption or policy acceptance.
+
 ## Handoff and custom exec compatibility — v2026.09.25-3
 
 Two supplied request logs contained a Codex cross-thread handoff represented as a

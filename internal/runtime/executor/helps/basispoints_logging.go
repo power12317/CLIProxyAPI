@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -107,4 +108,11 @@ func LogBasispointsRejection(ctx context.Context, status int, wire []byte, heade
 
 func LogBasispointsNativeToolRoute(ctx context.Context, reason string) {
 	log.WithFields(log.Fields{"request_id": logging.GetRequestID(ctx), "reason": reason}).Info("Basispoints hosted tool request uses native Codex")
+}
+
+func LogBasispointsProtocolPause(ctx context.Context, until time.Time) {
+	log.WithFields(log.Fields{
+		"request_id": logging.GetRequestID(ctx), "status": http.StatusForbidden,
+		"paused_until": until.Format(time.RFC3339), "cooldown_seconds": int(basispoints.ForbiddenCooldown.Seconds()),
+	}).Warnf("Basispoints paused for 30 minutes after upstream HTTP 403: paused_until=%s; subsequent requests use native Codex while paused; config remains authoritative", until.Format(time.RFC3339))
 }

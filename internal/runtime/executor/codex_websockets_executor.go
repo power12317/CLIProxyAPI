@@ -73,7 +73,7 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 }
 
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	if e != nil && e.httpExec != nil && e.httpExec.cfg != nil && e.httpExec.cfg.Codex.Basispoints.Enabled {
+	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
 			helps.LogBasispointsNativeToolRoute(ctx, reason)
@@ -111,7 +111,7 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	if e != nil && e.httpExec != nil && e.httpExec.cfg != nil && e.httpExec.cfg.Codex.Basispoints.Enabled {
+	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
 			helps.LogBasispointsNativeToolRoute(ctx, reason)
@@ -190,7 +190,7 @@ func (e *CodexAutoExecutor) UpstreamDisconnectChan(sessionID string) <-chan erro
 	}
 	// Forced mode owns recovery in the ordered request stream. An asynchronous
 	// upstream close must not close a healthy downstream connection first.
-	if e.httpExec.cfg != nil && (e.httpExec.cfg.Codex.ForceWebsocket || e.httpExec.cfg.Codex.Basispoints.Enabled) {
+	if e.httpExec.cfg != nil && (e.httpExec.cfg.Codex.ForceWebsocket || e.basispointsExec.enabled()) {
 		return nil
 	}
 	return e.wsExec.UpstreamDisconnectChan(sessionID)
