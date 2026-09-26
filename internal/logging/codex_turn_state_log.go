@@ -8,6 +8,23 @@ import (
 
 const codexTurnStateLogKey = "__codex_turn_state_log__"
 
+const codexOaiLBNodeLogKey = "__codex_oailb_node__"
+
+func SetCodexOaiLBNode(c *gin.Context, node string) {
+	if c != nil {
+		c.Set(codexOaiLBNodeLogKey, node)
+	}
+}
+
+func CodexOaiLBNode(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, _ := c.Get(codexOaiLBNodeLogKey)
+	node, _ := value.(string)
+	return node
+}
+
 // CodexTicketProbeLogField selects the ticket probe marker instead of a source location.
 const CodexTicketProbeLogField = "codex_ticket_probe"
 

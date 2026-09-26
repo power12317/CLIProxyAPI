@@ -778,8 +778,9 @@ nonstream-keepalive-interval: 0
 #   beta-features: "multi_agent"
 #   fast-mode: "auto" # Applies to native Codex and Basispoints request bodies, including codex-api-key entries.
 #   # auto keeps existing behavior; default removes service_tier; fast forces priority; ultrafast forces ultrafast.
-#   # Experimental: borrow only __oailb from one other CPA credential. Omit to disable.
+#   # Experimental: borrow __oailb and __cflb from one other CPA credential. Omit to disable.
 #   # Refresh on demand at JWT exp minus 300 seconds; fall back to the local jar at exp.
+#   # __cflb is opaque and has no extra expiration check.
 #   # The management key is encrypted on save/load using auth-dir/.oailb-data-key.
 #   oailb-borrow:
 #     source-instance-id: "instance-9"

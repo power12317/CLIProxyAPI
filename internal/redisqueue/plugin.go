@@ -162,6 +162,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		System:               strings.TrimSpace(record.System),
 		ResponseServiceTier:  responseServiceTier,
 		ResponseModel:        responseModel,
+		OaiLBNode:            record.OaiLBNode,
 		ResolvedModel:        responseModel,
 		TurnStateLen:         turnStateLen,
 		RequestTurnStateLen:  record.RequestTurnStateLen,
@@ -198,6 +199,7 @@ type queuedUsageDetail struct {
 	System               string                   `json:"system,omitempty"`
 	ResponseServiceTier  string                   `json:"response_service_tier,omitempty"`
 	ResponseModel        string                   `json:"response_model,omitempty"`
+	OaiLBNode            string                   `json:"oailb_node,omitempty"`
 	ResolvedModel        string                   `json:"resolved_model,omitempty"`
 	TurnStateLen         string                   `json:"turn_state_len,omitempty"`
 	RequestTurnStateLen  int                      `json:"request_turn_state_len,omitempty"`

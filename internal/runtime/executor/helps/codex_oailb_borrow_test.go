@@ -29,8 +29,11 @@ func TestOaiLBBorrowRefreshGraceAndHardExpiry(t *testing.T) {
 	value := oaiLBTestJWT(start.Add(65*time.Minute), "first")
 	e := &oaiLBBorrowEntry{}
 	calls := 0
-	fetch := func(context.Context) string { calls++; return value }
-	get := func() string { return e.get(t.Context(), func() time.Time { return now }, fetch) }
+	fetch := func(context.Context) (CodexRoutingCookies, bool) {
+		calls++
+		return CodexRoutingCookies{OaiLB: value}, value != ""
+	}
+	get := func() string { return e.get(t.Context(), func() time.Time { return now }, fetch).OaiLB }
 	first := get()
 	if first == "" || calls != 1 {
 		t.Fatal("initial acquisition failed")
@@ -68,19 +71,19 @@ func TestOaiLBBorrowConcurrentAcquisition(t *testing.T) {
 	value := oaiLBTestJWT(time.Now().Add(time.Hour), "shared")
 	start, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	fetch := func(context.Context) string {
+	fetch := func(context.Context) (CodexRoutingCookies, bool) {
 		if calls.Add(1) == 1 {
 			close(start)
 		}
 		<-release
-		return value
+		return CodexRoutingCookies{OaiLB: value}, true
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if e.get(t.Context(), time.Now, fetch) != value {
+			if e.get(t.Context(), time.Now, fetch).OaiLB != value {
 				t.Error("wrong shared value")
 			}
 		}()
@@ -98,7 +101,7 @@ type oaiLBTestTransport func(*http.Request) (*http.Response, error)
 func (f oaiLBTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestOaiLBHTTPOverlayAndLocalJarIsolation(t *testing.T) {
-	borrowed := oaiLBTestJWT(time.Now().Add(time.Hour), "borrowed")
+	borrowed := oaiLBTestJWT(time.Now().Add(time.Hour), "chat.gateway.unified-96.api.openai.com")
 	var calls atomic.Int32
 	donor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -109,7 +112,7 @@ func TestOaiLBHTTPOverlayAndLocalJarIsolation(t *testing.T) {
 		if r.URL.Path != "/prefix/v0/management/codex/oailb/borrow" || r.Header.Get("Authorization") != "Bearer password" || body.AuthID != "selected-auth" {
 			t.Error("incorrect donor request")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"available": true, "value": borrowed})
+		_ = json.NewEncoder(w).Encode(map[string]any{"available": true, "value": borrowed, "cflb": "donor-cflb"})
 	}))
 	defer donor.Close()
 	cfg := &config.Config{CodexHeaderDefaults: config.CodexHeaderDefaults{OaiLBBorrow: &config.CodexOaiLBBorrowConfig{SourceURL: donor.URL + "/prefix", SourceAuthID: "selected-auth", SourceManagementKey: "password"}}}
@@ -117,22 +120,26 @@ func TestOaiLBHTTPOverlayAndLocalJarIsolation(t *testing.T) {
 	defer InvalidateCodexCookieJar(credential.ID)
 	u, _ := url.Parse("https://chatgpt.com/backend-api/codex/responses")
 	jar := CodexCookieJarForAuth(credential)
-	jar.SetCookies(u, []*http.Cookie{{Name: "__oailb", Value: "self", Path: "/"}, {Name: "__cf_bm", Value: "cf", Path: "/"}})
+	jar.SetCookies(u, []*http.Cookie{{Name: "__oailb", Value: "self", Path: "/"}, {Name: "__cf_bm", Value: "cf", Path: "/"}, {Name: "__cflb", Value: "local-cflb", Path: "/"}})
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", oaiLBTestTransport(func(r *http.Request) (*http.Response, error) {
 		seen := map[string][]string{}
 		for _, c := range r.Cookies() {
 			seen[c.Name] = append(seen[c.Name], c.Value)
 		}
 		if r.URL.Path == codexChatGPTResponses {
-			if len(seen["__oailb"]) != 1 || seen["__oailb"][0] != borrowed || len(seen["__cf_bm"]) != 1 {
+			if observed, _ := r.Context().Value(codexOaiLBReporterKey{}).(*UsageReporter); observed == nil || observed.OaiLBNode() != "unified-96" {
+				t.Error("did not observe the actual borrowed request cookie")
+			}
+			if len(seen["__oailb"]) != 1 || seen["__oailb"][0] != borrowed || len(seen["__cf_bm"]) != 1 || len(seen["__cflb"]) != 1 || seen["__cflb"][0] != "donor-cflb" {
 				t.Errorf("wrong merged cookies: %#v", seen)
 			}
 		} else if seen["__oailb"][0] != "self-new" {
 			t.Error("usage unexpectedly borrowed")
 		}
-		return &http.Response{StatusCode: 200, Header: http.Header{"Set-Cookie": {"__oailb=self-new; Path=/", "__cf_bm=cf-new; Path=/"}}, Body: io.NopCloser(strings.NewReader("ok")), Request: r}, nil
+		return &http.Response{StatusCode: 200, Header: http.Header{"Set-Cookie": {"__oailb=self-new; Path=/", "__cf_bm=cf-new; Path=/", "__cflb=local-cflb-new; Path=/"}}, Body: io.NopCloser(strings.NewReader("ok")), Request: r}, nil
 	}))
-	client := NewUtlsHTTPClient(ctx, cfg, credential, 0)
+	reporter := NewUsageReporter(ctx, "codex", "model", credential)
+	client := reporter.TrackHTTPClient(NewUtlsHTTPClient(ctx, cfg, credential, 0))
 	for _, path := range []string{codexChatGPTResponses, codexChatGPTResponses, codexChatGPTUsagePath} {
 		req, _ := http.NewRequestWithContext(ctx, "POST", "https://chatgpt.com"+path, nil)
 		if path == codexChatGPTResponses {
@@ -151,7 +158,7 @@ func TestOaiLBHTTPOverlayAndLocalJarIsolation(t *testing.T) {
 		t.Fatal("borrowed value polluted local jar")
 	}
 	wsHeaders := PrepareCodexOaiLBBorrow(ctx, cfg, credential, "wss://chatgpt.com/backend-api/codex/responses", nil)
-	if !strings.Contains(wsHeaders.Get("Cookie"), "__oailb="+borrowed) || !strings.Contains(wsHeaders.Get("Cookie"), "__cf_bm=cf-new") {
+	if !strings.Contains(wsHeaders.Get("Cookie"), "__oailb="+borrowed) || !strings.Contains(wsHeaders.Get("Cookie"), "__cf_bm=cf-new") || !strings.Contains(wsHeaders.Get("Cookie"), "__cflb=donor-cflb") {
 		t.Fatal("websocket cookie composition failed")
 	}
 	if h := PrepareCodexOaiLBBorrow(ctx, cfg, credential, "https://thirdparty.example/responses", nil); len(h) != 0 {
@@ -175,8 +182,8 @@ func TestOaiLBDonorRefreshesUsageWithoutTicketOrBackgroundTask(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Set-Cookie": {"__oailb=" + value + "; Path=/; Max-Age=3600; Secure"}}, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
 	}))
 	for i := 0; i < 2; i++ {
-		got, err := BorrowCodexOaiLB(ctx, &config.Config{}, credential)
-		if err != nil || got != value {
+		got, err := BorrowCodexRoutingCookies(ctx, &config.Config{}, credential)
+		if err != nil || got.OaiLB != value {
 			t.Fatal("usage acquisition failed", err)
 		}
 	}

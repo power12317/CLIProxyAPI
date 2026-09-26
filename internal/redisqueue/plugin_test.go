@@ -45,6 +45,7 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 			ServiceTier:          "auto",
 			ResponseServiceTier:  "default",
 			ResponseModel:        "gpt-5.6-luna",
+			OaiLBNode:            "unified-96",
 			TurnID:               "turn-1",
 			System:               "windows",
 			RequestTurnStateLen:  292,
@@ -80,6 +81,7 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireMissingField(t, payload, "request_service_tier")
 		requireStringField(t, payload, "response_service_tier", "default")
 		requireStringField(t, payload, "response_model", "gpt-5.6-luna")
+		requireStringField(t, payload, "oailb_node", "unified-96")
 		requireStringField(t, payload, "resolved_model", "gpt-5.6-luna")
 		requireStringField(t, payload, "turn_id", "turn-1")
 		requireStringField(t, payload, "system", "windows")

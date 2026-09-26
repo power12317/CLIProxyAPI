@@ -93,6 +93,9 @@ func GinLogrusLogger() gin.HandlerFunc {
 			entryFields["session_id"] = ShortCodexIdentifier(turnState.SessionID)
 			entryFields["turn_id"] = ShortCodexIdentifier(turnState.TurnID)
 		}
+		if node := CodexOaiLBNode(c); node != "" {
+			logLine += " oailb_node=" + node
+		}
 		if creditsUsed(c) {
 			logLine += " [credits]"
 		}

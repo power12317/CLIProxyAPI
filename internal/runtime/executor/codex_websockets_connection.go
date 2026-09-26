@@ -80,12 +80,18 @@ func (e *CodexWebsocketsExecutor) dialCodexWebsocketOnce(ctx context.Context, au
 	// Routing cookies apply only to a new handshake. Their expiry or replacement
 	// must never invalidate a healthy, already authenticated websocket.
 	headers = helps.PrepareCodexOaiLBBorrow(ctx, e.cfg, auth, wsURL, headers)
+	helps.RecordCodexOaiLBNode(ctx, helps.CodexOaiLBNodeForExchange(headers, nil))
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
+	node := helps.CodexOaiLBNodeForExchange(headers, resp)
+	helps.RecordCodexOaiLBNode(ctx, node)
 	helps.StoreCodexWebsocketCookies(jar, wsURL, resp)
 	if err != nil {
 		cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	}
 	closer := newWebsocketConnectionCloser(conn)
+	if closer != nil {
+		closer.oaiLBNode = node
+	}
 	if conn != nil {
 		// Avoid gorilla/websocket flate tail validation issues on some upstreams/Go versions.
 		// Negotiating permessage-deflate is fine; we just don't compress outbound messages.

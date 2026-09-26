@@ -59,6 +59,7 @@ type UsageReporter struct {
 	responseModelMu sync.RWMutex
 	// responseModel holds the latest model name reported by the upstream response.
 	responseModel string
+	oaiLBNode     string
 	// responseModelFinal marks that a terminal event already reported the served
 	// model, so later frames skip parsing entirely.
 	responseModelFinal atomic.Bool
@@ -678,6 +679,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		ServiceTier:         r.serviceTier,
 		ResponseServiceTier: strings.TrimSpace(detail.ResponseServiceTier),
 		ResponseModel:       responseModel,
+		OaiLBNode:           r.OaiLBNode(),
 		Generate:            usage.GenerateFlag(r.generate),
 		Stream:              r.stream,
 		RequestedAt:         r.requestedAt,
@@ -763,6 +765,9 @@ type usageTTFTRoundTripper struct {
 }
 
 func (t usageTTFTRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.reporter != nil && t.reporter.provider == "codex" {
+		req = req.WithContext(WithCodexOaiLBReporter(req.Context(), t.reporter))
+	}
 	cliproxyexecutor.MarkUpstreamAttempt(req.Context())
 	t.reporter.StartResponseTTFT()
 	resp, errRoundTrip := t.base.RoundTrip(req)

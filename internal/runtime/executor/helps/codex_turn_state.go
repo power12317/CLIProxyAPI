@@ -394,6 +394,9 @@ func (s *CodexTurnState) LogResponse(ctx context.Context, cfg *config.Config, we
 	}
 	requestLen, responseLen := s.turnStateLengths()
 	fields := []byte(fmt.Sprintf("\nauth_file: %q\nsession_id: %q\nturn_id: %q\nrequest_turn_state_len: %d\nresponse_turn_state_len: %d\n\n", s.authFile, logging.ShortCodexIdentifier(s.sessionID), logging.ShortCodexIdentifier(s.key.turnID), requestLen, responseLen))
+	if node := logging.CodexOaiLBNode(ginCtx); node != "" {
+		fields = append(fields, []byte("oailb_node: "+node+"\n")...)
+	}
 	if websocket {
 		appendAPIWebsocketTimeline(ginCtx, fields)
 		return

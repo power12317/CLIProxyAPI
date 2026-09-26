@@ -6,11 +6,12 @@
 
 - 在当前实例的 Codex Header Defaults 内选择来源实例，再选择该实例的一份启用的 Codex OAuth 凭据，默认不借用。
 - 当前实例保存来源连接地址、管理密码、稳定凭据 ID 和展示信息；不依赖 CPAMP 持续运行。
-- 仅覆盖 `https://chatgpt.com/backend-api/codex/responses` 的 HTTP/SSE 请求以及对应 WSS 握手中的 `__oailb`。
-- 其他 Cookie 保持当前实例当前凭据自己的值。本地 Jar 始终正常接收上游 Set-Cookie；借用值不写入本地 Jar。
-- 只解析 JWT `exp`。`exp - 300 秒` 前固定复用；从该时刻开始按请求尝试刷新；刷新失败时旧值可继续用到 `exp`；到 `exp` 后使用本地 Jar。
+- 仅覆盖 `https://chatgpt.com/backend-api/codex/responses` 的 HTTP/SSE 请求以及对应 WSS 握手中的 `__oailb` 和 `__cflb`。
+- 除这两项外，其他 Cookie 保持当前实例当前凭据自己的值。本地 Jar 始终正常接收上游 Set-Cookie；借用值不写入本地 Jar。
+- `__cflb` 作为普通 Cookie 同次借用，不解析 JWT、不额外设置或校验有效期。已有借用值不因 `__oailb` 的 JWT 到期而失效，网络获取失败保留已有值；来源成功返回缺少 `cflb` 时，恢复该项本地 Cookie。
+- `__oailb` 只解析 JWT `exp`。`exp - 300 秒` 前固定复用；从该时刻开始按请求尝试刷新；刷新失败时旧值可继续用到 `exp`；到 `exp` 后使用本地 Jar。
 - 不另外保存 Cookie 生成时间或到期时间，不解析 JWT host 作为请求地址，不修改 JWT。
-- 初次获取失败、来源不可达、鉴权失败、来源凭据被删除/禁用/没有 Cookie，都回退本地，不因借用失败阻断模型请求。
+- 某一项没有可用借用值时使用该项本地 Cookie，不因借用失败阻断模型请求。`__oailb` 的过期检查不套用到 `__cflb`。
 - 获取最多等待 3 秒，失败或仍在刷新窗口时最多每 30 秒尝试一次，同来源并发获取合并。
 - 来源只读取指定凭据的本地 Jar，缺失或进入刷新窗口时按需请求 usage。无需开启 turn-state。既有 16 分钟 usage 刷新保持。
 - 不登记借出用途，不建立后台刷新/保活任务，不共享来源 OAuth token、其他 Cookie 或整个 Jar。
@@ -95,12 +96,13 @@ Manager 给选择器返回来源 ID、凭据 ID/文件名即可，不把来源�
 {
   "available": true,
   "value": "<__oailb JWT>",
+  "cflb": "<__cflb 值>",
   "expires_at": "2026-09-26T12:00:00Z",
   "remaining_seconds": 1800
 }
 ```
 
-不可用响应：`{"available":false}`。Cookie 的最终有效性由借用方解析 JWT `exp` 判定；返回时间字段只供接口使用，不另作续期依据。再次读取不会延长 JWT。
+两项都不可用时响应：`{"available":false}`。仅 `__cflb` 可用时返回 `available:true`、`value:""` 和 `cflb`，不返回 JWT 时间字段。旧版本没有 `cflb` 字段时仍兼容。`__oailb` 的最终有效性由借用方解析 JWT `exp` 判定；返回时间字段只供接口使用，不另作续期依据。再次读取不会延长 JWT。
 
 该接口不供前端展示 Cookie。没有可借值时仅按需尝试 usage 刷新，不触发门票探测、不创建常驻任务。来源凭据必须精确匹配，找不到时不得替换成其他凭据。
 
@@ -109,7 +111,7 @@ Manager 给选择器返回来源 ID、凭据 ID/文件名即可，不把来源�
 - 当前实例保存选择，其他实例配置不变；来源凭据切换、清空及旧版兼容正常。
 - 配置文件不保存来源管理密码明文，重启后可解密，YAML 往返不丢其他配置和注释。
 - exp-300 前不频繁拉取；缓冲期获取失败保留旧 JWT；exp 后回退本地；恢复后重新借用。
-- HTTP 实際发送只有一个 `__oailb`，其他本地 Cookie 保留，响应 Cookie 更新不覆盖借用缓存。
+- HTTP 实际发送的每个已借用 Cookie 名称只有一个值，`__cf_bm` 等其他本地 Cookie 保留，响应 Cookie 更新不覆盖借用缓存。
 - WSS 握手与 HTTP 使用同一个借用缓存；已建立的普通/topic/双工连接不因 Cookie 到期或借用变化而重连，也不额外访问来源接口。自然重连时使用当时有效的借用值或本地 Jar。
 - 来源端只刷新选中凭据；未开启 turn-state 时 usage 按需刷新仍可工作。
 - 测试仅用本地模拟上游，不调用真实账号或 ChatGPT 模型。
@@ -121,3 +123,21 @@ Manager 给选择器返回来源 ID、凭据 ID/文件名即可，不把来源�
 - 推送该 tag 触发 `docker-oailb-borrow`，构建 Linux amd64/arm64 多架构镜像。
 - 镜像独立存放在 `ghcr.io/power12317/cliproxyapi-oailb-borrow:vYYYY.MM.DD-N`。
 - 实验 tag 排除在通用 Release 流程外，不更新正式镜像的 `latest`。
+
+## 节点日志与请求监控增量
+
+CPA 现有 usage/request 记录增加可选字段 `oailb_node`，例如 `"unified-96"`；无值时为空或省略，旧实例兼容。字段沿现有 Redis/RESP 队列及插件 usage 记录传递，不新建独立记录系统。
+
+- 从响应 `Set-Cookie` 的 `__oailb` JWT 中提取 `host`，响应没有该 Cookie 时使用实际发送的请求 Cookie。
+- `chat.gateway.unified-96.api.openai.com` 只记录 `unified-96`，不为该字段保存完整 JWT 或完整域名。
+- 节点仅接受 1～63 位的 DNS 单标签：小写字母、数字、内部连字符。响应明确携带 Cookie 但无法解析有效节点时留空。
+- HTTP 读取最终合成后的 Cookie，包含借用覆盖结果；失败响应也遵循相同优先级。
+- WebSocket 在握手时确定并保存短节点名。后续复用连接及双工请求沿用该连接的节点，不读取最新 Jar 或最新借用缓存推测节点，不因 Cookie 变化重连。
+- 正常 Gin 请求日志在同一行追加 `oailb_node=unified-96`，不需要开启详细日志、不额外产生一行。未知节点不追加。
+- CPAMP 将 `oailb_node` 贯通现有请求记录，在请求监控的状态单元格增加一行节点名；日志页保留并展示该字段。旧数据缺失时不显示节点行。
+
+请求事件示例：
+
+```json
+{"request_id":"...","model":"gpt-6-astra","response_model":"gpt-6-astra","turn_state_len":"292/0","oailb_node":"unified-96"}
+```

@@ -1445,6 +1445,8 @@ type UsageRecord struct {
 	ResponseServiceTier string
 	// System stores the Codex client system when known.
 	System string
+	// OaiLBNode stores only the short gateway label from the routing cookie.
+	OaiLBNode string
 	// RequestTurnStateLen and ResponseTurnStateLen store Codex turn-state sizes.
 	RequestTurnStateLen  int
 	ResponseTurnStateLen int

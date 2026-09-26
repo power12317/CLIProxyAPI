@@ -17,6 +17,46 @@ import (
 	auth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
+func TestOaiLBWebsocketHandshakeNodeSelection(t *testing.T) {
+	for _, responseCookie := range []bool{false, true} {
+		jwt := func(node string) string {
+			body, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "host": "chat.gateway." + node + ".api.openai.com"})
+			return "e30." + base64.RawURLEncoding.EncodeToString(body) + ".sig"
+		}
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := make(http.Header)
+			if responseCookie {
+				h.Add("Set-Cookie", "__oailb="+jwt("unified-42")+"; Path=/")
+			}
+			c, err := (&websocket.Upgrader{}).Upgrade(w, r, h)
+			if err != nil {
+				return
+			}
+			defer func() { _ = c.Close() }()
+			_, _, _ = c.ReadMessage()
+		}))
+		credential := &auth.Auth{ID: t.Name(), Provider: "codex", Attributes: map[string]string{"api_key": "key"}}
+		e := NewCodexWebsocketsExecutor(&config.Config{})
+		reporter := helps.NewUsageReporter(t.Context(), "codex", "model", credential)
+		ctx := helps.WithCodexOaiLBReporter(t.Context(), reporter)
+		conn, closer, resp, err := e.dialCodexWebsocketOnce(ctx, credential, "ws"+strings.TrimPrefix(upstream.URL, "http"), http.Header{"Cookie": {"__oailb=" + jwt("unified-96")}})
+		closeHTTPResponseBody(resp, "test")
+		if err != nil {
+			upstream.Close()
+			t.Fatal(err)
+		}
+		want := "unified-96"
+		if responseCookie {
+			want = "unified-42"
+		}
+		if reporter.OaiLBNode() != want || closer.oaiLBNode != want {
+			t.Errorf("wrong handshake node: reporter=%q socket=%q", reporter.OaiLBNode(), closer.oaiLBNode)
+		}
+		_ = conn.Close()
+		upstream.Close()
+	}
+}
+
 func TestOaiLBHealthyWebsocketIgnoresCookieExpiryAndBorrowChanges(t *testing.T) {
 	for _, topic := range []bool{false, true} {
 		name := "session"
@@ -77,6 +117,7 @@ func TestOaiLBHealthyWebsocketIgnoresCookieExpiryAndBorrowChanges(t *testing.T) 
 			sess.conn, sess.connCloser = conn, newWebsocketConnectionCloser(conn)
 			sess.authID, sess.wsURL, sess.proxyURL = credential.ID, u, proxy
 			sess.connectionFingerprint = helps.CodexConnectionFingerprint(credential, headers, proxy)
+			sess.connCloser.oaiLBNode = "unified-96"
 			jwt := func(exp time.Time) string {
 				payload, _ := json.Marshal(map[string]any{"exp": exp.Unix()})
 				return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
@@ -95,7 +136,12 @@ func TestOaiLBHealthyWebsocketIgnoresCookieExpiryAndBorrowChanges(t *testing.T) 
 				if existing, _ := existingWebsocketSessionConn(sess, credential.ID, u, proxy, helps.CodexConnectionFingerprint(credential, headers, proxy)); existing != conn {
 					t.Fatalf("%s changed connection eligibility", state)
 				}
-				got, _, handshake, errEnsure := e.ensureUpstreamConn(ctx, credential, sess, credential.ID, u, headers)
+				reporter := helps.NewUsageReporter(ctx, "codex", "model", credential)
+				requestCtx := helps.WithCodexOaiLBReporter(ctx, reporter)
+				got, _, handshake, errEnsure := e.ensureUpstreamConn(requestCtx, credential, sess, credential.ID, u, headers)
+				if reporter.OaiLBNode() != "unified-96" {
+					t.Fatal("reused socket lost its handshake node")
+				}
 				if errEnsure != nil || got != conn || handshake != nil {
 					t.Fatalf("%s redialed: %v", state, errEnsure)
 				}

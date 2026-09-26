@@ -46,11 +46,28 @@ func validOaiLB(value string, now time.Time) bool {
 	return ok && now.Before(exp) && (&http.Cookie{Name: "__oailb", Value: value}).Valid() == nil
 }
 
-// The cached string is the only cookie state. Refresh scheduling is independent
-// of its lifetime, which is always decoded from exp, including after failures.
+// CodexRoutingCookies keeps the borrowed values together. CFLB is opaque and
+// has no additional lifetime validation; only OaiLB uses its JWT expiration.
+type CodexRoutingCookies struct {
+	OaiLB string
+	CFLB  string
+}
+
+func (c CodexRoutingCookies) usable(now time.Time) CodexRoutingCookies {
+	if !validOaiLB(c.OaiLB, now) {
+		c.OaiLB = ""
+	}
+	if (&http.Cookie{Name: "__cflb", Value: c.CFLB}).Valid() != nil {
+		c.CFLB = ""
+	}
+	return c
+}
+
+func (c CodexRoutingCookies) empty() bool { return c.OaiLB == "" && c.CFLB == "" }
+
 type oaiLBBorrowEntry struct {
 	mu          sync.Mutex
-	value       string
+	value       CodexRoutingCookies
 	nextAttempt time.Time
 	inflight    chan struct{}
 }
@@ -63,73 +80,71 @@ func InvalidateCodexOaiLBBorrow(cfg *config.Config) {
 	}
 }
 
-func (e *oaiLBBorrowEntry) get(ctx context.Context, now func() time.Time, fetch func(context.Context) string) string {
+func (e *oaiLBBorrowEntry) get(ctx context.Context, now func() time.Time, fetch func(context.Context) (CodexRoutingCookies, bool)) CodexRoutingCookies {
 	for {
 		e.mu.Lock()
 		t := now()
-		exp, ok := CodexOaiLBExpiry(e.value)
-		usable := ok && validOaiLB(e.value, t)
-		if (usable && t.Before(exp.Add(-oaiLBRefreshBefore))) || t.Before(e.nextAttempt) {
-			value := e.value
+		value := e.value.usable(t)
+		exp, ok := CodexOaiLBExpiry(value.OaiLB)
+		if (ok && t.Before(exp.Add(-oaiLBRefreshBefore))) || t.Before(e.nextAttempt) {
 			e.mu.Unlock()
-			if usable {
-				return value
-			}
-			return ""
+			return value
 		}
 		if done := e.inflight; done != nil {
-			value := e.value
 			e.mu.Unlock()
-			if usable {
+			if !value.empty() {
 				return value
 			}
 			select {
 			case <-done:
 				continue
 			case <-ctx.Done():
-				return ""
+				return CodexRoutingCookies{}
 			}
 		}
 		e.inflight = make(chan struct{})
 		done := e.inflight
 		e.mu.Unlock()
-		value := fetch(ctx)
+		fresh, fetched := fetch(ctx)
 		e.mu.Lock()
 		t = now()
-		if validOaiLB(value, t) {
-			e.value = value
+		fresh = fresh.usable(t)
+		if fresh.OaiLB != "" {
+			e.value.OaiLB = fresh.OaiLB
+		}
+		// A successful snapshot may remove CFLB. Transport failure retains its last
+		// value; CFLB is not expired merely because the OaiLB JWT expires.
+		if fetched {
+			e.value.CFLB = fresh.CFLB
 		}
 		e.nextAttempt = t.Add(oaiLBRetryInterval)
-		value = e.value
+		value = e.value.usable(t)
 		e.inflight = nil
 		close(done)
 		e.mu.Unlock()
-		if validOaiLB(value, t) {
-			return value
-		}
-		return ""
+		return value
 	}
 }
 
-func codexOaiLBBorrowValue(ctx context.Context, cfg *config.Config) string {
+func codexOaiLBBorrowValue(ctx context.Context, cfg *config.Config) CodexRoutingCookies {
 	if cfg == nil || cfg.CodexHeaderDefaults.OaiLBBorrow == nil {
-		return ""
+		return CodexRoutingCookies{}
 	}
 	c := cfg.CodexHeaderDefaults.OaiLBBorrow
 	key := codexIdentityDigest([]any{cfg.AuthDir, c})
 	entry := oaiLBBorrowEntries.GetOrAdd(key, func() *oaiLBBorrowEntry { return &oaiLBBorrowEntry{} })
-	value := entry.get(ctx, time.Now, func(ctx context.Context) string { return fetchCodexOaiLB(ctx, cfg) })
+	value := entry.get(ctx, time.Now, func(ctx context.Context) (CodexRoutingCookies, bool) { return fetchCodexOaiLB(ctx, cfg) })
 	return value
 }
 
-func fetchCodexOaiLB(ctx context.Context, cfg *config.Config) string {
+func fetchCodexOaiLB(ctx context.Context, cfg *config.Config) (CodexRoutingCookies, bool) {
 	c := cfg.CodexHeaderDefaults.OaiLBBorrow
 	if c.Validate() != nil {
-		return ""
+		return CodexRoutingCookies{}, false
 	}
 	key, err := config.CodexOaiLBManagementKey(cfg)
 	if err != nil {
-		return ""
+		return CodexRoutingCookies{}, false
 	}
 	base := strings.TrimRight(c.SourceURL, "/")
 	base = strings.TrimSuffix(base, "/v0/management")
@@ -139,27 +154,31 @@ func fetchCodexOaiLB(ctx context.Context, cfg *config.Config) string {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v0/management/codex/oailb/borrow", bytes.NewReader(body))
 	if err != nil {
-		return ""
+		return CodexRoutingCookies{}, false
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
-		return ""
+		return CodexRoutingCookies{}, false
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return ""
+		return CodexRoutingCookies{}, false
 	}
 	var result struct {
 		Available bool   `json:"available"`
 		Value     string `json:"value"`
+		CFLB      string `json:"cflb"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&result) != nil || !result.Available {
-		return ""
+	if json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&result) != nil {
+		return CodexRoutingCookies{}, false
 	}
-	return result.Value
+	if !result.Available {
+		return CodexRoutingCookies{}, true
+	}
+	return CodexRoutingCookies{OaiLB: result.Value, CFLB: result.CFLB}, true
 }
 
 type noOaiLBBorrowKey struct{}
@@ -174,19 +193,19 @@ func oaiLBResponsesURL(raw string) bool {
 	return err == nil && (u.Scheme == "https" || u.Scheme == "wss") && strings.EqualFold(u.Hostname(), "chatgpt.com") && u.Path == codexChatGPTResponses
 }
 
-func replaceOaiLBCookie(headers http.Header, value string) {
+func replaceBorrowedCookie(headers http.Header, name, value string) {
 	req := &http.Request{Header: headers}
 	cookies := req.Cookies()
 	headers.Del("Cookie")
 	for _, cookie := range cookies {
-		if cookie.Name != "__oailb" {
+		if cookie.Name != name {
 			req.AddCookie(cookie)
 		}
 	}
-	req.AddCookie(&http.Cookie{Name: "__oailb", Value: value})
+	req.AddCookie(&http.Cookie{Name: name, Value: value})
 }
 
-// PrepareCodexOaiLBBorrow preserves every local cookie except the borrowed name.
+// PrepareCodexOaiLBBorrow preserves every local cookie except the available borrowed names.
 // Websocket callers use this only while dialing, never when reusing a connection.
 func PrepareCodexOaiLBBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, rawURL string, headers http.Header) http.Header {
 	if ctx == nil {
@@ -196,7 +215,7 @@ func PrepareCodexOaiLBBorrow(ctx context.Context, cfg *config.Config, auth *clip
 		return headers
 	}
 	value := codexOaiLBBorrowValue(ctx, cfg)
-	if value == "" {
+	if value.empty() {
 		return headers
 	}
 	headers = headers.Clone()
@@ -206,7 +225,12 @@ func PrepareCodexOaiLBBorrow(ctx context.Context, cfg *config.Config, auth *clip
 	if strings.HasPrefix(rawURL, "wss:") {
 		headers = CodexWebsocketCookieHeaders(CodexCookieJarForAuth(auth), rawURL, headers)
 	}
-	replaceOaiLBCookie(headers, value)
+	if value.OaiLB != "" {
+		replaceBorrowedCookie(headers, "__oailb", value.OaiLB)
+	}
+	if value.CFLB != "" {
+		replaceBorrowedCookie(headers, "__cflb", value.CFLB)
+	}
 	return headers
 }
 
@@ -220,28 +244,41 @@ func (t *oaiLBBorrowTransport) RoundTrip(req *http.Request) (*http.Response, err
 	headers := PrepareCodexOaiLBBorrow(req.Context(), t.cfg, t.auth, req.URL.String(), req.Header)
 	clone := req.Clone(req.Context())
 	clone.Header = headers
-	return t.base.RoundTrip(clone)
+	observe := oaiLBResponsesURL(req.URL.String()) && req.Context().Value(noOaiLBBorrowKey{}) == nil
+	if observe {
+		RecordCodexOaiLBNode(req.Context(), CodexOaiLBNodeForExchange(headers, nil))
+	}
+	response, err := t.base.RoundTrip(clone)
+	if observe {
+		RecordCodexOaiLBNode(req.Context(), CodexOaiLBNodeForExchange(headers, response))
+	}
+	return response, err
 }
 
 var oaiLBDonorRefresh = cache.NewBoundedLRU[string, *oaiLBBorrowEntry](128, nil)
 
-// BorrowCodexOaiLB consults one local jar and refreshes usage on demand only.
+// BorrowCodexRoutingCookies consults one local jar and refreshes usage on demand only.
 // No consumer registry, cookie timestamp store, or background task is created.
-func BorrowCodexOaiLB(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) (string, error) {
+func BorrowCodexRoutingCookies(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) (CodexRoutingCookies, error) {
 	if auth == nil || auth.Disabled || !CodexAuthUsesOAuthCookieJar(auth) {
-		return "", errors.New("source credential unavailable")
+		return CodexRoutingCookies{}, errors.New("source credential unavailable")
 	}
-	read := func() string {
+	read := func() CodexRoutingCookies {
 		u, _ := url.Parse("https://chatgpt.com" + codexChatGPTResponses)
+		var result CodexRoutingCookies
 		for _, c := range CodexCookieJarForAuth(auth).Cookies(u) {
-			if c.Name == "__oailb" && validOaiLB(c.Value, time.Now()) {
-				return c.Value
+			if c.Name == "__oailb" {
+				result.OaiLB = c.Value
+			}
+			if c.Name == "__cflb" {
+				result.CFLB = c.Value
 			}
 		}
-		return ""
+		return result.usable(time.Now())
 	}
+
 	value := read()
-	if exp, ok := CodexOaiLBExpiry(value); ok && time.Now().Before(exp.Add(-oaiLBRefreshBefore)) {
+	if exp, ok := CodexOaiLBExpiry(value.OaiLB); ok && time.Now().Before(exp.Add(-oaiLBRefreshBefore)) {
 		return value, nil
 	}
 	// Reuse only the synchronization/retry gate, not the entry's cached cookie.
@@ -271,8 +308,8 @@ func BorrowCodexOaiLB(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 	gate.inflight = nil
 	close(done)
 	gate.mu.Unlock()
-	if fresh := read(); fresh != "" {
+	if fresh := read(); !fresh.empty() {
 		return fresh, nil
 	}
-	return "", err
+	return CodexRoutingCookies{}, err
 }

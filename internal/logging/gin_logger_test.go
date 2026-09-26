@@ -173,6 +173,7 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 			RequestTurnStateLen:  7,
 			ResponseTurnStateLen: 42,
 		})
+		SetCodexOaiLBNode(c, "unified-96")
 		c.Status(http.StatusBadRequest)
 	})
 
@@ -188,6 +189,7 @@ func TestGinLogrusLoggerAppendsCodexTurnStateFields(t *testing.T) {
 		`POST    "/v1/responses"`,
 		"gpt-6-astra/gpt-5.6-luna",
 		"7/42",
+		"oailb_node=unified-96",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("access log = %q, missing %q", message, want)

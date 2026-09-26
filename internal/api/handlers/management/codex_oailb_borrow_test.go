@@ -82,7 +82,7 @@ func TestOaiLBDonorSelectsExactCredential(t *testing.T) {
 		}
 		body, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "host": id})
 		values[id] = "e30." + base64.RawURLEncoding.EncodeToString(body) + ".sig"
-		helps.CodexCookieJarForAuth(a).SetCookies(u, []*http.Cookie{{Name: "__oailb", Value: values[id], Path: "/"}})
+		helps.CodexCookieJarForAuth(a).SetCookies(u, []*http.Cookie{{Name: "__oailb", Value: values[id], Path: "/"}, {Name: "__cflb", Value: "cflb-" + id, Path: "/"}})
 		t.Cleanup(func() { helps.InvalidateCodexCookieJar(id) })
 	}
 	h := &Handler{cfg: &config.Config{}, authManager: mgr}
@@ -97,6 +97,9 @@ func TestOaiLBDonorSelectsExactCredential(t *testing.T) {
 		}
 		if id == "selected" && gjson.GetBytes(r.Body.Bytes(), "value").String() != values[id] {
 			t.Fatal("wrong credential exported")
+		}
+		if id == "selected" && gjson.GetBytes(r.Body.Bytes(), "cflb").String() != "cflb-selected" {
+			t.Fatal("wrong source CFLB")
 		}
 		if id == "missing" && gjson.GetBytes(r.Body.Bytes(), "available").Bool() {
 			t.Fatal("missing credential fell over to another")

@@ -81,9 +81,9 @@ func (h *Handler) BorrowCodexOaiLB(c *gin.Context) {
 	h.mu.Lock()
 	cfg := h.cfg.CloneForRuntime()
 	h.mu.Unlock()
-	value, _ := helps.BorrowCodexOaiLB(c.Request.Context(), cfg, auth)
-	expires, valid := helps.CodexOaiLBExpiry(value)
-	if !valid || !time.Now().Before(expires) {
+	cookies, _ := helps.BorrowCodexRoutingCookies(c.Request.Context(), cfg, auth)
+	expires, valid := helps.CodexOaiLBExpiry(cookies.OaiLB)
+	if cookies.OaiLB == "" && cookies.CFLB == "" {
 		c.JSON(http.StatusOK, gin.H{"available": false})
 		return
 	}
@@ -93,5 +93,10 @@ func (h *Handler) BorrowCodexOaiLB(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"available": false})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"available": true, "value": value, "expires_at": expires.UTC().Format(time.RFC3339), "remaining_seconds": int64(time.Until(expires).Seconds())})
+	result := gin.H{"available": true, "value": cookies.OaiLB, "cflb": cookies.CFLB}
+	if valid {
+		result["expires_at"] = expires.UTC().Format(time.RFC3339)
+		result["remaining_seconds"] = int64(time.Until(expires).Seconds())
+	}
+	c.JSON(http.StatusOK, result)
 }

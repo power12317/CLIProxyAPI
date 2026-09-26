@@ -41,6 +41,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 	initialReporter *helps.UsageReporter, headers http.Header, unlock func(),
 ) *cliproxyexecutor.StreamResult {
 	streamCtx, cancel := context.WithCancel(ctx)
+	connectionNode := sess.oaiLBNodeFor(conn)
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	// Ticket updates and snapshots for later creates share one credential.
 	var authMu sync.Mutex
@@ -447,6 +448,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				wakeWriter()
 				if !firstResponse {
 					reporter = helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
+					reporter.SetOaiLBNode(connectionNode)
 					reporter.SetTranslatedReasoningEffort(current.clientBody, current.to.String())
 					reporter.SetCodexFastMode(e.cfg)
 					reporter.StartResponseTTFT()
@@ -551,6 +553,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				if len(pending) > 0 && !currentFailure && !ambiguous {
 					eventPrepared, pending = pending[0], pending[1:]
 					eventReporter = helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
+					eventReporter.SetOaiLBNode(connectionNode)
 					eventReporter.SetTranslatedReasoningEffort(eventPrepared.clientBody, eventPrepared.to.String())
 					eventReporter.SetCodexFastMode(e.cfg)
 				} else if !ambiguous {
