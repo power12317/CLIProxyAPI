@@ -106,7 +106,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	var respHS *http.Response
 	var errDial error
 	dialCtx := ctx
-	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
+	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) && !e.usesCredentialSockets(auth) {
 		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, e.cfg, auth), helps.CodexConnectionFingerprint(auth, wsHeaders, executionProxyURL(ctx, e.cfg, auth)))
 		if conn == nil {
 			unlockStreamSession()

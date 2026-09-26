@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -172,9 +173,10 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 				recordPendingToolCallIDsFromPayload(pendingToolCallIDs, payloads[i])
 				var payloadErrMsg *interfaces.ErrorMessage
 				// In Codex duplex mode the executor owns connection termination:
-				// payload errors after response.created are recoverable events;
+				// an initial overload and later payload errors are recoverable events;
 				// StreamChunk.Err still arrives through errs and closes the socket.
-				preserveErrorEvent := responseStarted && opts.duplexStream != nil && opts.duplexStream()
+				preserveErrorEvent := opts.duplexStream != nil && opts.duplexStream() &&
+					(responseStarted || helps.CodexWebsocketRequestOverloaded(payloads[i]))
 				if eventType == wsEventTypeError && !preserveErrorEvent {
 					payloadErrMsg = responsesWebsocketErrorMessageFromPayload(payloads[i])
 					if h != nil {
@@ -267,6 +269,16 @@ func writeResponsesWebsocketTerminalError(
 	errMsg *interfaces.ErrorMessage,
 	payload []byte,
 ) ([]byte, bool, error) {
+	candidate := payload
+	if len(candidate) == 0 {
+		candidate, _ = buildResponsesWebsocketErrorPayload(errMsg)
+	}
+	if helps.CodexWebsocketRequestOverloaded(candidate) {
+		if errWrite := writeResponsesWebsocketPayload(writer, wsTimelineLog, candidate, time.Now()); errWrite != nil {
+			return candidate, false, errWrite
+		}
+		return candidate, true, nil
+	}
 	if !shouldExposeResponsesUpstreamError(errMsg) {
 		// Keep the upstream reason in the request-log timeline even though the client
 		// only observes a closed connection, otherwise silent failures are

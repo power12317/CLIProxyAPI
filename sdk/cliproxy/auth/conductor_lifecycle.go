@@ -59,6 +59,10 @@ func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
 	if replaced == nil || replaced == executor {
 		return
 	}
+	if retiring, ok := replaced.(interface{ RetireExecutionSessions() }); ok {
+		retiring.RetireExecutionSessions()
+		return
+	}
 	if closer, ok := replaced.(ExecutionSessionCloser); ok && closer != nil {
 		closer.CloseExecutionSession(CloseAllExecutionSessionsID)
 	}

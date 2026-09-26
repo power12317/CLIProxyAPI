@@ -346,8 +346,8 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 		defer func() { current.turnState.LogResponse(ctx, e.cfg, true) }()
 		defer func() {
 			cancel()
-			// Close releases a writer blocked in the network, then join it before
-			// releasing the execution session. No goroutine outlives its socket.
+			// Retire this logical session and join its writer. A shared credential
+			// socket remains alive; only its transport owner may close it.
 			e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "duplex_closed", nil)
 			<-writerDone
 			sess.clearActive(conn, readCh)
@@ -591,8 +591,18 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "upstream_error", terminalErr)
 				eventReporter.PublishFailure(ctx, terminalErr)
 				if firstResponse {
-					send(cliproxyexecutor.StreamChunk{Err: terminalErr})
-					return
+					if sess.credentialLaneFor(conn) == nil || !helps.CodexWebsocketRequestOverloaded(payload) {
+						send(cliproxyexecutor.StreamChunk{Err: terminalErr})
+						return
+					}
+					// A capacity rejection finishes one create, not the shared socket.
+					metadataMu.Lock()
+					if len(pending) > 0 {
+						pending = pending[1:]
+					}
+					metadataMu.Unlock()
+					firstResponse = false
+					establishing = true
 				}
 			}
 			if eventType == "response.output_item.done" {
