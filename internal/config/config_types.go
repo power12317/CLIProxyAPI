@@ -134,12 +134,16 @@ type ClaudeHeaderDefaults struct {
 	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
 }
 
-// CodexHeaderDefaults configures fallback header values injected into Codex
-// model requests for OAuth/file-backed auth when the client omits them.
+// CodexHeaderDefaults configures Codex header fallbacks and a request speed override.
+// Header fallbacks apply to OAuth/file-backed auth when the client omits them.
 // UserAgent applies to HTTP and websocket requests; BetaFeatures only applies to websockets.
+// FastMode applies to native Codex and Basispoints Responses request bodies.
 type CodexHeaderDefaults struct {
 	UserAgent    string `yaml:"user-agent" json:"user-agent"`
 	BetaFeatures string `yaml:"beta-features" json:"beta-features"`
+	// FastMode optionally overrides the service_tier in Codex request bodies.
+	// Empty or auto preserves existing behavior; default removes the field.
+	FastMode string `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
 }
 
 // XAIConfig configures provider-wide xAI request behavior.

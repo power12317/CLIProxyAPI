@@ -33,14 +33,19 @@ func (cfg *Config) NormalizePluginsConfig() {
 	}
 }
 
-// SanitizeCodexHeaderDefaults trims surrounding whitespace from the
-// configured Codex header fallback values.
+// SanitizeCodexHeaderDefaults trims header fallbacks and normalizes fast mode.
 func (cfg *Config) SanitizeCodexHeaderDefaults() {
 	if cfg == nil {
 		return
 	}
 	cfg.CodexHeaderDefaults.UserAgent = strings.TrimSpace(cfg.CodexHeaderDefaults.UserAgent)
 	cfg.CodexHeaderDefaults.BetaFeatures = strings.TrimSpace(cfg.CodexHeaderDefaults.BetaFeatures)
+	cfg.CodexHeaderDefaults.FastMode = strings.ToLower(strings.TrimSpace(cfg.CodexHeaderDefaults.FastMode))
+	switch cfg.CodexHeaderDefaults.FastMode {
+	case "", "auto", "default", "fast", "ultrafast":
+	default:
+		cfg.CodexHeaderDefaults.FastMode = "auto"
+	}
 }
 
 // SanitizeClaudeHeaderDefaults trims surrounding whitespace from the

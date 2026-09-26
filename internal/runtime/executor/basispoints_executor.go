@@ -82,6 +82,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		helps.RecordBasispointsFailure(ctx, e.cfg, original, nil, nil, "prepare", err)
 		return nil, nil, nil, err
 	}
+	body = helps.ApplyCodexFastMode(body, e.cfg)
 	token, _ := codexCreds(auth)
 	accountID := helps.CodexOAuthAccountID(auth)
 	if accountID == "" {
@@ -94,6 +95,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	turnState := helps.NewBasispointsLogState(ctx, auth, basispoints.ResponsesURL, req.Payload, body, opts.Headers, baseModel)
 	turnState.ObserveRequest(headers, nil)
 	reporter.SetTranslatedReasoningEffort(body, "openai")
+	reporter.SetCodexFastMode(e.cfg)
 	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client = reporter.TrackHTTPClient(client)

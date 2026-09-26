@@ -61,6 +61,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}()
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
+	reporter.SetCodexFastMode(e.cfg)
 
 	var authID, authLabel, authType, authValue string
 	authID = auth.ID
@@ -829,6 +830,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = helps.NormalizeCodexServiceTier(body)
+	body = helps.ApplyCodexFastMode(body, e.cfg)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)

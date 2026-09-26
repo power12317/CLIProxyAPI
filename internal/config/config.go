@@ -139,8 +139,8 @@ type Config struct {
 	// Codex configures provider-wide Codex request behavior.
 	Codex CodexConfig `yaml:"codex" json:"codex"`
 
-	// CodexHeaderDefaults configures fallback headers for Codex OAuth model requests.
-	// These are used only when the client does not send its own headers.
+	// CodexHeaderDefaults configures Codex OAuth header fallbacks and a request speed override.
+	// Only header fallbacks are conditional on the client omitting its own headers.
 	CodexHeaderDefaults CodexHeaderDefaults `yaml:"codex-header-defaults" json:"codex-header-defaults"`
 
 	// Claude configures provider-wide Claude request behavior.

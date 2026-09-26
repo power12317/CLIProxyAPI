@@ -441,6 +441,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				if !firstResponse {
 					reporter = helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 					reporter.SetTranslatedReasoningEffort(current.clientBody, current.to.String())
+					reporter.SetCodexFastMode(e.cfg)
 					reporter.StartResponseTTFT()
 				}
 				firstResponse = false
@@ -544,6 +545,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 					eventPrepared, pending = pending[0], pending[1:]
 					eventReporter = helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 					eventReporter.SetTranslatedReasoningEffort(eventPrepared.clientBody, eventPrepared.to.String())
+					eventReporter.SetCodexFastMode(e.cfg)
 				} else if !ambiguous {
 					responseActive = false
 					automaticActive = false

@@ -60,6 +60,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = helps.NormalizeCodexServiceTier(body)
+	body = helps.ApplyCodexFastMode(body, e.cfg)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = helps.SetBoolIfDifferent(body, "stream", true)
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
@@ -103,6 +104,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	upstreamBody = ensureCodexResponsesLiteMirror(upstreamBody, toolHeaders)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
+	reporter.SetCodexFastMode(e.cfg)
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, nativeRequest, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(wsHeaders, upstreamBody)
 	if officialOAuthRequest {

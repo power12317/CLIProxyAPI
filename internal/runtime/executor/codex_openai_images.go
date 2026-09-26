@@ -109,6 +109,7 @@ func (e *CodexExecutor) executeOpenAIImage(ctx context.Context, auth *cliproxyau
 		return resp, errBuild
 	}
 	reporter.SetTranslatedReasoningEffort(body, "codex")
+	reporter.SetCodexFastMode(e.cfg)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	var identityState codexIdentityConfuseState
@@ -207,6 +208,7 @@ func (e *CodexExecutor) executeOpenAIImageStream(ctx context.Context, auth *clip
 		return nil, errBuild
 	}
 	reporter.SetTranslatedReasoningEffort(body, "codex")
+	reporter.SetCodexFastMode(e.cfg)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	var identityState codexIdentityConfuseState
@@ -689,6 +691,7 @@ func (e *CodexExecutor) prepareCodexOpenAIImageBody(body []byte, req cliproxyexe
 	requestPath := helps.PayloadRequestPath(opts)
 	out = helps.ApplyPayloadConfigWithRequest(e.cfg, mainModel, "codex", codexOpenAIImageSourceFormat, "", out, body, requestedModel, requestPath, opts.Headers)
 	out = helps.NormalizeCodexServiceTier(out)
+	out = helps.ApplyCodexFastMode(out, e.cfg)
 	out = helps.SetStringIfDifferent(out, "model", mainModel)
 	out = helps.SetBoolIfDifferent(out, "stream", true)
 	out, _ = sjson.DeleteBytes(out, "previous_response_id")
