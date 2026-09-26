@@ -113,6 +113,9 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.SanitizeXAIKeys()
 	cfg.SanitizeMetaKeys()
 	cfg.SanitizeCodexHeaderDefaults()
+	if errValidate := cfg.CodexHeaderDefaults.OaiLBBorrow.Validate(); errValidate != nil {
+		return nil, errValidate
+	}
 	cfg.SanitizeClaudeHeaderDefaults()
 	cfg.SanitizeClaudeKeys()
 	cfg.SanitizeOpenAICompatibility()

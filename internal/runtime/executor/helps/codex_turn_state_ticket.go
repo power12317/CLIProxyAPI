@@ -344,6 +344,7 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	timeout := time.Duration(effective.AttemptTimeoutSeconds) * time.Second
 	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	attemptCtx = WithoutCodexOaiLBBorrow(attemptCtx)
 	probeAuth := auth.Clone()
 	probeAuth.ProxyURL = harvestProxyURL
 	sessionID := uuid.NewString()

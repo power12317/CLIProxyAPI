@@ -111,6 +111,18 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		return nil, errValidate
 	}
 
+	if borrow := cfg.CodexHeaderDefaults.OaiLBBorrow; borrow != nil {
+		plain := borrow.SourceManagementKey
+		if errProtect := ProtectCodexOaiLBSecret(&cfg); errProtect != nil {
+			return nil, fmt.Errorf("protect oailb source key: %w", errProtect)
+		}
+		if plain != borrow.SourceManagementKey {
+			if errSave := SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"codex-header-defaults", "oailb-borrow", "source-management-key"}, borrow.SourceManagementKey); errSave != nil {
+				return nil, fmt.Errorf("save oailb source key: %w", errSave)
+			}
+		}
+	}
+
 	// Hash remote management key if plaintext is detected (nested)
 	// We consider a value to be already hashed if it looks like a bcrypt hash ($2a$, $2b$, or $2y$ prefix).
 	if cfg.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(cfg.RemoteManagement.SecretKey) {

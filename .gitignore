@@ -30,6 +30,7 @@ auths/*
 
 # Documentation
 docs/*
+!docs/cpa-oailb-borrow-integration_CN.md
 !docs/basispoints-integration-design_CN.md
 AGENTS.md
 CLAUDE.md

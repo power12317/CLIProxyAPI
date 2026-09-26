@@ -157,6 +157,12 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid_config", "message": err.Error()})
 		return
 	}
+	// Validation also encrypts a newly supplied donor key in the temporary file.
+	body, err = os.ReadFile(tempFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot read validated config"})
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if WriteConfig(h.configFilePath, body) != nil {

@@ -396,6 +396,9 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 	}
 	if jar := CodexCookieJarForAuth(auth); jar != nil {
 		client.Jar = jar
+		if cfg != nil && cfg.CodexHeaderDefaults.OaiLBBorrow != nil {
+			client.Transport = &oaiLBBorrowTransport{base: client.Transport, cfg: cfg, auth: auth}
+		}
 	}
 	if timeout > 0 {
 		client.Timeout = timeout

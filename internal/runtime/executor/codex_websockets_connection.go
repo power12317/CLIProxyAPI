@@ -77,6 +77,9 @@ func (e *CodexWebsocketsExecutor) dialCodexWebsocketOnce(ctx context.Context, au
 	}
 	jar := helps.CodexCookieJarForAuth(auth)
 	headers = helps.CodexWebsocketCookieHeaders(jar, wsURL, headers)
+	// Routing cookies apply only to a new handshake. Their expiry or replacement
+	// must never invalidate a healthy, already authenticated websocket.
+	headers = helps.PrepareCodexOaiLBBorrow(ctx, e.cfg, auth, wsURL, headers)
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	helps.StoreCodexWebsocketCookies(jar, wsURL, resp)
 	if err != nil {

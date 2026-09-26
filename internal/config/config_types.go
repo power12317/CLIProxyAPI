@@ -139,8 +139,9 @@ type ClaudeHeaderDefaults struct {
 // UserAgent applies to HTTP and websocket requests; BetaFeatures only applies to websockets.
 // FastMode applies to native Codex and Basispoints Responses request bodies.
 type CodexHeaderDefaults struct {
-	UserAgent    string `yaml:"user-agent" json:"user-agent"`
-	BetaFeatures string `yaml:"beta-features" json:"beta-features"`
+	UserAgent    string                  `yaml:"user-agent" json:"user-agent"`
+	BetaFeatures string                  `yaml:"beta-features" json:"beta-features"`
+	OaiLBBorrow  *CodexOaiLBBorrowConfig `yaml:"oailb-borrow,omitempty" json:"oailb-borrow,omitempty"`
 	// FastMode optionally overrides the service_tier in Codex request bodies.
 	// Empty or auto preserves existing behavior; default removes the field.
 	FastMode string `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
