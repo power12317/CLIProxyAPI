@@ -751,16 +751,18 @@ func hasActionableError(c *gin.Context, statusCode int, apiErrors []*interfaces.
 	if hasActionableAPIResponseErrors(apiErrors) {
 		return true
 	}
+	if c != nil {
+		if forced, exists := c.Get(logging.ForceErrorLogContextKey); exists && forced == true {
+			return true
+		}
+	}
+	// A disconnect after a recorded protocol failure must not discard that
+	// failure. Pure cancellations still do not create error-only logs.
 	if statusCode == clienterror.StatusClientClosedRequest {
 		return false
 	}
 	if isContextCanceled(c) && statusCode < http.StatusBadRequest {
 		return false
-	}
-	if c != nil {
-		if forced, exists := c.Get(logging.ForceErrorLogContextKey); exists && forced == true {
-			return true
-		}
 	}
 	return statusCode >= http.StatusBadRequest
 }

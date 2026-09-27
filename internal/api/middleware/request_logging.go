@@ -66,14 +66,18 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 		c.Writer = wrapper
 		attachRequestLogSources(c, logger, loggerEnabled)
 		attachDeferredRequestBodyCapture(c.Request, logger, requestInfo, loggerEnabled, captureBody)
+		if isResponsesWebsocketUpgrade(c.Request) {
+			c.Set(logging.WebsocketErrorLogContextKey, logging.WebsocketErrorLog(func(err error) error {
+				return wrapper.snapshotWebsocketError(c, err)
+			}))
+		}
 
 		// Process the request
 		c.Next()
 
 		// Finalize logging after request processing
 		if err = wrapper.Finalize(c); err != nil {
-			// Log error but don't interrupt the response
-			// In a real implementation, you might want to use a proper logger here
+			log.WithError(err).WithField("request_id", requestInfo.RequestID).Warn("failed to finalize request log")
 		}
 	}
 }

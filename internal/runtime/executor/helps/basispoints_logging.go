@@ -80,6 +80,13 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 	if tools.Len() > 0 {
 		AppendAPIResponseChunk(ctx, &fullLogging, []byte(tools.String()))
 	}
+	if value, exists := ginCtx.Get(logging.WebsocketErrorLogContextKey); exists {
+		if snapshot, ok := value.(logging.WebsocketErrorLog); ok {
+			if errLog := snapshot(err); errLog != nil {
+				log.WithError(errLog).WithField("request_id", logging.GetRequestID(ctx)).Warn("failed to save Basispoints websocket error log")
+			}
+		}
+	}
 }
 
 // NewBasispointsLogState uses the existing Codex access-log representation.

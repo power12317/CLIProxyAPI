@@ -19,7 +19,11 @@ const (
 	APIResponseCapturedContextKey        = "API_RESPONSE_CAPTURED"
 	APIWebsocketTimelineSourceContextKey = "API_WEBSOCKET_TIMELINE_SOURCE"
 	ForceErrorLogContextKey              = "FORCE_ERROR_LOG"
+	WebsocketErrorLogContextKey          = "WEBSOCKET_ERROR_LOG"
 )
+
+// WebsocketErrorLog persists a failed generation before its connection closes.
+type WebsocketErrorLog func(error) error
 
 // DeferredAPIRequest builds an upstream request log only when an error log needs it.
 type DeferredAPIRequest func() []byte
