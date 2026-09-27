@@ -25,13 +25,14 @@ import (
 // BasispointsExecutor shares the Codex credential lifecycle and changes only the
 // upstream interface and its request/response protocol.
 type BasispointsExecutor struct {
-	cfg           *config.Config
-	cooldown      *basispoints.Cooldown
-	websocketDial basispoints.WebsocketDial
+	cfg               *config.Config
+	cooldown          *basispoints.Cooldown
+	websocketDial     basispoints.WebsocketDial
+	websocketSessions *helps.BasispointsWebsocketSessions
 }
 
 func NewBasispointsExecutor(cfg *config.Config) *BasispointsExecutor {
-	return &BasispointsExecutor{cfg: cfg, cooldown: basispoints.SharedCooldown}
+	return &BasispointsExecutor{cfg: cfg, cooldown: basispoints.SharedCooldown, websocketSessions: helps.SharedBasispointsWebsocketSessions}
 }
 func (e *BasispointsExecutor) Identifier() string { return "codex" }
 
@@ -146,6 +147,9 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		}
 		if !wsRequest.FitsMessageLimit() {
 			wsRequest = nil
+		} else {
+			key := basispoints.Scope(caller, authID, accountID, turnState.SessionID(), executionProxyURL(ctx, e.cfg, auth))
+			wsRequest.UseSession(e.websocketSessions.Get(key))
 		}
 	}
 	target := basispoints.ResponsesURL
@@ -156,9 +160,7 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	}
 	var response *http.Response
 	if wsRequest != nil {
-		wsRequest.ObserveConnection = func(connected bool) {
-			helps.LogBasispointsWebsocketConnection(ctx, turnState, connected)
-		}
+		wsRequest.ObserveConnection = helps.BasispointsWebsocketLogger(ctx, turnState)
 		response, err = e.openWebsocket(ctx, auth, wsRequest, upstreamLog, reporter, func(raw []byte) {
 			turnState.ObserveEvent(raw)
 			helps.AppendAPIResponseChunk(ctx, e.cfg, append(append([]byte("data: "), raw...), '\n', '\n'))

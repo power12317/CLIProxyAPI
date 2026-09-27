@@ -26,7 +26,7 @@ HTTP clients continue to use SSE upstream. Streaming and aggregated responses
 share the existing Basispoints tool conversion and usage pipeline.
 
 The handshake targets `wss://bps.openai.com/basispoints/api/responses` with
-`bps_client_info`, `bps_auth_mode=chatgpt`, a request-local `bps_ws_affinity`, and
+`bps_client_info`, `bps_auth_mode=chatgpt`, a session-owned `bps_ws_affinity`, and
 the native control-frame negotiation. Authentication uses the `responses` and
 `openai-bearer.<access-token>` subprotocols, together with the selected account
 headers. Request, credential, and global proxy precedence use the existing dialer.
@@ -37,13 +37,22 @@ The generation frame contains the prepared Basispoints body plus
 redacted in request logs. The original client's 16 MiB outgoing frame limit is
 honored by selecting SSE for larger requests, without truncating their contents.
 
-Connections are scoped to a generation. A disconnect resumes the same generation
-with `basispoints.response.resume`, its latest resume token, and `after_cursor`.
-The affinity remains stable during these reconnects. Replay cursors suppress
-duplicate events. Recovery attempts are bounded at three reconnects; a failed
-in-flight recovery is returned to the client instead of restarting generation.
-Cancellation closes the active connection and releases the reader. No generation
-read/write deadlines or background reconnects are introduced.
+Connections belong to the existing full `session_id`, rather than a request,
+turn, or model. A completed response releases request ownership without closing
+the connection. The shared store survives executor replacement and config reload;
+concurrent requests for the same selected connection use the existing Codex
+request-ownership gate. Idle reads process ping/pong and detect peer disconnects.
+No idle expiry or proactive reconnect is introduced. After an idle disconnect,
+the next request opens a connection on demand.
+
+A disconnect during generation resumes that generation with
+`basispoints.response.resume`, its latest resume token, and `after_cursor`.
+The affinity remains stable during these reconnects. Replay cursors and request
+IDs are reset for each new response. Recovery attempts are bounded at three
+reconnects; a failed in-flight recovery is returned to the client instead of
+restarting generation. Cancellation before completion still closes the active
+connection, while cancelling an already completed request cannot close the
+retained session connection. No generation read/write deadlines are added.
 
 Before a generation frame has been sent, five failed handshakes trigger SSE
 fallback for that request. The next request tries WebSocket again. Authentication,
@@ -53,16 +62,19 @@ stream enters the existing 30-minute Basispoints cooldown. A manual disable
 continues to take precedence over automatic recovery.
 
 The downstream history bridge remains enabled, including materialization of
-`previous_response_id`. No connection or account is pinned across generations.
-Native hosted-tool routing and the native Codex transport remain separate.
+`previous_response_id`. Account selection and rotation remain unchanged: lookup
+reuses the socket for the already selected credential, caller, session and proxy.
+It never pins account selection to a prior request. Native hosted-tool routing
+and the native Codex transport remain separate.
 
 Runtime logs record only WebSocket connection establishment and closure, using
 the existing access-log `session_id` prefix (up to eight characters). No separate
 random connection ID is generated for display. Native Codex connection logs use
-the same session prefix. Access logs show `POST/WS` for HTTP clients using an
+the same session prefix. Connection logs have no `turn_id`; request logs retain
+their turn identity. Access logs show `POST/WS` for HTTP clients using an
 upstream WebSocket and `WS/WS` when both sides use WebSocket; HTTP fallback keeps
 the ordinary HTTP method label. This formatting does not change request methods,
-pool ownership, or the native Basispoints request and resume protocol fields.
+or the native Basispoints request and resume protocol fields.
 
 ## Validation
 

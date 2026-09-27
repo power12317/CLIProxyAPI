@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -39,6 +40,12 @@ func basispointsTestDial(target string) basispoints.WebsocketDial {
 		dialer := websocket.Dialer{Subprotocols: protocols}
 		return dialer.DialContext(ctx, u.String(), headers)
 	}
+}
+
+func isolateBasispointsWebsockets(t *testing.T, exec *BasispointsExecutor) {
+	t.Helper()
+	exec.websocketSessions = helps.NewBasispointsWebsocketSessions()
+	t.Cleanup(exec.websocketSessions.CloseAll)
 }
 
 func basispointsTestAuth() *coreauth.Auth {
@@ -96,6 +103,7 @@ func TestBasispointsWebsocketTransportSelectionAndToolConversion(t *testing.T) {
 						_ = conn.WriteMessage(websocket.TextMessage, []byte(completed))
 					}))
 					defer server.Close()
+					isolateBasispointsWebsockets(t, exec.basispointsExec)
 					exec.basispointsExec.websocketDial = basispointsTestDial(server.URL)
 					ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 						sseCalls.Add(1)
@@ -191,6 +199,7 @@ func TestBasispointsWebsocketResumeUsesNativeTokenAndCursor(t *testing.T) {
 	}))
 	defer server.Close()
 	exec := NewBasispointsExecutor(&config.Config{Codex: config.CodexConfig{ForceWebsocket: true}})
+	isolateBasispointsWebsockets(t, exec)
 	exec.websocketDial = basispointsTestDial(server.URL)
 	result, err := exec.ExecuteStream(t.Context(), basispointsTestAuth(), coreexecutor.Request{Model: "gpt-6-astra", Payload: []byte(`{"input":"hello"}`)}, coreexecutor.Options{})
 	if err != nil {
@@ -265,6 +274,7 @@ func TestBasispointsWebsocketCancellationClosesConnection(t *testing.T) {
 	}))
 	defer server.Close()
 	exec := NewBasispointsExecutor(&config.Config{Codex: config.CodexConfig{ForceWebsocket: true}})
+	isolateBasispointsWebsockets(t, exec)
 	exec.websocketDial = basispointsTestDial(server.URL)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -311,6 +321,7 @@ func TestBasispointsWebsocketErrorsKeepLogsAndCooldown(t *testing.T) {
 				cfg.RequestLog = requestLog
 				exec := NewBasispointsExecutor(cfg)
 				exec.cooldown = basispoints.NewCooldown(time.Now)
+				isolateBasispointsWebsockets(t, exec)
 				exec.websocketDial = basispointsTestDial(server.URL)
 				dir := t.TempDir()
 				logger := logging.NewFileRequestLogger(requestLog, dir, "", 10)

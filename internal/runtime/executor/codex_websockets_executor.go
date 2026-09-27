@@ -175,6 +175,9 @@ func (e *CodexAutoExecutor) CloseExecutionSession(sessionID string) {
 		return
 	}
 	if sessionID == cliproxyauth.CloseAllExecutionSessionsID {
+		if e.basispointsExec != nil {
+			e.basispointsExec.websocketSessions.CloseAll()
+		}
 		e.poolOnce.Do(func() { e.pool = cliproxyexecutor.NewExecutionSessionPool(e.CloseExecutionSession) })
 		e.pool.Drain()
 	}

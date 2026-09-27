@@ -117,20 +117,23 @@ func LogBasispointsNativeToolRoute(ctx context.Context, reason string) {
 	log.WithFields(log.Fields{"request_id": logging.GetRequestID(ctx), "reason": reason}).Info("Basispoints hosted tool request uses native Codex")
 }
 
-// LogBasispointsWebsocketConnection shares the access log's existing identity fields.
-func LogBasispointsWebsocketConnection(ctx context.Context, state *CodexTurnState, connected bool) {
+// BasispointsWebsocketLogger snapshots connection identity without retaining a
+// completed request's context or attaching a turn to a session-owned socket.
+func BasispointsWebsocketLogger(ctx context.Context, state *CodexTurnState) func(bool) {
 	if state == nil {
-		return
+		return nil
 	}
-	action := "disconnected"
-	if connected {
-		action = "connected"
-	}
-	log.WithFields(log.Fields{
+	entry := log.WithFields(log.Fields{
 		"request_id": logging.GetRequestID(ctx), "auth_file": state.authFile,
 		"session_id": logging.ShortCodexIdentifier(state.sessionID),
-		"turn_id":    logging.ShortCodexIdentifier(state.key.turnID),
-	}).Info("basispoints websockets: upstream " + action)
+	})
+	return func(connected bool) {
+		action := "disconnected"
+		if connected {
+			action = "connected"
+		}
+		entry.Info("basispoints websockets: upstream " + action)
+	}
 }
 
 func LogBasispointsProtocolPause(ctx context.Context, until time.Time) {

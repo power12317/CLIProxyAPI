@@ -24,6 +24,7 @@ type WebsocketDial func(context.Context, string, http.Header, []string) (*websoc
 type WebsocketRequest struct {
 	// ObserveConnection reports only physical connection establishment and closure.
 	ObserveConnection func(bool)
+	session           *WebsocketSession
 	URL               string
 	Headers           http.Header
 	Frame             []byte
@@ -86,80 +87,88 @@ func (r *WebsocketRequest) LogFrame() []byte {
 	return raw
 }
 
-// Open reports whether a generation may have been sent. Only handshake failures
-// are eligible for the executor's SSE fallback; an in-flight request uses resume.
+// Open reports whether a generation may have been sent. A completed request
+// releases its reader, leaving the session's healthy connection available.
 func (r *WebsocketRequest) Open(ctx context.Context, dial WebsocketDial, observe func([]byte)) (*http.Response, bool, error) {
-	conn, response, err := dial(ctx, r.URL, r.Headers.Clone(), []string{"responses", "openai-bearer." + r.token})
+	if r.session == nil {
+		return nil, false, fmt.Errorf("basispoints: websocket session is missing")
+	}
+	if err := r.session.activity.Acquire(ctx); err != nil {
+		return nil, false, err
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			r.session.activity.Release()
+		}
+	}()
+	conn, response, err := r.session.connection(ctx, r, dial)
 	if err != nil {
 		return response, false, err
 	}
-	reader := &websocketReader{ctx: ctx, request: r, dial: dial, observe: observe, conn: conn, resume: r.resume, cursor: -1}
-	reader.closeConn = r.connectionCloser(conn)
-	conn.SetReadLimit(maxItemBytes)
-	reader.stop = context.AfterFunc(ctx, func() { _ = reader.closeConnection() })
-	if err = conn.WriteMessage(websocket.TextMessage, r.Frame); err != nil {
-		_ = reader.Close()
-		return response, true, err
+	exchange, err := conn.attach()
+	if err != nil {
+		return nil, false, err
 	}
-	response.Body = reader
-	response.Header = response.Header.Clone()
-	response.Header.Set("Content-Type", "text/event-stream")
-	return response, true, nil
+	reader := &websocketReader{ctx: ctx, request: r, dial: dial, observe: observe, conn: conn, exchange: exchange, resume: r.resume, cursor: -1}
+	handedOff = true
+	reader.stop = context.AfterFunc(ctx, reader.finish)
+	if err = conn.write(r.Frame); err != nil {
+		_ = reader.Close()
+		return nil, true, err
+	}
+	headers := conn.headers.Clone()
+	headers.Set("Content-Type", "text/event-stream")
+	return &http.Response{
+		StatusCode: http.StatusSwitchingProtocols,
+		Header:     headers,
+		Body:       reader,
+	}, true, nil
 }
 
 // websocketReader presents native JSON events to the existing SSE protocol bridge.
 // No read or write deadlines are added after connection establishment.
 type websocketReader struct {
-	ctx       context.Context
-	request   *WebsocketRequest
-	dial      WebsocketDial
-	observe   func([]byte)
-	stop      func() bool
-	mu        sync.Mutex
-	conn      *websocket.Conn
-	closeConn func() error
-	closed    bool
-	resume    string
-	cursor    int64
-	attempts  int
-	buffer    bytes.Buffer
-	terminal  bool
-}
-
-func (r *WebsocketRequest) connectionCloser(conn *websocket.Conn) func() error {
-	if r.ObserveConnection != nil {
-		r.ObserveConnection(true)
-	}
-	var once sync.Once
-	var err error
-	return func() error {
-		once.Do(func() {
-			err = conn.Close()
-			if r.ObserveConnection != nil {
-				r.ObserveConnection(false)
-			}
-		})
-		return err
-	}
+	ctx      context.Context
+	request  *WebsocketRequest
+	dial     WebsocketDial
+	observe  func([]byte)
+	stop     func() bool
+	mu       sync.Mutex
+	conn     *websocketConnection
+	exchange *websocketExchange
+	closed   bool
+	resume   string
+	cursor   int64
+	attempts int
+	buffer   bytes.Buffer
+	terminal bool
 }
 
 func (r *websocketReader) Close() error {
 	if r.stop != nil {
 		r.stop()
 	}
-	return r.closeConnection()
+	r.finish()
+	return nil
 }
 
-func (r *websocketReader) closeConnection() error {
+func (r *websocketReader) finish() {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		return nil
+		return
 	}
 	r.closed = true
-	closeConn := r.closeConn
+	conn, exchange := r.conn, r.exchange
 	r.mu.Unlock()
-	return closeConn()
+	// A completed response no longer owns the socket. Cancellation after its
+	// terminal frame must not disconnect a connection retained for the session.
+	if !exchange.terminal.Load() {
+		conn.close(io.ErrClosedPipe)
+	}
+	conn.detach(exchange)
+	r.request.session.activity.Release()
 }
 
 func (r *websocketReader) reconnect() error {
@@ -168,15 +177,17 @@ func (r *websocketReader) reconnect() error {
 			return err
 		}
 		r.mu.Lock()
-		closed, closeOld := r.closed, r.closeConn
-		r.mu.Unlock()
-		if closed {
+		if r.closed {
+			r.mu.Unlock()
 			return io.ErrClosedPipe
 		}
-		_ = closeOld()
+		old, previous := r.conn, r.exchange
+		old.close(io.ErrUnexpectedEOF)
+		old.detach(previous)
 		r.attempts++
-		conn, response, err := r.dial(r.ctx, r.request.URL, r.request.Headers.Clone(), []string{"responses", "openai-bearer." + r.request.token})
+		conn, response, err := r.request.session.connection(r.ctx, r.request, r.dial)
 		if err != nil {
+			r.mu.Unlock()
 			if response != nil && response.Body != nil {
 				raw, errRead := io.ReadAll(io.LimitReader(response.Body, maxItemBytes))
 				_ = response.Body.Close()
@@ -186,21 +197,19 @@ func (r *websocketReader) reconnect() error {
 			}
 			continue
 		}
-		conn.SetReadLimit(maxItemBytes)
-		closeConn := r.request.connectionCloser(conn)
-		r.mu.Lock()
-		if r.closed {
+		exchange, errAttach := conn.attach()
+		if errAttach != nil {
 			r.mu.Unlock()
-			_ = closeConn()
-			return io.ErrClosedPipe
+			continue
 		}
-		r.conn = conn
-		r.closeConn = closeConn
+		r.conn, r.exchange = conn, exchange
 		r.mu.Unlock()
-		err = conn.WriteJSON(object{"type": "basispoints.response.resume", "resume_token": r.resume, "after_cursor": r.cursor})
+		frame, _ := json.Marshal(object{"type": "basispoints.response.resume", "resume_token": r.resume, "after_cursor": r.cursor})
+		err = conn.write(frame)
 		if err == nil {
 			return nil
 		}
+		conn.close(err)
 	}
 	return failure(502, "websocket_resume_failed", "Basispoints WebSocket disconnected and could not resume")
 }
@@ -217,9 +226,9 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		r.mu.Lock()
-		conn := r.conn
+		conn, exchange := r.conn, r.exchange
 		r.mu.Unlock()
-		_, raw, err := conn.ReadMessage()
+		raw, err := conn.read(r.ctx, exchange)
 		if err != nil {
 			if err = r.reconnect(); err != nil {
 				return 0, err

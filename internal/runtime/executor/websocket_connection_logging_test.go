@@ -58,6 +58,7 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 				native.store = &codexWebsocketSessionStore{sessions: make(map[string]*codexWebsocketSession)}
 				defer native.CloseExecutionSession(coreauth.CloseAllExecutionSessionsID)
 				bps := NewBasispointsExecutor(cfg)
+				isolateBasispointsWebsockets(t, bps)
 				bps.websocketDial = basispointsTestDial(server.URL)
 				const session = "01a0d8fc-1111-2222-3333-444444444444"
 				router := gin.New()
@@ -67,7 +68,7 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 					if downstream {
 						ctx = core.WithDownstreamWebsocket(ctx)
 					}
-					req := core.Request{Model: "gpt-6-astra", Payload: []byte(`{"model":"gpt-6-astra","input":[],"client_metadata":{"session_id":"` + session + `","turn_id":"01a0d8fd-1111-2222-3333-444444444444"}}`)}
+					req := core.Request{Model: "gpt-6-astra", Payload: []byte(`{"model":"gpt-6-astra","input":[],"client_metadata":{"session_id":"` + session + `","turn_id":"` + c.GetHeader("X-Test-Turn") + `"}}`)}
 					opts := core.Options{SourceFormat: translator.FormatOpenAIResponse, Headers: c.Request.Header}
 					var result *core.StreamResult
 					var err error
@@ -88,13 +89,14 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 						_, _ = c.Writer.Write(chunk.Payload)
 					}
 				})
-				for range 2 {
+				for i := range 2 {
 					method := http.MethodPost
 					if downstream {
 						method = http.MethodGet
 					}
 					req := httptest.NewRequest(method, "/v1/responses", nil)
 					req.Header.Set("Session-Id", session)
+					req.Header.Set("X-Test-Turn", fmt.Sprintf("01a0d8%02x-1111-2222-3333-444444444444", 253+i))
 					if downstream {
 						req.Header.Set("Connection", "Upgrade")
 						req.Header.Set("Upgrade", "websocket")
@@ -105,6 +107,7 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 					}
 				}
 				native.CloseExecutionSession(coreauth.CloseAllExecutionSessionsID)
+				bps.websocketSessions.CloseAll()
 				connected, disconnected, access := 0, 0, 0
 				wantMethod := "POST/WS"
 				if downstream {
@@ -122,6 +125,9 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 							t.Fatalf("unrelated identifier in formatted log: %s (%v)", formatted, err)
 						}
 					}
+					if connection && entry.Data["turn_id"] != nil {
+						t.Fatal("connection log must not belong to a turn")
+					}
 					if strings.Contains(entry.Message, "websockets: upstream connected") {
 						connected++
 					}
@@ -129,6 +135,9 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 						disconnected++
 					}
 					if isAccess {
+						if entry.Data["turn_id"] != "01a0d8fd" && entry.Data["turn_id"] != "01a0d8fe" {
+							t.Fatal("request log lost its turn identity")
+						}
 						access++
 						if !strings.Contains(entry.Message, wantMethod) {
 							t.Fatalf("wrong transport label: %s", entry.Message)
@@ -136,9 +145,6 @@ func TestWebsocketConnectionLogsUseAccessLogSession(t *testing.T) {
 					}
 				}
 				wantConnections := 1
-				if provider == "basispoints" {
-					wantConnections = 2
-				}
 				if int(connections.Load()) != wantConnections || connected != wantConnections || disconnected != wantConnections || access != 2 {
 					t.Fatalf("connections=%d connected=%d disconnected=%d access=%d", connections.Load(), connected, disconnected, access)
 				}
