@@ -113,6 +113,23 @@ func (c *codexTurnStateCache) request(auth *cliproxyauth.Auth, target string, bo
 }
 
 func (c *codexTurnStateCache) requestWithIdentity(auth *cliproxyauth.Auth, target string, body []byte, headers http.Header, preferBody bool) *CodexTurnState {
+	state := codexTurnStateFromRequest(auth, target, body, headers, preferBody)
+	state.cache = c
+	if state.authID != "" && state.key.turnID != "" && state.key.origin != "" {
+		c.mu.Lock()
+		bucket := c.buckets[state.authID]
+		if bucket == nil || bucket.owner != state.key.accountID {
+			bucket = &codexTurnStateBucket{owner: state.key.accountID, entries: make(map[codexTurnStateKey]codexTurnStateEntry)}
+			c.buckets[state.authID] = bucket
+		}
+		state.bucket = bucket
+		c.mu.Unlock()
+	}
+	return state
+}
+
+// codexTurnStateFromRequest also serves logging-only transports without a cache.
+func codexTurnStateFromRequest(auth *cliproxyauth.Auth, target string, body []byte, headers http.Header, preferBody bool) *CodexTurnState {
 	metadata := gjson.GetBytes(body, "client_metadata")
 	turn := metadata.Get("x-codex-turn-metadata")
 	if turn.Type == gjson.String {
@@ -130,7 +147,6 @@ func (c *codexTurnStateCache) requestWithIdentity(auth *cliproxyauth.Auth, targe
 		}
 	}
 	state := &CodexTurnState{
-		cache: c,
 		key: codexTurnStateKey{
 			origin: codexTurnOrigin(target),
 			turnID: turnID,
@@ -144,16 +160,6 @@ func (c *codexTurnStateCache) requestWithIdentity(auth *cliproxyauth.Auth, targe
 			state.authFile = filepath.Base(strings.TrimSpace(auth.ID))
 		}
 		state.key.accountID = CodexOwnerFingerprint(auth)
-	}
-	if state.authID != "" && state.key.turnID != "" && state.key.origin != "" {
-		c.mu.Lock()
-		bucket := c.buckets[state.authID]
-		if bucket == nil || bucket.owner != state.key.accountID {
-			bucket = &codexTurnStateBucket{owner: state.key.accountID, entries: make(map[codexTurnStateKey]codexTurnStateEntry)}
-			c.buckets[state.authID] = bucket
-		}
-		state.bucket = bucket
-		c.mu.Unlock()
 	}
 	return state
 }

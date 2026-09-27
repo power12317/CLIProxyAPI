@@ -20,14 +20,18 @@ const MaxMessageBytes = 32 << 20
 
 // Error is deliberately request-scoped: an ambiguous inference cannot be replayed.
 type Error struct {
-	Status  int
-	Message string
+	Status          int
+	Message         string
+	Body            []byte
+	ResponseHeaders http.Header
 }
 
 func (e *Error) Error() string              { return e.Message }
 func (e *Error) StatusCode() int            { return e.Status }
 func (e *Error) IsRequestScoped() bool      { return true }
 func (e *Error) IsCodexReplayUnsafe() bool  { return true }
+func (e *Error) ResponseBody() []byte       { return e.Body }
+func (e *Error) Headers() http.Header       { return e.ResponseHeaders.Clone() }
 func fail(status int, message string) error { return &Error{Status: status, Message: message} }
 
 // Capabilities binds one connection to one managed credential and account.
@@ -45,6 +49,21 @@ type Capabilities struct {
 	CredentialFile     string   `json:"credentialFile"`
 	AuthOwner          string   `json:"authOwner"`
 	ManualOAuth        bool     `json:"manualOAuth"`
+	UpstreamLogs       bool     `json:"upstreamLogs"`
+}
+
+// UpstreamLog describes an actual HTTP attempt made by the worker.
+type UpstreamLog struct {
+	RequestID         string      `json:"requestId"`
+	Kind              string      `json:"kind"`
+	URL               string      `json:"url"`
+	Method            string      `json:"method"`
+	Headers           http.Header `json:"headers"`
+	Body              string      `json:"body"`
+	StatusCode        int         `json:"statusCode"`
+	Message           string      `json:"message"`
+	AccessTokenSHA256 string      `json:"accessTokenSha256"`
+	OaiLBNode         string      `json:"oaiLbNode"`
 }
 
 type Request struct {
@@ -67,7 +86,9 @@ type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		HTTPStatus int `json:"httpStatus"`
+		HTTPStatus int         `json:"httpStatus"`
+		Body       string      `json:"body"`
+		Headers    http.Header `json:"headers"`
 	} `json:"data"`
 }
 type message struct {
@@ -79,19 +100,21 @@ type message struct {
 }
 
 type Client struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	stop       func() bool
-	once       sync.Once
-	onClose    func()
-	nextID     int
-	requestID  string
-	terminal   bool
-	resultSeen bool
-	done       bool
-	operation  string
-	Caps       Capabilities
-	Headers    http.Header
+	conn             *websocket.Conn
+	ctx              context.Context
+	stop             func() bool
+	once             sync.Once
+	onClose          func()
+	nextID           int
+	requestID        string
+	terminal         bool
+	resultSeen       bool
+	done             bool
+	operation        string
+	Caps             Capabilities
+	Headers          http.Header
+	OnUpstream       func(UpstreamLog)
+	upstreamResponse *UpstreamLog
 }
 
 // Open uses a local Unix socket, without proxy environment variables or deadlines.
@@ -236,6 +259,12 @@ func (c *Client) call(method string, params, out any) error {
 			return err
 		}
 		if len(m.ID) == 0 {
+			if m.Method == "cpa/inference/upstream" {
+				if err := c.observeUpstream(m.Params); err != nil {
+					return err
+				}
+				continue
+			}
 			if strings.HasPrefix(m.Method, "cpa/inference/") {
 				return fail(502, "Codex runtime sent inference data before acceptance")
 			}
@@ -250,7 +279,7 @@ func (c *Client) call(method string, params, out any) error {
 			if status < 400 || status > 599 {
 				status = 502
 			}
-			return fail(status, "Codex runtime rejected "+method)
+			return c.remoteError(status, m.Error.Message, m.Error.Data.Body, m.Error.Data.Headers)
 		}
 		if len(m.Result) == 0 {
 			return fail(502, "Codex runtime RPC result missing")
@@ -299,6 +328,7 @@ func (c *Client) Start(req Request) error {
 		StatusCode int         `json:"statusCode"`
 		Headers    http.Header `json:"headers"`
 	}
+	c.requestID, c.operation = req.RequestID, req.Operation
 	if err := c.call("cpa/inference/start", req, &result); err != nil {
 		return err
 	}
@@ -325,11 +355,19 @@ func (c *Client) Next() (Frame, error) {
 		if !strings.HasPrefix(m.Method, "cpa/inference/") {
 			continue
 		}
+		if m.Method == "cpa/inference/upstream" {
+			if err := c.observeUpstream(m.Params); err != nil {
+				return Frame{}, err
+			}
+			continue
+		}
 		var p struct {
 			RequestID  string          `json:"requestId"`
 			Event      json.RawMessage `json:"event"`
 			Body       json.RawMessage `json:"body"`
 			HTTPStatus int             `json:"httpStatus"`
+			Message    string          `json:"message"`
+			Headers    http.Header     `json:"headers"`
 		}
 		if json.Unmarshal(m.Params, &p) != nil || p.RequestID != c.requestID {
 			return Frame{}, fail(502, "Codex runtime event request identity mismatch")
@@ -347,7 +385,13 @@ func (c *Client) Next() (Frame, error) {
 			if status < 400 || status > 599 {
 				status = 502
 			}
-			return Frame{}, fail(status, "Codex runtime inference failed")
+			var body string
+			if len(p.Body) > 0 {
+				if json.Unmarshal(p.Body, &body) != nil {
+					body = string(p.Body)
+				}
+			}
+			return Frame{}, c.remoteError(status, p.Message, body, p.Headers)
 		case "cpa/inference/result":
 			if c.operation != "responses/compact" || c.resultSeen || !isObject(p.Body) {
 				return Frame{}, fail(502, "Unexpected Codex runtime result")
@@ -380,6 +424,56 @@ func (c *Client) Next() (Frame, error) {
 		}
 	}
 	return Frame{}, fail(502, "Excessive unrelated Codex runtime notifications")
+}
+
+func (c *Client) observeUpstream(raw json.RawMessage) error {
+	var entry UpstreamLog
+	if json.Unmarshal(raw, &entry) != nil || c.requestID == "" || entry.RequestID != c.requestID {
+		return fail(502, "Codex runtime upstream log request identity mismatch")
+	}
+	entry.Headers = canonicalHeaders(entry.Headers)
+	switch entry.Kind {
+	case "request":
+		c.upstreamResponse = nil
+	case "response":
+		c.upstreamResponse = &entry
+	case "error":
+	default:
+		return fail(502, "Unknown Codex runtime upstream log kind")
+	}
+	if c.OnUpstream != nil {
+		c.OnUpstream(entry)
+	}
+	return nil
+}
+
+func (c *Client) remoteError(status int, message, body string, headers http.Header) error {
+	if last := c.upstreamResponse; last != nil && last.StatusCode >= 400 {
+		status = last.StatusCode
+		if body == "" {
+			body = last.Body
+		}
+		if len(headers) == 0 {
+			headers = last.Headers
+		}
+	}
+	if body != "" {
+		message = body
+	}
+	if message == "" {
+		message = "Codex runtime inference failed"
+	}
+	return &Error{Status: status, Message: message, Body: []byte(body), ResponseHeaders: SafeHeaders(headers)}
+}
+
+func canonicalHeaders(headers http.Header) http.Header {
+	out := make(http.Header, len(headers))
+	for k, values := range headers {
+		for _, value := range values {
+			out.Add(k, value)
+		}
+	}
+	return out
 }
 
 // SafeHeaders uses an allowlist to keep cookies, auth, and transport headers private.

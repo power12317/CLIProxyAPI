@@ -1,12 +1,12 @@
-# Apply after the existing CPA Compose file; build the matching v2 images first.
+# Apply after the existing CPA Compose file using the matching branch images.
 services:
   cli-proxy-api:
-    image: ${CPA_RUNTIME_IMAGE:?Set CPA_RUNTIME_IMAGE to the tested CPA Plan B image}
-    pull_policy: never
+    image: ${CPA_RUNTIME_IMAGE:-ghcr.io/power12317/cliproxyapi:codex-runtime}
+    pull_policy: always
 
   codex-worker-a:
-    image: ${CODEX_RUNTIME_IMAGE:?Set CODEX_RUNTIME_IMAGE to the tested Codex fork image}
-    pull_policy: never
+    image: ${CODEX_RUNTIME_IMAGE:-ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth}
+    pull_policy: always
     # Match the default CPA user for its existing 0600 auth files.
     user: "0:0"
     network_mode: "service:cli-proxy-api"

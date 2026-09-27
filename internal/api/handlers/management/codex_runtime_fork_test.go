@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
 	bridge "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -75,6 +77,8 @@ func TestCodexRuntimeForkV2OAuthAndModeSwitch(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "refresh_token": refresh, "id_token": idToken, "expires_in": 3600})
 		case "/v1/responses":
 			posts.Add(1)
+			w.Header().Set("X-Request-Id", "fork-upstream-request")
+			w.Header().Set("X-Codex-Primary-Used-Percent", "12")
 			if r.Header.Get("Authorization") == "Bearer login-access" {
 				http.Error(w, "expired", 401)
 				return
@@ -184,12 +188,38 @@ stream_max_retries = 0
 	}
 	auth.Attributes["base_url"] = upstream.URL + "/v1"
 	cfg := h.codexRuntimeConfig()
+	cfg.RequestLog = true
 	auto := executor.NewCodexAutoExecutor(cfg)
 	req := coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{"model":"runtime-model","input":[]}`)}
 	opts := coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}
-	if _, err := auto.Execute(ctx, auth, req, opts); err != nil {
+	newLogContext := func() (context.Context, *gin.Context) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+		return logging.WithResponseHeadersHolder(context.WithValue(ctx, "gin", c)), c
+	}
+	assertLogs := func(c *gin.Context, attempts int) {
+		t.Helper()
+		requestValue, _ := c.Get("API_REQUEST")
+		responseValue, _ := c.Get("API_RESPONSE")
+		requests, _ := requestValue.([]byte)
+		responses, _ := responseValue.([]byte)
+		if strings.Count(string(requests), "=== API REQUEST ") != attempts || !strings.Contains(string(requests), upstream.URL+"/v1/responses") {
+			t.Fatalf("actual upstream request attempts missing: %s", requests)
+		}
+		for _, want := range []string{"Status: 200", "fork-upstream-request", "response.completed", "worker-a.json"} {
+			if !strings.Contains(string(responses), want) {
+				t.Errorf("upstream response log missing %q: %s", want, responses)
+			}
+		}
+		if strings.Contains(string(requests), "login-access") || strings.Contains(string(requests), "refreshed-access") {
+			t.Error("access token leaked into request logs")
+		}
+	}
+	loggedCtx, ginCtx := newLogContext()
+	if _, err := auto.Execute(loggedCtx, auth, req, opts); err != nil {
 		t.Fatal(err)
 	}
+	assertLogs(ginCtx, 2)
 	meta, err := codexshared.Read(sharedFile)
 	if err != nil {
 		t.Fatal(err)
@@ -204,9 +234,11 @@ stream_max_retries = 0
 		t.Fatal(rec.Body.String())
 	}
 	before := posts.Load()
-	if _, err := auto.Execute(ctx, auth, req, opts); err != nil {
+	loggedCtx, ginCtx = newLogContext()
+	if _, err := auto.Execute(loggedCtx, auth, req, opts); err != nil {
 		t.Fatal("CPA native mode:", err)
 	}
+	assertLogs(ginCtx, 1)
 	if posts.Load() != before+1 {
 		t.Fatal("native mode did not issue one request")
 	}
@@ -218,7 +250,8 @@ stream_max_retries = 0
 	if rec := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":true}`); rec.Code != 200 {
 		t.Fatal(rec.Body.String())
 	}
-	stream, err := auto.ExecuteStream(ctx, auth, req, opts)
+	loggedCtx, ginCtx = newLogContext()
+	stream, err := auto.ExecuteStream(loggedCtx, auth, req, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,6 +265,7 @@ stream_max_retries = 0
 	if frames != 2 {
 		t.Fatal("raw events lost", frames)
 	}
+	assertLogs(ginCtx, 1)
 	client, err := bridge.Dial(ctx, endpoint, "test-bridge-key")
 	if err != nil {
 		t.Fatal(err)

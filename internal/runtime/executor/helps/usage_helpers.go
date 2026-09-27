@@ -79,6 +79,9 @@ func NewExecutorUsageReporter(ctx context.Context, executor usageExecutor, model
 	if executor != nil {
 		provider = executor.Identifier()
 	}
+	if provider == cliproxyauth.CodexRuntimeProvider && auth != nil && auth.Provider == "codex" {
+		provider = auth.Provider
+	}
 	reporter := NewUsageReporter(ctx, provider, model, auth)
 	reporter.executorType = ExecutorTypeName(executor)
 	return reporter

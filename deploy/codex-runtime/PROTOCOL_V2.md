@@ -35,6 +35,30 @@ Capabilities retain the v1 fields and add `credentialFile` (basename), `authOwne
 (`cpa`/`codex`), and `manualOAuth` (boolean). Status capabilities are available while
 signed out or CPA-owned; inference and login require the appropriate owner.
 
+## Existing CPA request logs
+
+Workers advertise `upstreamLogs:true` and send ordered `cpa/inference/upstream`
+notifications, including before the `cpa/inference/start` result. Each notification
+has the matching `requestId` and one of these shapes:
+
+- `kind:"request"`: actual `url`, `method`, `headers` (`string[]` values), `body`
+  (string), `accessTokenSha256` and `oaiLbNode` (nullable strings).
+- `kind:"response"`: actual `statusCode`, `headers`, `body` (string for an HTTP
+  error, null for a successful stream), and nullable `oaiLbNode`.
+- `kind:"error"`: transport error `message` when no HTTP response exists.
+
+Each real upstream attempt gets its own request/response entries, including a
+401 followed by token refresh and a second request. Sensitive headers use the
+existing masking rules; bearer tokens are not sent over the bridge. Successful
+response bodies continue through the existing raw inference events.
+
+CPA feeds these entries into its standard request/response log helpers, including
+credential, session, turn, requested/served model and turn-state log fields. It
+does not generate a second log format or a separate usage pipeline. Structured
+RPC failures can carry `data.httpStatus`, `data.body` and `data.headers`; inference
+error notifications can also carry `body` and `headers`. CPA preserves upstream
+error details and the existing response-header metadata for CPAMP.
+
 ## Manual OAuth
 
 - `cpa/auth/login/start {}` -> `{loginId,authUrl,state}`.
