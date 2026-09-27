@@ -1,7 +1,10 @@
 # Plan B validation record
 
 Date: 2026-09-27. CPA branch: `codex/plan-b-managed-auth`, based on `02a86349`.
+CPA implementation commit: `1853b364`.
 Protocol: `cpa/*` version 1. Codex fork branch: `codex/cpa-managed-auth`.
+Final Codex fork commit: `8ee538eb3f27e8b2b560a9dc9c4372b5d805748a`, following
+the independently reviewable raw Responses transport commit `793e731cc`.
 Codex upstream baseline reported by the fork: `985cf47a4eb6084b2ff6b30ebdb1216acda85bb4`.
 
 ## CPA checks
@@ -37,7 +40,14 @@ Ran `TestCodexRuntimeForkContract` with the built macOS arm64 app-server at:
 
 Tested binary SHA-256:
 
-`574ec7d7013006555d303a0e7599ae85ac5fdc05875b44899215ba31f0c5da51`
+`89e428caa9edafa4ac108c8479f1a1299746719c9e2921523d021f11032c3eb6`
+
+The final binary was verified and `TestCodexRuntimeForkContract` passed again
+after the fork's final formatting/lint/build. Its final changes included safe
+error classification, lazy provider creation while the bridge is disabled, and
+additional cancellation during connection draining. The earlier development
+artifact was also tested, but the checksum above identifies the final verified
+artifact (431,367,696 bytes).
 
 This is a development artifact checksum, not a published release or container
 digest. Rebuilds require rerunning the contract test; use immutable image digests
@@ -64,6 +74,17 @@ No real ChatGPT login or paid inference was performed. Linux container builds,
 actual IPv6/proxy reachability, persistent volume ownership, real-account login,
 and long-running production lifecycle behavior need operator validation. The
 Compose files were rendered and checked, not started against the user's running
-deployment. Codex repository unit/integration/build results are maintained by
-its dedicated project chat; this record covers CPA and the concrete cross-repo
-artifact test only. Plan A remains unimplemented on its independent branch base.
+deployment. Plan A remains unimplemented on its independent branch base.
+
+The dedicated Codex project chat reports 10/10 CPA bridge acceptance tests and
+665/665 configuration/protocol tests passing. Its four TUI color assertion
+failures passed when rerun without the inherited `NO_COLOR` setting. Its broader
+app-server/API retry set still contained 27 failures and one timeout at this
+checkpoint; these have not all been established as baseline or environment
+failures. Therefore the Codex-wide regression suite is **not** recorded as clean.
+The fork reports successful required `just fix`, `just fmt`, and final
+`cargo build --locked -p codex-app-server --bin codex-app-server`. Per its local
+instructions, the Rust tests were not rerun after final fix/format. The CPA-run
+binary integration test above did run against the final artifact. The detailed
+failure list is in the fork's `codex-rs/app-server/docs/cpa-bridge-validation.md`.
+These reported Rust results are distinct from the actual CPA-run binary test.
