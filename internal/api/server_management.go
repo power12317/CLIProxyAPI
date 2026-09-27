@@ -120,9 +120,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/codex-runtime", s.mgmt.PutCodexRuntime)
 		mgmt.PATCH("/codex-runtime", s.mgmt.PutCodexRuntime)
 		mgmt.POST("/codex-runtime/credentials", s.mgmt.SetCodexRuntimeCredential)
-		mgmt.POST("/codex-runtime/login/start", s.mgmt.StartCodexRuntimeLogin)
-		mgmt.POST("/codex-runtime/login/callback", s.mgmt.CompleteCodexRuntimeLogin)
-		mgmt.GET("/codex-runtime/login/status", s.mgmt.GetCodexRuntimeLoginStatus)
 		mgmt.PUT("/codex/force-websocket", s.mgmt.PutCodexForceWebsocket)
 		mgmt.PATCH("/codex/force-websocket", s.mgmt.PutCodexForceWebsocket)
 

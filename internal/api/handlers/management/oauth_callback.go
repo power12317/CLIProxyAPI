@@ -34,10 +34,11 @@ func (h *Handler) PostOAuthCallback(c *gin.Context) {
 
 func (h *Handler) GetOAuthCallback(c *gin.Context) {
 	req := oauthCallbackRequest{
-		Provider: strings.TrimSpace(c.Query("provider")),
-		Code:     strings.TrimSpace(c.Query("code")),
-		State:    strings.TrimSpace(c.Query("state")),
-		Error:    firstNonEmpty(c.Query("error"), c.Query("error_description")),
+		Provider:    strings.TrimSpace(c.Query("provider")),
+		RedirectURL: strings.TrimSpace(c.Query("redirect_url")),
+		Code:        strings.TrimSpace(c.Query("code")),
+		State:       strings.TrimSpace(c.Query("state")),
+		Error:       firstNonEmpty(c.Query("error"), c.Query("error_description")),
 	}
 	h.handleOAuthCallback(c, req)
 }
@@ -86,7 +87,7 @@ func (h *Handler) handleOAuthCallback(c *gin.Context, req oauthCallbackRequest) 
 		return
 	}
 
-	sessionProvider, sessionStatus, isPlugin, _, completed, ok := GetOAuthSessionDetails(state)
+	sessionProvider, sessionStatus, isPlugin, metadata, completed, ok := GetOAuthSessionDetails(state)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "unknown or expired state"})
 		return
@@ -116,6 +117,11 @@ func (h *Handler) handleOAuthCallback(c *gin.Context, req oauthCallbackRequest) 
 	}
 	if !strings.EqualFold(sessionProvider, canonicalProvider) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "provider does not match state"})
+		return
+	}
+
+	if !isPlugin && canonicalProvider == "codex" && runtimeOAuthLoginID(metadata) != "" {
+		h.callbackRuntimeOAuth(c, state, metadata, req.RedirectURL, code, errMsg)
 		return
 	}
 

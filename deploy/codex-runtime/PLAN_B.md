@@ -59,9 +59,11 @@ enter CPA's existing request-log pipeline. The raw body is the only business
 response channel; it is not duplicated as parsed Codex events. No extra usage
 collector, request counter, or monitoring UI is introduced.
 
-CPAMP communicates only with CPA. The selected CPA instance configuration embeds
-the global switch, account mode switches, and official browser OAuth controls.
-There is no separate runtime menu or standalone runtime page. CPA delegates login to the
+CPAMP communicates only with CPA. The selected CPA instance network configuration
+contains one small mode switch next to the Basispoints switch. Authorization stays
+on the existing OAuth page using `/codex-auth-url`, `/oauth-callback`, and
+`/get-auth-status`; CPA selects the implementation internally. There is no separate
+runtime menu, standalone runtime page, or account authorization section in settings. CPA delegates login to the
 master and forwards the authorization URL and callback result. Reauthorization
 uses the original credential file. A newly requested login creates a new CPA
 credential identity, which becomes the account process identity.

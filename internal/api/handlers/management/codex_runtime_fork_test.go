@@ -46,7 +46,7 @@ func TestCodexRuntimeForkV3OAuthAndModeSwitch(t *testing.T) {
 	_ = listener.Close()
 	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/cpa/v1/ws", port)
 	h, sharedFile := runtimeHandler(t, false, endpoint)
-	if err := codexshared.Write(sharedFile, map[string]any{"type": "codex", "extension": "preserved"}); err != nil {
+	if err := codexshared.Write(sharedFile, map[string]any{"type": "codex", "extension": "preserved", "codex_client_system": "windows"}); err != nil {
 		t.Fatal(err)
 	}
 	stateRoot := filepath.Join(home, "state")
@@ -168,11 +168,22 @@ stream_max_retries = 0
 	if rec := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":true}`); rec.Code != 200 {
 		t.Fatal(rec.Body.String())
 	}
-	start := runtimeCall(t, h.StartCodexRuntimeLogin, "POST", "/", `{"name":"existing-account.json"}`)
+	targetAuth, found := h.authManager.GetByID("existing-account.json")
+	if !found {
+		t.Fatal("original credential was not loaded")
+	}
+	start := runtimeCall(t, h.RequestCodexToken, "GET", "/codex-auth-url?auth_index="+url.QueryEscape(targetAuth.Index)+"&client_system=mac", "")
 	if start.Code != 200 {
 		t.Fatal(start.Body.String())
 	}
-	loginID := gjson.Get(start.Body.String(), "login_id").String()
+	stateID := gjson.Get(start.Body.String(), "state").String()
+	if gjson.Get(start.Body.String(), "status").String() != "ok" || gjson.Get(start.Body.String(), "client_system").String() != "windows" {
+		t.Fatal("standard OAuth contract or original system metadata changed", start.Body.String())
+	}
+	pending := runtimeCall(t, h.GetAuthStatus, "GET", "/get-auth-status?state="+url.QueryEscape(stateID), "")
+	if pending.Code != 200 || gjson.Get(pending.Body.String(), "status").String() != "wait" {
+		t.Fatal(pending.Body.String())
+	}
 	authURL, err := url.Parse(gjson.Get(start.Body.String(), "url").String())
 	if err != nil {
 		t.Fatal(err)
@@ -182,10 +193,14 @@ stream_max_retries = 0
 		t.Fatal("official PKCE missing")
 	}
 	callback := query.Get("redirect_uri") + "?code=fake-code&state=" + url.QueryEscape(query.Get("state"))
-	payload, _ := json.Marshal(map[string]string{"login_id": loginID, "redirect_url": callback})
-	completed := runtimeCall(t, h.CompleteCodexRuntimeLogin, "POST", "/", string(payload))
-	if completed.Code != 200 || gjson.Get(completed.Body.String(), "status").String() != "completed" {
+	payload, _ := json.Marshal(map[string]string{"provider": "codex", "redirect_url": callback})
+	completed := runtimeCall(t, h.PostOAuthCallback, "POST", "/oauth-callback", string(payload))
+	if completed.Code != 200 || gjson.Get(completed.Body.String(), "status").String() != "ok" {
 		t.Fatal(completed.Body.String())
+	}
+	status := runtimeCall(t, h.GetAuthStatus, "GET", "/get-auth-status?state="+url.QueryEscape(stateID), "")
+	if status.Code != 200 || gjson.Get(status.Body.String(), "status").String() != "ok" {
+		t.Fatal(status.Body.String())
 	}
 	if exchanges.Load() != 1 {
 		t.Fatal("wrong code exchange count")
@@ -243,7 +258,7 @@ stream_max_retries = 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refreshes.Load() != 1 || meta["refresh_token"] != "refreshed-refresh" {
+	if refreshes.Load() != 1 || meta["refresh_token"] != "refreshed-refresh" || meta["codex_client_system"] != "windows" || meta["extension"] != "preserved" {
 		t.Fatal("Codex did not refresh common file")
 	}
 	if _, err := os.Stat(filepath.Join(accountHome, "auth.json")); !os.IsNotExist(err) {

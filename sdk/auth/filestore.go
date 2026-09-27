@@ -114,8 +114,13 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 	shared := false
 	if current, errRead := codexshared.Read(path); errRead == nil {
 		if _, ok := codexshared.Get(current); ok {
-			shared = true
-			auth.Metadata = codexshared.MergeMetadata(current, auth.Metadata)
+			if auth.Storage != nil && cliproxyauth.HasAuthCreationIntent(ctx) {
+				// Explicit reauthorization must persist the newly exchanged tokens.
+				cliproxyauth.MergeExistingAuthMetadata(auth, current)
+			} else {
+				shared = true
+				auth.Metadata = codexshared.MergeMetadata(current, auth.Metadata)
+			}
 		}
 	}
 	switch {

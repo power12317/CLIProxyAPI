@@ -264,6 +264,10 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 	if targetAuth != nil {
 		clientSystem = codexClientSystemForAuth(targetAuth)
 	}
+	if h.codexRuntimeConfig().Codex.Runtime.Enabled {
+		h.requestCodexRuntimeToken(c, targetAuth, clientSystem)
+		return
+	}
 	targetAuthID := ""
 	targetFileName := ""
 	targetLabel := ""
@@ -1053,6 +1057,10 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 	}
 	if status != "" {
 		c.JSON(http.StatusOK, gin.H{"status": "error", "error": status})
+		return
+	}
+	if !isPlugin && provider == "codex" && runtimeOAuthLoginID(metadata) != "" {
+		h.pollRuntimeOAuth(c, state, metadata)
 		return
 	}
 	h.mu.Lock()

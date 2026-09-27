@@ -3,14 +3,16 @@ package management
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	bridge "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 func (h *Handler) codexRuntimeConfig() *config.Config {
@@ -216,58 +218,46 @@ func runtimeHTTPError(c *gin.Context, err error) {
 	c.JSON(status, gin.H{"error": err.Error()})
 }
 
-func (h *Handler) runtimeRPC(c *gin.Context, cfg *config.Config, credentialID string) (*bridge.Client, bool) {
+func (h *Handler) runtimeRPC(ctx context.Context, cfg *config.Config, credentialID string) (*bridge.Client, error) {
 	if !cfg.Codex.Runtime.Enabled {
-		c.JSON(http.StatusConflict, gin.H{"error": "Codex runtime integration is disabled"})
-		return nil, false
+		return nil, &bridge.Error{Status: http.StatusConflict, Message: "Codex runtime integration is disabled"}
 	}
 	credential, found, err := findRuntimeCredential(cfg, credentialID)
 	if err != nil {
-		runtimeHTTPError(c, err)
-		return nil, false
+		return nil, err
 	}
 	if !found {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Codex account is unavailable"})
-		return nil, false
+		return nil, &bridge.Error{Status: http.StatusBadRequest, Message: "Codex account is unavailable"}
 	}
 	state, _ := codexshared.Get(credential.Metadata)
 	disabled, _ := credential.Metadata["disabled"].(bool)
 	if !state.Enabled || disabled {
-		c.JSON(http.StatusConflict, gin.H{"error": "Codex account is disabled"})
-		return nil, false
+		return nil, &bridge.Error{Status: http.StatusConflict, Message: "Codex account is disabled"}
 	}
-	ctx, release := bridge.Track(c.Request.Context(), credential.Path)
+	ctx, release := bridge.Track(ctx, credential.Path)
 	client, err := bridge.Dial(ctx, cfg.Codex.Runtime.Endpoint())
 	if err != nil {
 		release()
-		runtimeHTTPError(c, err)
-		return nil, false
+		return nil, err
 	}
 	client.OnClose(release)
-	return client, true
+	return client, nil
 }
 
-func (h *Handler) StartCodexRuntimeLogin(c *gin.Context) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid OAuth request"})
-		return
-	}
+// requestCodexRuntimeToken implements the existing Codex OAuth entry using the master.
+func (h *Handler) requestCodexRuntimeToken(c *gin.Context, target *coreauth.Auth, clientSystem string) {
 	cfg := h.codexRuntimeConfig()
-	if !cfg.Codex.Runtime.Enabled {
-		c.JSON(http.StatusConflict, gin.H{"error": "Codex runtime integration is disabled"})
-		return
-	}
-	if req.Name == "" {
-		req.Name = uuid.NewString() + ".json"
-		if err := codexshared.Write(bridge.CredentialPath(cfg, req.Name), map[string]any{"type": "codex"}); err != nil {
+	credentialID := ""
+	if target == nil {
+		credentialID = uuid.NewString() + ".json"
+		metadata := map[string]any{"type": "codex", "auth_kind": coreauth.AuthKindOAuth, "codex_client_system": clientSystem}
+		if err := codexshared.Write(bridge.CredentialPath(cfg, credentialID), metadata); err != nil {
 			runtimeHTTPError(c, err)
 			return
 		}
 	} else {
-		credential, found, err := findRuntimeCredential(cfg, req.Name)
+		credentialID = target.ID
+		credential, found, err := findRuntimeCredential(cfg, credentialID)
 		if err != nil {
 			runtimeHTTPError(c, err)
 			return
@@ -281,16 +271,17 @@ func (h *Handler) StartCodexRuntimeLogin(c *gin.Context) {
 			return
 		}
 	}
-	cfg, ok := h.setRuntimePreference(c, req.Name, true)
+	cfg, ok := h.setRuntimePreference(c, credentialID, true)
 	if !ok {
 		return
 	}
-	client, ok := h.runtimeRPC(c, cfg, req.Name)
-	if !ok {
+	client, err := h.runtimeRPC(c.Request.Context(), cfg, credentialID)
+	if err != nil {
+		runtimeHTTPError(c, err)
 		return
 	}
 	defer client.Close()
-	if err := client.Call("cpa/credential/reload", map[string]any{"credentialId": req.Name}, nil); err != nil {
+	if err := client.Call("cpa/credential/reload", map[string]any{"credentialId": credentialID}, nil); err != nil {
 		runtimeHTTPError(c, err)
 		return
 	}
@@ -299,68 +290,117 @@ func (h *Handler) StartCodexRuntimeLogin(c *gin.Context) {
 		AuthURL string `json:"authUrl"`
 		State   string `json:"state"`
 	}
-	if err := client.Call("cpa/auth/login/start", map[string]any{"credentialId": req.Name}, &result); err != nil {
+	if err := client.Call("cpa/auth/login/start", map[string]any{"credentialId": credentialID}, &result); err != nil {
 		runtimeHTTPError(c, err)
 		return
 	}
-	RegisterOAuthSessionWithMetadata("codex-runtime:"+result.LoginID, "codex-runtime", map[string]any{"credential_id": req.Name})
-	c.JSON(http.StatusOK, gin.H{"login_id": result.LoginID, "url": result.AuthURL, "state": result.State})
+	authURL, err := url.Parse(result.AuthURL)
+	if err != nil || ValidateOAuthState(result.State) != nil || result.LoginID == "" {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Codex OAuth response"})
+		return
+	}
+	RegisterOAuthSessionWithMetadata(result.State, "codex", map[string]any{
+		"credential_id":    credentialID,
+		"runtime_login_id": result.LoginID,
+		"redirect_uri":     authURL.Query().Get("redirect_uri"),
+	})
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": result.AuthURL, "state": result.State, "client_system": clientSystem})
 }
 
-func (h *Handler) runtimeLoginRPC(c *gin.Context, loginID string) (*bridge.Client, string, bool) {
-	cfg := h.codexRuntimeConfig()
-	if !cfg.Codex.Runtime.Enabled {
-		c.JSON(http.StatusConflict, gin.H{"error": "Codex runtime integration is disabled"})
-		return nil, "", false
-	}
-	provider, _, _, metadata, _, ok := GetOAuthSessionDetails("codex-runtime:" + loginID)
-	if !ok || provider != "codex-runtime" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown OAuth login"})
-		return nil, "", false
-	}
+type runtimeOAuthResult struct {
+	Status string `json:"status"`
+	Error  string `json:"error"`
+}
+
+func runtimeOAuthLoginID(metadata map[string]any) string {
+	loginID, _ := metadata["runtime_login_id"].(string)
+	return loginID
+}
+
+func (h *Handler) callRuntimeOAuth(ctx context.Context, metadata map[string]any, method string, params map[string]any) (runtimeOAuthResult, error) {
 	credentialID, _ := metadata["credential_id"].(string)
-	client, ok := h.runtimeRPC(c, cfg, credentialID)
-	return client, credentialID, ok
-}
-
-func (h *Handler) CompleteCodexRuntimeLogin(c *gin.Context) {
-	var req struct {
-		LoginID     string `json:"login_id"`
-		RedirectURL string `json:"redirect_url"`
-	}
-	if c.ShouldBindJSON(&req) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid OAuth callback"})
-		return
-	}
-	client, credentialID, ok := h.runtimeLoginRPC(c, req.LoginID)
-	if !ok {
-		return
+	client, err := h.runtimeRPC(ctx, h.codexRuntimeConfig(), credentialID)
+	if err != nil {
+		return runtimeOAuthResult{}, err
 	}
 	defer client.Close()
-	var result map[string]any
-	if err := client.Call("cpa/auth/login/callback", map[string]any{"loginId": req.LoginID, "redirectUrl": req.RedirectURL}, &result); err != nil {
-		runtimeHTTPError(c, err)
-		return
-	}
-	if result["status"] == "completed" {
-		h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(h.codexRuntimeConfig(), credentialID))
-	}
-	c.JSON(http.StatusOK, result)
+	params["loginId"] = runtimeOAuthLoginID(metadata)
+	var result runtimeOAuthResult
+	err = client.Call(method, params, &result)
+	return result, err
 }
 
-func (h *Handler) GetCodexRuntimeLoginStatus(c *gin.Context) {
-	client, credentialID, ok := h.runtimeLoginRPC(c, c.Query("login_id"))
-	if !ok {
+func (h *Handler) completeRuntimeOAuth(ctx context.Context, state string, metadata map[string]any) {
+	credentialID, _ := metadata["credential_id"].(string)
+	h.syncRuntimeAuth(ctx, bridge.CredentialPath(h.codexRuntimeConfig(), credentialID))
+	CompleteOAuthSession(state)
+}
+
+func runtimeOAuthError(result runtimeOAuthResult) string {
+	if message := strings.TrimSpace(result.Error); message != "" {
+		return message
+	}
+	return "Codex authentication failed"
+}
+
+func (h *Handler) pollRuntimeOAuth(c *gin.Context, state string, metadata map[string]any) {
+	result, err := h.callRuntimeOAuth(c.Request.Context(), metadata, "cpa/auth/login/status", map[string]any{})
+	if err != nil {
+		SetOAuthSessionError(state, err.Error())
+		c.JSON(http.StatusOK, gin.H{"status": "error", "error": err.Error()})
 		return
 	}
-	defer client.Close()
-	var result map[string]any
-	if err := client.Call("cpa/auth/login/status", map[string]any{"loginId": c.Query("login_id")}, &result); err != nil {
-		runtimeHTTPError(c, err)
+	switch result.Status {
+	case "completed":
+		h.completeRuntimeOAuth(c.Request.Context(), state, metadata)
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	case "error":
+		message := runtimeOAuthError(result)
+		SetOAuthSessionError(state, message)
+		c.JSON(http.StatusOK, gin.H{"status": "error", "error": message})
+	default:
+		c.JSON(http.StatusOK, gin.H{"status": "wait"})
+	}
+}
+
+func (h *Handler) callbackRuntimeOAuth(c *gin.Context, state string, metadata map[string]any, redirectURL, code, oauthError string) {
+	if strings.TrimSpace(redirectURL) == "" {
+		base, _ := metadata["redirect_uri"].(string)
+		callback, err := url.Parse(base)
+		if err != nil || base == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "OAuth redirect URI is unavailable"})
+			return
+		}
+		query := callback.Query()
+		query.Set("state", state)
+		if code != "" {
+			query.Set("code", code)
+		}
+		if oauthError != "" {
+			query.Set("error", oauthError)
+		}
+		callback.RawQuery = query.Encode()
+		redirectURL = callback.String()
+	}
+	result, err := h.callRuntimeOAuth(c.Request.Context(), metadata, "cpa/auth/login/callback", map[string]any{"redirectUrl": redirectURL})
+	if err != nil {
+		SetOAuthSessionError(state, err.Error())
+		status := http.StatusInternalServerError
+		var typed interface{ StatusCode() int }
+		if errors.As(err, &typed) {
+			status = typed.StatusCode()
+		}
+		c.JSON(status, gin.H{"status": "error", "error": err.Error()})
 		return
 	}
-	if result["status"] == "completed" {
-		h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(h.codexRuntimeConfig(), credentialID))
+	if result.Status == "error" {
+		message := runtimeOAuthError(result)
+		SetOAuthSessionError(state, message)
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": message})
+		return
 	}
-	c.JSON(http.StatusOK, result)
+	if result.Status == "completed" {
+		h.completeRuntimeOAuth(c.Request.Context(), state, metadata)
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -120,6 +118,12 @@ func runtimeMaster(t *testing.T, handle func(string, map[string]any) any) (strin
 			default:
 				result = handle(msg.Method, msg.Params)
 			}
+			if failure, ok := result.(*bridge.Error); ok {
+				if err := conn.WriteJSON(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": failure.Message, "data": map[string]any{"httpStatus": failure.Status}}}); err != nil {
+					return
+				}
+				continue
+			}
 			if err := conn.WriteJSON(map[string]any{"id": msg.ID, "result": result}); err != nil {
 				return
 			}
@@ -151,12 +155,13 @@ func TestCodexRuntimeOffRemainsLocalAndHidesTopology(t *testing.T) {
 			t.Errorf("internal field exposed: %s", field)
 		}
 	}
-	for _, handler := range []func(*gin.Context){h.StartCodexRuntimeLogin, h.CompleteCodexRuntimeLogin} {
-		if result := runtimeCall(t, handler, "POST", "/", `{}`); result.Code != 409 {
-			t.Fatal(result.Code, result.Body.String())
-		}
+	state := "runtime-off-standard-session"
+	RegisterOAuthSessionWithMetadata(state, "codex", map[string]any{"runtime_login_id": "off-login", "credential_id": "existing-account.json", "redirect_uri": "http://localhost:1455/auth/callback"})
+	t.Cleanup(func() { CancelOAuthSession(state) })
+	if result := runtimeCall(t, h.PostOAuthCallback, "POST", "/", `{"provider":"codex","state":"runtime-off-standard-session","code":"unused"}`); result.Code != 409 {
+		t.Fatal(result.Code, result.Body.String())
 	}
-	if result := runtimeCall(t, h.GetCodexRuntimeLoginStatus, "GET", "/?login_id=id", ""); result.Code != 409 {
+	if result := runtimeCall(t, h.GetAuthStatus, "GET", "/?state="+state, ""); result.Code != 200 || gjson.Get(result.Body.String(), "status").String() != "error" {
 		t.Fatal(result.Code, result.Body.String())
 	}
 	if result := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":false,"url":"ws://other","workers":[]}`); result.Code != 200 {
@@ -254,146 +259,6 @@ func TestCodexRuntimeRetainsFileOptOutWhenDisablingGlobalMode(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeOAuthUsesOriginalCredentialIDAndSharedFile(t *testing.T) {
-	credentialID := "组别/Existing 账号.json"
-	var path string
-	var starts, callbacks, reloads atomic.Int32
-	var boundID string
-	endpoint, connections := runtimeMaster(t, func(method string, params map[string]any) any {
-		switch method {
-		case "cpa/credential/reload":
-			reloads.Add(1)
-			if id, exists := params["credentialId"]; exists && id != credentialID {
-				t.Error("reload changed original credential ID", params)
-			}
-			return map[string]any{}
-		case "cpa/auth/login/start":
-			starts.Add(1)
-			if params["credentialId"] != credentialID || len(params) != 1 {
-				t.Error("start did not use only the CPA credential ID", params)
-			}
-			boundID = params["credentialId"].(string)
-			metadata, err := codexshared.Read(path)
-			state, _ := codexshared.Get(metadata)
-			if err != nil || !state.Enabled || reloads.Load() == 0 {
-				t.Error("login started before enabling and reloading credential", metadata, err)
-			}
-			return map[string]any{"loginId": "existing-login", "authUrl": "https://auth.example/authorize?state=state-1", "state": "state-1"}
-		case "cpa/auth/login/callback":
-			callbacks.Add(1)
-			if len(params) != 2 || params["loginId"] != "existing-login" || params["redirectUrl"] != "http://localhost:1455/auth/callback?state=state-1&code=synthetic" {
-				t.Error("callback routing changed", params)
-			}
-			metadata, err := codexshared.Read(path)
-			if err != nil {
-				t.Error(err)
-			}
-			metadata["access_token"], metadata["refresh_token"] = "worker-token", "worker-refresh"
-			if err := codexshared.Write(path, metadata); err != nil {
-				t.Error(err)
-			}
-			return map[string]any{"status": "completed", "error": nil}
-		case "cpa/auth/login/status":
-			if len(params) != 1 || params["loginId"] != "existing-login" {
-				t.Error("status must route by login ID only", params)
-			}
-			return map[string]any{"status": "completed", "error": nil}
-		default:
-			t.Errorf("unexpected RPC %s", method)
-			return map[string]any{}
-		}
-	})
-	h, _ := runtimeHandler(t, true, endpoint)
-	path = bridge.CredentialPath(h.cfg, credentialID)
-	writeRuntimeCredential(t, path, false, nil)
-	rec := runtimeCall(t, h.StartCodexRuntimeLogin, "POST", "/", runtimeJSON(t, map[string]any{"name": credentialID}))
-	if rec.Code != 200 || gjson.Get(rec.Body.String(), "login_id").String() != "existing-login" {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	_, _, _, metadata, _, exists := GetOAuthSessionDetails("codex-runtime:existing-login")
-	if !exists || metadata["credential_id"] != credentialID || len(metadata) != 1 || boundID != credentialID {
-		t.Fatal("OAuth metadata uses a separate worker identity", metadata)
-	}
-	rec = runtimeCall(t, h.CompleteCodexRuntimeLogin, "POST", "/", `{"login_id":"existing-login","redirect_url":"http://localhost:1455/auth/callback?state=state-1&code=synthetic"}`)
-	if rec.Code != 200 || gjson.Get(rec.Body.String(), "status").String() != "completed" {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	rec = runtimeCall(t, h.GetCodexRuntimeLoginStatus, "GET", "/?login_id=existing-login", "")
-	if rec.Code != 200 {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	current := assertRuntimeEnabled(t, path, true)
-	if current["refresh_token"] != "worker-refresh" || current["unknown"] != "retained" || starts.Load() != 1 || callbacks.Load() != 1 {
-		t.Fatal("OAuth changed shared-file identity or metadata", current)
-	}
-	auth, exists := h.authManager.GetByID(credentialID)
-	if !exists || auth.Metadata["access_token"] != "worker-token" {
-		t.Fatal("successful OAuth did not reload original auth record", auth)
-	}
-	files, err := bridge.ListCredentials(h.codexRuntimeConfig())
-	if err != nil || len(files) != 1 || files[0].ID != credentialID {
-		t.Fatal("existing credential renamed or copied", files, err)
-	}
-	if rec = runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":false}`); rec.Code != 200 {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	callsAfterOff := connections.Load()
-	if rec = runtimeCall(t, h.GetCodexRuntimeLoginStatus, "GET", "/?login_id=existing-login", ""); rec.Code != 409 {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	if rec = runtimeCall(t, h.CompleteCodexRuntimeLogin, "POST", "/", `{"login_id":"existing-login","redirect_url":"unused"}`); rec.Code != 409 {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	if connections.Load() != callsAfterOff {
-		t.Fatal("disabled OAuth status contacted master")
-	}
-}
-
-func TestCodexRuntimeNewOAuthCreatesOnlyOneNewUUIDCredential(t *testing.T) {
-	var h *Handler
-	var credentialID string
-	endpoint, _ := runtimeMaster(t, func(method string, params map[string]any) any {
-		if method == "cpa/auth/login/start" {
-			credentialID, _ = params["credentialId"].(string)
-			if _, err := uuid.Parse(strings.TrimSuffix(credentialID, ".json")); err != nil {
-				t.Error("new credential is not UUID based", credentialID)
-			}
-			metadata, err := codexshared.Read(bridge.CredentialPath(h.cfg, credentialID))
-			state, _ := codexshared.Get(metadata)
-			if err != nil || !state.Enabled || metadata["type"] != "codex" {
-				t.Error("new OAuth placeholder not ready", metadata, err)
-			}
-			return map[string]any{"loginId": "new-login", "authUrl": "https://auth.example/authorize", "state": "new-state"}
-		}
-		if method != "cpa/credential/reload" {
-			t.Errorf("unexpected RPC %s", method)
-		}
-		return map[string]any{}
-	})
-	var existing string
-	h, existing = runtimeHandler(t, true, endpoint)
-	writeRuntimeCredential(t, existing, true, nil)
-	if rec := runtimeCall(t, h.GetCodexRuntime, "GET", "/", ""); rec.Code != 200 {
-		t.Fatal(rec.Body.String())
-	}
-	files, err := bridge.ListCredentials(h.cfg)
-	if err != nil || len(files) != 1 {
-		t.Fatal("status created placeholder", files, err)
-	}
-	rec := runtimeCall(t, h.StartCodexRuntimeLogin, "POST", "/", `{}`)
-	if rec.Code != 200 || credentialID == "" || credentialID == "existing-account.json" {
-		t.Fatal(rec.Code, rec.Body.String())
-	}
-	files, err = bridge.ListCredentials(h.cfg)
-	if err != nil || len(files) != 2 {
-		t.Fatal("new OAuth did not add exactly one credential", files, err)
-	}
-	current := assertRuntimeEnabled(t, existing, true)
-	if current["access_token"] != "existing-access" || current["refresh_token"] != "existing-refresh" {
-		t.Fatal("new OAuth modified an existing account")
-	}
-}
-
 func TestCodexRuntimeInvalidSelectionDoesNotCreateOrContactMaster(t *testing.T) {
 	endpoint, connections := runtimeMaster(t, func(string, map[string]any) any {
 		t.Error("invalid selection contacted master")
@@ -406,12 +271,6 @@ func TestCodexRuntimeInvalidSelectionDoesNotCreateOrContactMaster(t *testing.T) 
 		if rec := runtimeCall(t, h.SetCodexRuntimeCredential, "POST", "/", body); rec.Code != 400 {
 			t.Fatal(rec.Code, rec.Body.String())
 		}
-		if rec := runtimeCall(t, h.StartCodexRuntimeLogin, "POST", "/", body); rec.Code != 400 {
-			t.Fatal(rec.Code, rec.Body.String())
-		}
-	}
-	if rec := runtimeCall(t, h.GetCodexRuntimeLoginStatus, "GET", "/?login_id="+url.QueryEscape("unknown-login"), ""); rec.Code != 400 {
-		t.Fatal(rec.Code, rec.Body.String())
 	}
 	if connections.Load() != 0 {
 		t.Fatal("invalid selection connected to master")

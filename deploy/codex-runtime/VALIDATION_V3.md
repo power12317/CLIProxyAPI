@@ -25,6 +25,12 @@ CPA refresh suppression/restoration, and startup reconciliation before auth load
 A failed master control connection does not prevent already-saved local CPA
 configuration from being applied. No refresh locking or automatic replay was added.
 
+OAuth race checks were run in separate groups: runtime OAuth, existing native
+Codex OAuth, and generic callback/status handlers. Each group passed. A combined
+race run exposed interference between the existing native waiting goroutine and
+tests that replace the global OAuth session store; that test-fixture behavior was
+not expanded into production synchronization changes.
+
 ## Real fork integration
 
 The real-process integration test passed on 2026-09-27 against the local v3 fork
@@ -37,7 +43,9 @@ CODEX_RUNTIME_TEST_BINARY=/path/to/codex-app-server \
   -run '^TestCodexRuntimeForkV3OAuthAndModeSwitch$' -count=1 -v -timeout=120s
 ```
 
-It exercises a tokenless original file, native PKCE OAuth, first inference,
+It exercises the existing management OAuth URL, callback and status endpoints
+with a tokenless original file, `auth_index` targeting, preserved `client_system`,
+native PKCE OAuth, first inference,
 401 recovery, shared-file refresh, real request/response log propagation,
 function-call response delivery, global disable with CPA native execution, and
 reenable with streaming through the account process. The test uses fake tokens
