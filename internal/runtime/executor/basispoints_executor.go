@@ -156,6 +156,9 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	}
 	var response *http.Response
 	if wsRequest != nil {
+		wsRequest.ObserveConnection = func(connected bool) {
+			helps.LogBasispointsWebsocketConnection(ctx, turnState, connected)
+		}
 		response, err = e.openWebsocket(ctx, auth, wsRequest, upstreamLog, reporter, func(raw []byte) {
 			turnState.ObserveEvent(raw)
 			helps.AppendAPIResponseChunk(ctx, e.cfg, append(append([]byte("data: "), raw...), '\n', '\n'))

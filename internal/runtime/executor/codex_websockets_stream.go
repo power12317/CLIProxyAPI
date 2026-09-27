@@ -100,6 +100,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}
 	wsReqBody := buildCodexWebsocketRequestBody(upstreamBody)
+	sess.setLogSessionID(turnState.SessionID())
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
 		Method:    "WEBSOCKET",
@@ -185,7 +186,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	reporter.StartResponseTTFT()
 
 	if sess == nil {
-		logCodexWebsocketConnected(executionSessionID, authID, wsURL)
+		logCodexWebsocketConnected(turnState.SessionID(), authID, wsURL)
 	}
 
 	var readCh chan codexWebsocketRead
@@ -269,7 +270,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					closeCodexWebsocketSession(sess, "send_error")
 				}
 			} else {
-				logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, "send_error", errSend)
+				logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, "send_error", errSend)
 				if closer != nil {
 					_ = closer.Close()
 				}
@@ -339,7 +340,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 						closeCodexWebsocketSession(sess, "read_error")
 					}
 				} else {
-					logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, "read_error", mappedErr)
+					logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, "read_error", mappedErr)
 					_ = closer.Close()
 				}
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "read", mappedErr)
@@ -376,7 +377,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 							closeCodexWebsocketSession(sess, "unexpected_binary")
 						}
 					} else {
-						logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, "unexpected_binary", errBinary)
+						logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, "unexpected_binary", errBinary)
 						_ = closer.Close()
 					}
 					helps.RecordAPIWebsocketError(ctx, e.cfg, "unexpected_binary", errBinary)
@@ -410,7 +411,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					sess.clearActive(conn, readCh)
 					unlockStreamSession()
 				} else {
-					logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, "upstream_error", wsErr)
+					logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, "upstream_error", wsErr)
 					_ = closer.Close()
 				}
 				if errClearReplay := clearCodexReasoningReplayOnWebsocketError(ctx, replayScope, payload); errClearReplay != nil {
@@ -447,7 +448,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					sess.clearActive(conn, readCh)
 					unlockStreamSession()
 				} else {
-					logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, "terminal_failure", streamErr)
+					logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, "terminal_failure", streamErr)
 					_ = closer.Close()
 				}
 				if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, streamErr.StatusCode(), terminalBody); errClearReplay != nil {
@@ -581,7 +582,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				closeCodexWebsocketSession(sess, "completed")
 			}
 		} else {
-			logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, "completed", nil)
+			logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, "completed", nil)
 			if errClose := closer.Close(); errClose != nil {
 				log.Errorf("codex websockets executor: close websocket error: %v", errClose)
 			}
@@ -609,7 +610,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				}
 				return
 			}
-			logCodexWebsocketDisconnected(executionSessionID, authID, wsURL, terminateReason, terminateErr)
+			logCodexWebsocketDisconnected(turnState.SessionID(), authID, wsURL, terminateReason, terminateErr)
 			if errClose := closer.Close(); errClose != nil {
 				log.Errorf("codex websockets executor: close websocket error: %v", errClose)
 			}

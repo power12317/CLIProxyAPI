@@ -236,6 +236,43 @@ func TestShortCodexIdentifier(t *testing.T) {
 	}
 }
 
+func TestGinWebsocketLabelClearsOnHTTPFallback(t *testing.T) {
+	logger := log.StandardLogger()
+	previousHooks := logger.ReplaceHooks(make(log.LevelHooks))
+	previousLevel := logger.GetLevel()
+	hook := logtest.NewLocal(logger)
+	logger.SetLevel(log.InfoLevel)
+	t.Cleanup(func() { logger.ReplaceHooks(previousHooks); logger.SetLevel(previousLevel) })
+	router := gin.New()
+	router.Use(GinLogrusLogger())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		SetUpstreamWebsocket(c, true)
+		SetUpstreamWebsocket(c, false)
+		c.Status(200)
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/responses", nil))
+	entries := hook.AllEntries()
+	if len(entries) != 1 || strings.Contains(entries[0].Message, "/WS") || !strings.Contains(entries[0].Message, "POST") {
+		t.Fatalf("fallback was labeled as WebSocket: %v", entries)
+	}
+}
+
+func TestCodexSessionLogIDUsesExistingSessionOnly(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	if CodexSessionLogID(c) != "" {
+		t.Fatal("missing session must not generate a log ID")
+	}
+	c.Request.Header.Set("Session_id", "01a0d8fc-1111-2222-3333-444444444444")
+	if CodexSessionLogID(c) != "01a0d8fc" {
+		t.Fatal("handshake session not used")
+	}
+	SetCodexTurnStateLogFields(c, CodexTurnStateLogFields{SessionID: "01a0d8fd-1111-2222-3333-444444444444"})
+	if CodexSessionLogID(c) != "01a0d8fd" {
+		t.Fatal("access log session must take precedence")
+	}
+}
+
 func TestGinLogrusLoggerPrintsBothTurnStateLengths(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logger := log.StandardLogger()

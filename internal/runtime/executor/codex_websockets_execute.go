@@ -170,6 +170,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		}
 	}
 	wsReqBody := buildCodexWebsocketRequestBody(upstreamBody)
+	sess.setLogSessionID(turnState.SessionID())
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
 		Method:    "WEBSOCKET",

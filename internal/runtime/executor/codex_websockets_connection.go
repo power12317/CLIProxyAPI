@@ -104,7 +104,7 @@ func writeWebsocketPayloadMessage(provider string, sess *codexWebsocketSession, 
 	}
 	sessionID := ""
 	if sess != nil {
-		sessionID = sess.sessionID
+		sessionID = sess.shortLogSessionID("")
 	}
 	sessionKind := sessionObjectKind(sess)
 	payloadBytes := len(payload)

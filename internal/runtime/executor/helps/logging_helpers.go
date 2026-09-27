@@ -63,6 +63,8 @@ func requestLogCaptureEnabled(cfg *config.Config) bool {
 
 // RecordAPIRequest stores the upstream request metadata in Gin context for request logging.
 func RecordAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
+	websocket := strings.HasPrefix(info.URL, "ws://") || strings.HasPrefix(info.URL, "wss://") || strings.EqualFold(info.Headers.Get("Upgrade"), "websocket")
+	logging.SetUpstreamWebsocket(ginContextFrom(ctx), websocket)
 	if cfg == nil || cfg.CommercialMode {
 		return
 	}
@@ -287,6 +289,7 @@ func AppendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byt
 
 // RecordAPIWebsocketRequest stores an upstream websocket request event in Gin context.
 func RecordAPIWebsocketRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
+	logging.SetUpstreamWebsocket(ginContextFrom(ctx), true)
 	if !requestLogCaptureEnabled(cfg) {
 		return
 	}
@@ -319,6 +322,7 @@ func RecordAPIWebsocketRequest(ctx context.Context, cfg *config.Config, info Ups
 
 // RecordAPIWebsocketHandshake stores the upstream websocket handshake response metadata.
 func RecordAPIWebsocketHandshake(ctx context.Context, cfg *config.Config, status int, headers http.Header) {
+	logging.SetUpstreamWebsocket(ginContextFrom(ctx), true)
 	logging.SetResponseHeaders(ctx, headers)
 	if !requestLogCaptureEnabled(cfg) {
 		return
@@ -343,6 +347,7 @@ func RecordAPIWebsocketHandshake(ctx context.Context, cfg *config.Config, status
 
 // RecordAPIWebsocketUpgradeRejection stores a rejected websocket upgrade as an HTTP attempt.
 func RecordAPIWebsocketUpgradeRejection(ctx context.Context, cfg *config.Config, info UpstreamRequestLog, status int, headers http.Header, body []byte) {
+	logging.SetUpstreamWebsocket(ginContextFrom(ctx), true)
 	logging.SetResponseHeaders(ctx, headers)
 	if !requestLogCaptureEnabled(cfg) {
 		return

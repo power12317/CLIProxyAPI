@@ -71,6 +71,14 @@ type CodexTurnState struct {
 	firstValue     bool
 }
 
+// SessionID exposes the existing request identity for connection log correlation.
+func (s *CodexTurnState) SessionID() string {
+	if s == nil {
+		return ""
+	}
+	return s.sessionID
+}
+
 // NewCodexTurnState reads the final outbound headers and uncompressed JSON. It
 // does not generate identifiers or change the official-client classification.
 func NewCodexTurnState(ctx context.Context, auth *cliproxyauth.Auth, target string, body []byte, headers http.Header, model string, clientHeaders http.Header) *CodexTurnState {

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -53,7 +53,7 @@ func (c *websocketConnectionCloser) Close() error {
 
 type codexWebsocketSession struct {
 	sessionID    string
-	connectionID string
+	logSessionID string
 
 	reqMu         sync.Mutex
 	dialMu        sync.Mutex
@@ -706,7 +706,6 @@ func (e *CodexWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *
 		return previous, previousCloser, nil, nil
 	}
 	sess.conn = conn
-	sess.connectionID = uuid.NewString()
 	sess.connCloser = closer
 	sess.multiAgentV2OptimizedConn = nil
 	sess.wsURL = wsURL
@@ -1000,24 +999,38 @@ func sessionObjectKind(sess *codexWebsocketSession) string {
 	return "ephemeral"
 }
 
+func (s *codexWebsocketSession) setLogSessionID(sessionID string) {
+	if s != nil {
+		s.connMu.Lock()
+		s.logSessionID = sessionID
+		s.connMu.Unlock()
+	}
+}
+
+func (s *codexWebsocketSession) shortLogSessionID(fallback string) string {
+	if s != nil {
+		s.connMu.Lock()
+		fallback = s.logSessionID
+		s.connMu.Unlock()
+	}
+	return logging.ShortCodexIdentifier(fallback)
+}
+
 func logCodexWebsocketConnected(sessionID string, authID string, wsURL string) {
 	logCodexWebsocketConnectedWithReused(nil, sessionID, authID, wsURL, false)
 }
 
 func logCodexWebsocketConnectedWithReused(sess *codexWebsocketSession, sessionID string, authID string, wsURL string, reused bool) {
-	sessionStr := strings.TrimSpace(sessionID)
+	sessionStr := sess.shortLogSessionID(sessionID)
 	sessionKind := sessionObjectKind(sess)
 	if reused {
 		return
 	}
 	if sess.isTopicSession() {
-		sess.connMu.Lock()
-		connectionID := sess.connectionID
-		sess.connMu.Unlock()
-		log.WithFields(log.Fields{"scope": "topic", "topic": sessionStr, "connection": connectionID, "auth": authID, "url": wsURL}).Info("codex websockets: upstream connected")
+		log.WithFields(log.Fields{"scope": "topic", "session_id": sessionStr, "auth": authID, "url": wsURL}).Info("codex websockets: upstream connected")
 		return
 	}
-	log.Infof("codex websockets: upstream connected session=%s auth=%s url=%s session_object=%s reused=false", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind)
+	log.WithField("session_id", sessionStr).Infof("codex websockets: upstream connected session=%s auth=%s url=%s session_object=%s reused=false", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind)
 }
 
 func logCodexWebsocketDisconnected(sessionID string, authID string, wsURL string, reason string, err error) {
@@ -1034,33 +1047,31 @@ func isTerminalEvent(eventType string) bool {
 }
 
 func logCodexWebsocketDisconnectedWithLastEvent(sess *codexWebsocketSession, sessionID string, authID string, wsURL string, reason string, lastEvent string, err error) {
-	sessionStr := strings.TrimSpace(sessionID)
+	sessionStr := sess.shortLogSessionID(sessionID)
 	sessionKind := sessionObjectKind(sess)
 	terminalStatus := isTerminalEvent(lastEvent)
 	if sess.isTopicSession() {
-		sess.connMu.Lock()
-		connectionID := sess.connectionID
-		sess.connMu.Unlock()
-		fields := log.Fields{"scope": "topic", "topic": sessionStr, "connection": connectionID, "auth": authID, "url": wsURL, "reason": reason, "last_event": lastEvent, "is_terminal": terminalStatus}
+		fields := log.Fields{"scope": "topic", "session_id": sessionStr, "auth": authID, "url": wsURL, "reason": reason, "last_event": lastEvent, "is_terminal": terminalStatus}
 		if err != nil {
 			fields["error"] = err
 		}
 		log.WithFields(fields).Info("codex websockets: upstream disconnected")
 		return
 	}
+	entry := log.WithField("session_id", sessionStr)
 	if err != nil {
 		if lastEvent != "" {
-			log.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s last_event=%s is_terminal=%t err=%v", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason), lastEvent, terminalStatus, err)
+			entry.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s last_event=%s is_terminal=%t err=%v", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason), lastEvent, terminalStatus, err)
 			return
 		}
-		log.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s is_terminal=false err=%v", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason), err)
+		entry.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s is_terminal=false err=%v", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason), err)
 		return
 	}
 	if lastEvent != "" {
-		log.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s last_event=%s is_terminal=%t", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason), lastEvent, terminalStatus)
+		entry.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s last_event=%s is_terminal=%t", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason), lastEvent, terminalStatus)
 		return
 	}
-	log.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s is_terminal=false", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason))
+	entry.Infof("codex websockets: upstream disconnected session=%s auth=%s url=%s session_object=%s reason=%s is_terminal=false", sessionStr, strings.TrimSpace(authID), strings.TrimSpace(wsURL), sessionKind, strings.TrimSpace(reason))
 }
 
 // CloseCodexWebsocketSessionsForAuthID closes all active Codex upstream websocket sessions

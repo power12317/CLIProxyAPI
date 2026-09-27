@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -279,10 +280,11 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	}
 	writer := newResponsesWebsocketWriter(conn)
 	passthroughSessionID := uuid.NewString()
+	logSessionID := func() string { return logging.CodexSessionLogID(c) }
 	downstreamSessionKey := websocketDownstreamSessionKey(c.Request)
 	retainResponsesWebsocketToolCaches(downstreamSessionKey)
 	clientIP := websocketClientAddress(c)
-	log.Infof("responses websocket: client connected id=%s remote=%s", passthroughSessionID, clientIP)
+	log.Infof("responses websocket: client connected id=%s remote=%s", logSessionID(), clientIP)
 
 	requestLogEnabled := h != nil && h.Cfg != nil && h.Cfg.RequestLog
 	wsTimelineLog := newWebsocketTimelineLog(requestLogEnabled, websocketTimelineSourceFromContext(c))
@@ -326,13 +328,13 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		releaseResponsesWebsocketToolCaches(downstreamSessionKey)
 		if wsTerminateErr != nil {
 			appendWebsocketTimelineDisconnect(wsTimelineLog, wsTerminateErr, time.Now())
-			// log.Infof("responses websocket: session closing id=%s reason=%v", passthroughSessionID, wsTerminateErr)
+			// log.Infof("responses websocket: session closing id=%s reason=%v", logSessionID(), wsTerminateErr)
 		} else {
-			log.Infof("responses websocket: session closing id=%s", passthroughSessionID)
+			log.Infof("responses websocket: session closing id=%s", logSessionID())
 		}
 		if h != nil && h.AuthManager != nil {
 			h.AuthManager.CloseExecutionSession(passthroughSessionID)
-			log.Infof("responses websocket: upstream execution session closed id=%s", passthroughSessionID)
+			log.Infof("responses websocket: upstream execution session closed id=%s", logSessionID())
 		}
 		wsTimelineLog.SetContext(c)
 		if errClose := conn.Close(); errClose != nil && !isWebsocketConnectionClosedError(errClose) {
@@ -422,9 +424,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		if errReadMessage != nil {
 			wsTerminateErr = errReadMessage
 			if websocket.IsCloseError(errReadMessage, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
-				log.Infof("responses websocket: client disconnected id=%s error=%v", passthroughSessionID, errReadMessage)
+				log.Infof("responses websocket: client disconnected id=%s error=%v", logSessionID(), errReadMessage)
 			} else {
-				// log.Warnf("responses websocket: read message failed id=%s error=%v", passthroughSessionID, errReadMessage)
+				// log.Warnf("responses websocket: read message failed id=%s error=%v", logSessionID(), errReadMessage)
 			}
 			return
 		}
@@ -509,7 +511,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				if !matched {
 					_ = conn.Close()
 				} else if errClose != nil && !errors.Is(errClose, websocket.ErrCloseSent) {
-					log.Debugf("responses websocket: replay close failed id=%s error=%v", passthroughSessionID, errClose)
+					log.Debugf("responses websocket: replay close failed id=%s error=%v", logSessionID(), errClose)
 				}
 				return
 			}
@@ -635,7 +637,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			errorPayload, errWrite := writeResponsesWebsocketError(writer, wsTimelineLog, errMsg)
 			log.Infof(
 				"responses websocket: downstream_out id=%s type=%d event=%s payload=%s",
-				passthroughSessionID,
+				logSessionID(),
 				websocket.TextMessage,
 				websocketPayloadEventType(errorPayload),
 				websocketPayloadPreview(errorPayload),
@@ -643,7 +645,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			if errWrite != nil {
 				log.Warnf(
 					"responses websocket: downstream_out write failed id=%s event=%s error=%v",
-					passthroughSessionID,
+					logSessionID(),
 					websocketPayloadEventType(errorPayload),
 					errWrite,
 				)
@@ -763,7 +765,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			dataChan,
 			errChan,
 			wsTimelineLog,
-			passthroughSessionID,
+			logSessionID(),
 			responsesWebsocketForwardOptions{
 				preserveCompletionOutput: preserveNativeOutput.Load,
 				duplexStream:             codexDuplexStream.Load,
@@ -778,9 +780,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			case isWebsocketConnectionClosedError(errForward):
 				// The client hung up while a downstream write was in flight. This is a
 				// normal shutdown race, not a proxy failure.
-				log.Debugf("responses websocket: client closed during forward id=%s error=%v", passthroughSessionID, errForward)
+				log.Debugf("responses websocket: client closed during forward id=%s error=%v", logSessionID(), errForward)
 			default:
-				log.Warnf("responses websocket: forward failed id=%s error=%v", passthroughSessionID, errForward)
+				log.Warnf("responses websocket: forward failed id=%s error=%v", logSessionID(), errForward)
 			}
 			return
 		}
@@ -795,7 +797,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				if !matched {
 					_ = conn.Close()
 				} else if errClose != nil && !errors.Is(errClose, websocket.ErrCloseSent) {
-					log.Debugf("responses websocket: credential replay close failed id=%s error=%v", passthroughSessionID, errClose)
+					log.Debugf("responses websocket: credential replay close failed id=%s error=%v", logSessionID(), errClose)
 				}
 				return
 			}

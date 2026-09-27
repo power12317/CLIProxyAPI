@@ -56,6 +56,14 @@ The downstream history bridge remains enabled, including materialization of
 `previous_response_id`. No connection or account is pinned across generations.
 Native hosted-tool routing and the native Codex transport remain separate.
 
+Runtime logs record only WebSocket connection establishment and closure, using
+the existing access-log `session_id` prefix (up to eight characters). No separate
+random connection ID is generated for display. Native Codex connection logs use
+the same session prefix. Access logs show `POST/WS` for HTTP clients using an
+upstream WebSocket and `WS/WS` when both sides use WebSocket; HTTP fallback keeps
+the ordinary HTTP method label. This formatting does not change request methods,
+pool ownership, or the native Basispoints request and resume protocol fields.
+
 ## Validation
 
 Local WebSocket servers cover the routing matrix, native authentication and

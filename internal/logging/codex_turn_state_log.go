@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 const codexTurnStateLogKey = "__codex_turn_state_log__"
@@ -61,6 +62,26 @@ func ShortCodexIdentifier(value string) string {
 		return value[:8]
 	}
 	return value
+}
+
+// CodexSessionLogID reuses the access-log identity, or handshake metadata before
+// the first WebSocket frame has supplied the request's identity.
+func CodexSessionLogID(c *gin.Context) string {
+	if fields, ok := codexTurnStateLogFields(c); ok && fields.SessionID != "" {
+		return ShortCodexIdentifier(fields.SessionID)
+	}
+	if c != nil && c.Request != nil {
+		headers := c.Request.Header
+		for _, value := range []string{
+			gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "session_id").String(),
+			headers.Get("Session-Id"), headers.Get("Session_id"), headers.Get("X-Session-Id"),
+		} {
+			if value = ShortCodexIdentifier(value); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 // SetCodexTurnStateLogFields initializes the access-log fields for an upstream

@@ -22,12 +22,14 @@ type WebsocketDial func(context.Context, string, http.Header, []string) (*websoc
 // WebsocketRequest is scoped to one generation, including resume attempts.
 // It never determines which credential is selected for a subsequent request.
 type WebsocketRequest struct {
-	URL       string
-	Headers   http.Header
-	Frame     []byte
-	requestID string
-	token     string
-	resume    string
+	// ObserveConnection reports only physical connection establishment and closure.
+	ObserveConnection func(bool)
+	URL               string
+	Headers           http.Header
+	Frame             []byte
+	requestID         string
+	token             string
+	resume            string
 }
 
 func NewWebsocketRequest(headers http.Header, body []byte) (*WebsocketRequest, error) {
@@ -92,6 +94,7 @@ func (r *WebsocketRequest) Open(ctx context.Context, dial WebsocketDial, observe
 		return response, false, err
 	}
 	reader := &websocketReader{ctx: ctx, request: r, dial: dial, observe: observe, conn: conn, resume: r.resume, cursor: -1}
+	reader.closeConn = r.connectionCloser(conn)
 	conn.SetReadLimit(maxItemBytes)
 	reader.stop = context.AfterFunc(ctx, func() { _ = reader.closeConnection() })
 	if err = conn.WriteMessage(websocket.TextMessage, r.Frame); err != nil {
@@ -107,19 +110,37 @@ func (r *WebsocketRequest) Open(ctx context.Context, dial WebsocketDial, observe
 // websocketReader presents native JSON events to the existing SSE protocol bridge.
 // No read or write deadlines are added after connection establishment.
 type websocketReader struct {
-	ctx      context.Context
-	request  *WebsocketRequest
-	dial     WebsocketDial
-	observe  func([]byte)
-	stop     func() bool
-	mu       sync.Mutex
-	conn     *websocket.Conn
-	closed   bool
-	resume   string
-	cursor   int64
-	attempts int
-	buffer   bytes.Buffer
-	terminal bool
+	ctx       context.Context
+	request   *WebsocketRequest
+	dial      WebsocketDial
+	observe   func([]byte)
+	stop      func() bool
+	mu        sync.Mutex
+	conn      *websocket.Conn
+	closeConn func() error
+	closed    bool
+	resume    string
+	cursor    int64
+	attempts  int
+	buffer    bytes.Buffer
+	terminal  bool
+}
+
+func (r *WebsocketRequest) connectionCloser(conn *websocket.Conn) func() error {
+	if r.ObserveConnection != nil {
+		r.ObserveConnection(true)
+	}
+	var once sync.Once
+	var err error
+	return func() error {
+		once.Do(func() {
+			err = conn.Close()
+			if r.ObserveConnection != nil {
+				r.ObserveConnection(false)
+			}
+		})
+		return err
+	}
 }
 
 func (r *websocketReader) Close() error {
@@ -136,9 +157,9 @@ func (r *websocketReader) closeConnection() error {
 		return nil
 	}
 	r.closed = true
-	conn := r.conn
+	closeConn := r.closeConn
 	r.mu.Unlock()
-	return conn.Close()
+	return closeConn()
 }
 
 func (r *websocketReader) reconnect() error {
@@ -147,12 +168,12 @@ func (r *websocketReader) reconnect() error {
 			return err
 		}
 		r.mu.Lock()
-		closed, old := r.closed, r.conn
+		closed, closeOld := r.closed, r.closeConn
 		r.mu.Unlock()
 		if closed {
 			return io.ErrClosedPipe
 		}
-		_ = old.Close()
+		_ = closeOld()
 		r.attempts++
 		conn, response, err := r.dial(r.ctx, r.request.URL, r.request.Headers.Clone(), []string{"responses", "openai-bearer." + r.request.token})
 		if err != nil {
@@ -166,13 +187,15 @@ func (r *websocketReader) reconnect() error {
 			continue
 		}
 		conn.SetReadLimit(maxItemBytes)
+		closeConn := r.request.connectionCloser(conn)
 		r.mu.Lock()
 		if r.closed {
 			r.mu.Unlock()
-			_ = conn.Close()
+			_ = closeConn()
 			return io.ErrClosedPipe
 		}
 		r.conn = conn
+		r.closeConn = closeConn
 		r.mu.Unlock()
 		err = conn.WriteJSON(object{"type": "basispoints.response.resume", "resume_token": r.resume, "after_cursor": r.cursor})
 		if err == nil {

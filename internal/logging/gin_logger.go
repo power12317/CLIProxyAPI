@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
 )
@@ -25,9 +26,17 @@ var aiAPIPrefixes = []string{
 }
 
 const (
-	skipGinLogKey  = "__gin_skip_request_logging__"
-	creditsUsedKey = "__antigravity_credits_used__"
+	skipGinLogKey           = "__gin_skip_request_logging__"
+	creditsUsedKey          = "__antigravity_credits_used__"
+	upstreamWebsocketLogKey = "__upstream_websocket_log__"
 )
+
+// SetUpstreamWebsocket records transport for display without changing HTTP semantics.
+func SetUpstreamWebsocket(c *gin.Context, enabled bool) {
+	if c != nil {
+		c.Set(upstreamWebsocketLogKey, enabled)
+	}
+}
 
 // GinLogrusLogger returns a Gin middleware handler that logs HTTP requests and responses
 // using logrus. It captures request details including method, path, status code, latency,
@@ -79,6 +88,12 @@ func GinLogrusLogger() gin.HandlerFunc {
 		statusCode := c.Writer.Status()
 		clientIP := c.ClientIP()
 		method := c.Request.Method
+		if c.GetBool(upstreamWebsocketLogKey) {
+			if websocket.IsWebSocketUpgrade(c.Request) {
+				method = "WS"
+			}
+			method += "/WS"
+		}
 		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
 
 		if requestID == "" {
