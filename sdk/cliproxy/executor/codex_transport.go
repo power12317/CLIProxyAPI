@@ -110,5 +110,10 @@ func (e *CodexReplayUnsafeError) IsRequestScoped() bool { return true }
 
 func IsCodexReplayUnsafe(err error) bool {
 	var unsafe *CodexReplayUnsafeError
-	return errors.As(err, &unsafe)
+	if errors.As(err, &unsafe) {
+		return true
+	}
+	// Out-of-process Codex transports can expose the same boundary without wrapping status errors.
+	var marker interface{ IsCodexReplayUnsafe() bool }
+	return errors.As(err, &marker) && marker.IsCodexReplayUnsafe()
 }

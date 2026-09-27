@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
 // Request-scoped error actions.
@@ -186,6 +187,9 @@ func extractErrorBody(err error) string {
 func matchRequestScopedErrorAction(auth *Auth, err error, cfg *internalconfig.Config) (string, bool) {
 	if err == nil {
 		return "", false
+	}
+	if coreexecutor.IsCodexReplayUnsafe(err) {
+		return RequestScopedActionStop, true
 	}
 	rules := extractRequestScopedErrorRules(auth, cfg)
 	if len(rules) == 0 {

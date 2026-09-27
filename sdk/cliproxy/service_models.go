@@ -72,6 +72,23 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 	}
 	var models []*ModelInfo
 	switch provider {
+	case coreauth.CodexRuntimeProvider:
+		s.cfgMu.RLock()
+		runtimeConfig := s.cfg
+		s.cfgMu.RUnlock()
+		if runtimeConfig != nil && runtimeConfig.Codex.Runtime.Enabled {
+			for _, worker := range runtimeConfig.Codex.Runtime.Workers {
+				if worker.ID != a.Attributes[coreauth.AttributeCodexRuntimeID] || worker.Disabled {
+					continue
+				}
+				entry := &config.CodexKey{}
+				for _, model := range worker.Models {
+					entry.Models = append(entry.Models, config.CodexModel{Name: model, Alias: model})
+				}
+				models = buildCodexConfigModels(entry)
+				break
+			}
+		}
 	case constant.Gemini:
 		models = registry.GetGeminiModels()
 		if entry := s.resolveConfigGeminiKey(a); entry != nil {

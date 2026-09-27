@@ -184,6 +184,8 @@ type AntigravityConnectionPoolConfig struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
+	// Runtime configures opt-in, externally deployed Codex managed-auth workers.
+	Runtime CodexRuntimeConfig `yaml:"runtime" json:"runtime"`
 	// Basispoints switches all Codex model requests to the Basispoints interface.
 	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`
 	// ForceWebsocket prefers ChatGPT Codex WebSockets independently of the downstream transport.

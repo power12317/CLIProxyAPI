@@ -113,6 +113,10 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected config update with invalid credential weights")
 		return configCommit{}
 	}
+	if errValidate := newCfg.ValidateCodexRuntime(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid Codex runtime configuration")
+		return configCommit{}
+	}
 
 	s.cfgMu.Lock()
 	s.cfg = newCfg
@@ -266,11 +270,22 @@ func (s *Service) registerConfigAPIKeyAuths(ctx context.Context, cfg *config.Con
 		return
 	}
 
+	runtimeIDs := make(map[string]bool)
+	for _, auth := range auths {
+		if coreauth.IsCodexRuntimeAuth(auth) {
+			runtimeIDs[auth.ID] = true
+		}
+	}
+	for _, existing := range s.coreManager.List() {
+		if coreauth.IsCodexRuntimeAuth(existing) && !runtimeIDs[existing.ID] {
+			s.applyCoreAuthRemoval(coreauth.WithSkipPersist(ctx), existing.ID)
+		}
+	}
 	registrationCtx := coreauth.WithDeferredAPIKeyModelAliasRebuild(ctx)
 	tasks := make([]modelRegistrationTask, 0, len(auths))
 	needsAliasRebuild := false
 	for _, auth := range auths {
-		if !coreauth.IsConfigAPIKeyAuth(auth) {
+		if !coreauth.IsConfigAPIKeyAuth(auth) && !coreauth.IsCodexRuntimeAuth(auth) {
 			continue
 		}
 		prepared := s.prepareCoreAuthForModelRegistration(registrationCtx, auth)

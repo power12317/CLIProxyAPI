@@ -42,6 +42,11 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 		return nil, fmt.Errorf("synthesize config API key auths: %w", errValidate)
 	}
 
+	if errValidate := ctx.Config.ValidateCodexRuntime(); errValidate != nil {
+		return nil, errValidate
+	}
+	out = append(out, s.synthesizeCodexRuntime(ctx)...)
+
 	// Gemini API Keys
 	out = append(out, s.synthesizeGeminiKeys(ctx)...)
 	// Native Interactions API Keys

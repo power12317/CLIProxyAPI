@@ -274,6 +274,17 @@ routing:
 
 # Codex provider behavior.
 codex:
+  # Optional managed-OAuth fork workers; CPA never reads their OAuth tokens.
+  # See deploy/codex-runtime/README_CN.md for isolated containers and upgrade gates.
+  runtime:
+    enabled: false
+    workers: []
+    # - id: worker-a
+    #   socket: /run/codex-worker-a/cpa.sock
+    #   account-id: YOUR_CHATGPT_WORKSPACE_ID
+    #   models: [YOUR_EXPLICIT_MODEL_ID]
+    #   prefix: runtime
+    #   disabled: false
   # Route Codex models through Basispoints; hosted tools retain native Codex routing.
   # Astra max uses wire xhigh plus input configuration_update reasoning.effort=max.
   basispoints:

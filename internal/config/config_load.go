@@ -104,6 +104,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	if len(cfg.Discovery.Subtypes) == 0 {
 		cfg.Discovery.Subtypes = []string{"_chat-completions", "_responses", "_messages", "_generate-content", "_interactions"}
 	}
+	if errValidate := cfg.ValidateCodexRuntime(); errValidate != nil {
+		return nil, errValidate
+	}
 	if errValidate := cfg.Codex.LiveMediaRelay.Validate(); errValidate != nil {
 		return nil, errValidate
 	}

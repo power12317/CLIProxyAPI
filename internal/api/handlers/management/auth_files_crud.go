@@ -365,6 +365,9 @@ func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string
 	targetPath := filepath.Join(h.cfg.AuthDir, filepath.Base(name))
 	targetID := ""
 	if targetAuth := h.findAuthForDelete(name); targetAuth != nil {
+		if coreauth.IsCodexRuntimeAuth(targetAuth) {
+			return name, http.StatusConflict, fmt.Errorf("Codex runtime workers are managed through codex.runtime.workers configuration")
+		}
 		if !isPluginVirtualSourceDelete(name, targetAuth) {
 			return filepath.Base(name), http.StatusConflict, errPluginVirtualAuth
 		}
@@ -495,6 +498,9 @@ func (h *Handler) buildAuthFromFileData(path string, data []byte) (*coreauth.Aut
 	}
 	coreauth.NormalizeCredentialMetadata(metadata)
 	provider, _ := metadata["type"].(string)
+	if strings.EqualFold(strings.TrimSpace(provider), coreauth.CodexRuntimeProvider) {
+		return nil, fmt.Errorf("Codex runtime references cannot be uploaded as auth files; configure codex.runtime.workers")
+	}
 	if provider == "" {
 		provider = "unknown"
 	}
