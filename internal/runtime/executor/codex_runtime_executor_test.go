@@ -32,7 +32,7 @@ type runtimeTestRPC struct {
 	Params json.RawMessage `json:"params"`
 }
 
-func runtimeTestWorker(t *testing.T, id string, handle func(*websocket.Conn, runtimeTestRPC, bridge.Request)) (config.CodexRuntimeWorker, *coreauth.Auth) {
+func runtimeTestWorker(t *testing.T, id string, handle func(*websocket.Conn, runtimeTestRPC, bridge.Request), customize ...func(*bridge.Capabilities)) (config.CodexRuntimeWorker, *coreauth.Auth) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "cpa-exec-")
 	if err != nil {
@@ -61,7 +61,11 @@ func runtimeTestWorker(t *testing.T, id string, handle func(*websocket.Conn, run
 				_ = c.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read":
-				_ = c.WriteJSON(map[string]any{"id": m.ID, "result": bridge.Capabilities{ProtocolVersion: 1, RuntimeVersion: "test", UpstreamRevision: "test-sha", CredentialID: id, AccountID: "account", AuthMode: "chatgpt", ExecutionMode: "inference-only", RawEvents: true, Operations: []string{"responses"}}})
+				caps := bridge.Capabilities{ProtocolVersion: 1, RuntimeVersion: "test", UpstreamRevision: "test-sha", CredentialID: id, AccountID: "account", AuthMode: "chatgpt", ExecutionMode: "inference-only", RawEvents: true, Operations: []string{"responses"}}
+				for _, apply := range customize {
+					apply(&caps)
+				}
+				_ = c.WriteJSON(map[string]any{"id": m.ID, "result": caps})
 			case "cpa/inference/start":
 				var req bridge.Request
 				if err := json.Unmarshal(m.Params, &req); err != nil {

@@ -50,6 +50,7 @@ type Capabilities struct {
 	AuthOwner          string   `json:"authOwner"`
 	ManualOAuth        bool     `json:"manualOAuth"`
 	UpstreamLogs       bool     `json:"upstreamLogs"`
+	UpstreamBodyLogs   bool     `json:"upstreamBodyLogs"`
 }
 
 // UpstreamLog describes an actual HTTP attempt made by the worker.
@@ -60,6 +61,7 @@ type UpstreamLog struct {
 	Method            string      `json:"method"`
 	Headers           http.Header `json:"headers"`
 	Body              string      `json:"body"`
+	BodyBytes         []byte      `json:"bodyBase64"`
 	StatusCode        int         `json:"statusCode"`
 	Message           string      `json:"message"`
 	AccessTokenSHA256 string      `json:"accessTokenSha256"`
@@ -253,7 +255,7 @@ func (c *Client) call(method string, params, out any) error {
 	if err := c.write(map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		return err
 	}
-	for i := 0; i < 128; i++ {
+	for skipped := 0; skipped < 128; {
 		m, err := c.read()
 		if err != nil {
 			return err
@@ -268,6 +270,7 @@ func (c *Client) call(method string, params, out any) error {
 			if strings.HasPrefix(m.Method, "cpa/inference/") {
 				return fail(502, "Codex runtime sent inference data before acceptance")
 			}
+			skipped++
 			continue
 		}
 		var got int
@@ -347,12 +350,13 @@ func (c *Client) Next() (Frame, error) {
 	if c.requestID == "" {
 		return Frame{}, fail(409, "Codex runtime inference has not started")
 	}
-	for skipped := 0; skipped < 128; skipped++ {
+	for skipped := 0; skipped < 128; {
 		m, err := c.read()
 		if err != nil {
 			return Frame{}, err
 		}
 		if !strings.HasPrefix(m.Method, "cpa/inference/") {
+			skipped++
 			continue
 		}
 		if m.Method == "cpa/inference/upstream" {
@@ -437,7 +441,7 @@ func (c *Client) observeUpstream(raw json.RawMessage) error {
 		c.upstreamResponse = nil
 	case "response":
 		c.upstreamResponse = &entry
-	case "error":
+	case "error", "body":
 	default:
 		return fail(502, "Unknown Codex runtime upstream log kind")
 	}

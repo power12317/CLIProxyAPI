@@ -164,6 +164,7 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 		return nil, nil, err
 	}
 	client.OnUpstream = upstreamLog.Record
+	upstreamLog.RawBody = client.Caps.UpstreamBodyLogs
 	err = client.Start(bridge.Request{RequestID: uuid.NewString(), CredentialID: worker.ID, AccountID: accountID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
 	if err != nil {
 		client.Close()
@@ -178,9 +179,10 @@ func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth,
 	defer reporter.TrackFailure(ctx, &err)
 	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
 	upstreamLog := helps.NewCodexRuntimeLog(ctx, e.cfg, auth, thinking.ParseSuffix(req.Model).ModelName)
+	defer upstreamLog.Flush()
 	defer func() {
 		if err != nil {
-			helps.RecordAPIResponseError(ctx, e.cfg, err)
+			upstreamLog.Error(err)
 		}
 	}()
 	client, body, err := e.prepare(ctx, auth, req, opts, upstreamLog)
@@ -222,7 +224,7 @@ func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth,
 	format := coreexecutor.ResponseFormatOrSource(opts)
 	if gjson.GetBytes(terminal, "type").String() == "response.failed" {
 		errFailed := codexRuntimeEventError(terminal)
-		helps.RecordAPIResponseError(ctx, e.cfg, errFailed)
+		upstreamLog.Error(errFailed)
 		detail, _ := helps.ParseCodexUsage(terminal)
 		reporter.PublishFailureWithDetail(ctx, detail, errFailed)
 		if format != sdktranslator.FormatCodex && format != sdktranslator.FormatOpenAIResponse {
@@ -256,7 +258,7 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 	upstreamLog := helps.NewCodexRuntimeLog(ctx, e.cfg, auth, thinking.ParseSuffix(req.Model).ModelName)
 	client, body, err := e.prepare(ctx, auth, req, opts, upstreamLog)
 	if err != nil {
-		helps.RecordAPIResponseError(ctx, e.cfg, err)
+		upstreamLog.Error(err)
 		reporter.PublishFailure(ctx, err)
 		return nil, err
 	}
@@ -264,13 +266,14 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 	go func() {
 		defer close(chunks)
 		defer client.Close()
+		defer upstreamLog.Flush()
 		send := func(chunk coreexecutor.StreamChunk) bool {
 			select {
 			case chunks <- chunk:
 				return true
 			case <-ctx.Done():
 				if chunk.Err == nil {
-					helps.RecordAPIResponseError(ctx, e.cfg, ctx.Err())
+					upstreamLog.Error(ctx.Err())
 				}
 				return false
 			}
@@ -288,13 +291,13 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 				return
 			}
 			if errNext != nil {
-				helps.RecordAPIResponseError(ctx, e.cfg, errNext)
+				upstreamLog.Error(errNext)
 				reporter.PublishFailure(ctx, errNext)
 				send(coreexecutor.StreamChunk{Err: errNext})
 				return
 			}
 			if len(frame.Event) == 0 {
-				helps.RecordAPIResponseError(ctx, e.cfg, fmt.Errorf("unexpected runtime result"))
+				upstreamLog.Error(fmt.Errorf("unexpected runtime result"))
 				reporter.PublishFailure(ctx, fmt.Errorf("unexpected runtime result"))
 				send(coreexecutor.StreamChunk{Err: runtimeError(502, "Unexpected Codex runtime result")})
 				return
@@ -304,7 +307,7 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 			eventType := gjson.GetBytes(frame.Event, "type").String()
 			if eventType == "response.failed" || eventType == "error" {
 				errFailed := codexRuntimeEventError(frame.Event)
-				helps.RecordAPIResponseError(ctx, e.cfg, errFailed)
+				upstreamLog.Error(errFailed)
 				detail, _ := helps.ParseCodexUsage(frame.Event)
 				reporter.PublishFailureWithDetail(ctx, detail, errFailed)
 				if format != sdktranslator.FormatCodex && format != sdktranslator.FormatOpenAIResponse {

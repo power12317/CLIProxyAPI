@@ -87,7 +87,7 @@ func TestCodexRuntimeForkV2OAuthAndModeSwitch(t *testing.T) {
 				t.Error("inference did not use current file token")
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "data: {\"type\":\"response.future_extension\",\"future\":true}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-1\",\"status\":\"completed\",\"model\":\"runtime-model\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"lookup\",\"arguments\":\"{}\"}]}}\n\n")
+			_, _ = io.WriteString(w, ": upstream-keepalive\nevent: response.future_extension\nid: upstream-event\ndata: {\"type\":\"response.future_extension\",\"future\":true}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-1\",\"status\":\"completed\",\"model\":\"runtime-model\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"lookup\",\"arguments\":\"{}\"}]}}\n\n")
 		case "/backend-api/wham/accounts/check", "/api/codex/accounts/check":
 			_, _ = io.WriteString(w, `{"accounts":[{"id":"account","workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}`)
 		default:
@@ -206,7 +206,7 @@ stream_max_retries = 0
 		if strings.Count(string(requests), "=== API REQUEST ") != attempts || !strings.Contains(string(requests), upstream.URL+"/v1/responses") {
 			t.Fatalf("actual upstream request attempts missing: %s", requests)
 		}
-		for _, want := range []string{"Status: 200", "fork-upstream-request", "response.completed", "worker-a.json"} {
+		for _, want := range []string{"Status: 200", "fork-upstream-request", "response.completed", "worker-a.json", ": upstream-keepalive", "event: response.future_extension", "id: upstream-event"} {
 			if !strings.Contains(string(responses), want) {
 				t.Errorf("upstream response log missing %q: %s", want, responses)
 			}

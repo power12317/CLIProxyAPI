@@ -110,9 +110,10 @@ Validation completed:
 CPAMP's existing request/error-log proxy and request-monitoring pipeline need no
 production logging changes. Its dedicated topic added native/runtime regression
 coverage. Log structure, retrieval and correlation remain shared; actual headers,
-bodies and upstream attempts reflect the selected executor. Successful runtime
-streams preserve complete JSON events, not an exact copy of raw SSE comment,
-event-name or ID lines.
+bodies and upstream attempts reflect the selected executor. A read-only stream
+tap preserves original SSE comment, event-name and ID lines in the logs, including
+UTF-8 characters split across network chunks. Parsed inference events continue
+through the original Codex response processing and are not logged twice.
 
 The CPA branch automatically publishes `ghcr.io/power12317/cliproxyapi:codex-runtime`
 and `:codex-runtime-<full commit>` for Linux amd64/arm64. The other projects publish

@@ -37,7 +37,7 @@ signed out or CPA-owned; inference and login require the appropriate owner.
 
 ## Existing CPA request logs
 
-Workers advertise `upstreamLogs:true` and send ordered `cpa/inference/upstream`
+Workers advertise `upstreamLogs:true`, `upstreamBodyLogs:true` and send ordered `cpa/inference/upstream`
 notifications, including before the `cpa/inference/start` result. Each notification
 has the matching `requestId` and one of these shapes:
 
@@ -46,11 +46,16 @@ has the matching `requestId` and one of these shapes:
 - `kind:"response"`: actual `statusCode`, `headers`, `body` (string for an HTTP
   error, null for a successful stream), and nullable `oaiLbNode`.
 - `kind:"error"`: transport error `message` when no HTTP response exists.
+- `kind:"body"`: `bodyBase64` holds an original successful-response byte chunk.
+  CPA reassembles SSE lines before logging, retaining comments, event names, IDs,
+  split UTF-8 sequences and the last partial line. These notifications do not
+  replace or modify the official response parser or the inference event stream.
 
 Each real upstream attempt gets its own request/response entries, including a
 401 followed by token refresh and a second request. Sensitive headers use the
-existing masking rules; bearer tokens are not sent over the bridge. Successful
-response bodies continue through the existing raw inference events.
+existing masking rules; bearer tokens are not sent over the bridge. Inference
+events retain their existing behavior and are not logged a second time when
+original body chunks are available.
 
 CPA feeds these entries into its standard request/response log helpers, including
 credential, session, turn, requested/served model and turn-state log fields. It

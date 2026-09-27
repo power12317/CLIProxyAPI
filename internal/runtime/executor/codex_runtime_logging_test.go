@@ -132,6 +132,49 @@ func TestCodexRuntimeLogsRetriesAndUpstreamRejection(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeLogsRawSSEWithoutDuplicatingEvents(t *testing.T) {
+	const event = `{"type":"response.output_text.delta","delta":"你好"}`
+	wire := ": keepalive\nevent: response.output_text.delta\nid: raw-event-id\ndata: " + event + "\n\nevent: response.completed\ndata: " + runtimeTerminal + "\n\n: final partial line"
+	for _, stream := range []bool{false, true} {
+		w, a := runtimeTestWorker(t, "raw-logs", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+			runtimeLogNotification(c, req, runtimeLogRequest())
+			runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200})
+			// More than 128 body messages before acceptance, including split UTF-8 bytes.
+			for _, b := range []byte(wire) {
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte{b}})
+			}
+			runtimeTestAccept(c, m, req)
+			runtimeTestFinish(c, req, event, runtimeTerminal)
+		}, func(c *bridge.Capabilities) { c.UpstreamLogs, c.UpstreamBodyLogs = true, true })
+		e := runtimeTestExecutor(w)
+		e.cfg.RequestLog = true
+		ctx, c := runtimeLoggingContext()
+		req := coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{}`)}
+		if stream {
+			result, err := e.ExecuteStream(ctx, a, req, runtimeTestOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for chunk := range result.Chunks {
+				if chunk.Err != nil {
+					t.Fatal(chunk.Err)
+				}
+			}
+		} else if _, err := e.Execute(ctx, a, req, runtimeTestOptions()); err != nil {
+			t.Fatal(err)
+		}
+		responseLog := runtimeLogText(t, c, "API_RESPONSE")
+		for _, want := range []string{": keepalive", "event: response.output_text.delta", "id: raw-event-id", "你好", ": final partial line"} {
+			if strings.Count(responseLog, want) != 1 {
+				t.Errorf("raw wire line missing or duplicated %q: %s", want, responseLog)
+			}
+		}
+		if strings.Count(responseLog, `"type":"response.completed"`) != 1 {
+			t.Error("raw response body and parsed events were both logged", responseLog)
+		}
+	}
+}
+
 func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 	for _, mode := range []string{"failed-event", "disconnect", "transport-error"} {
 		t.Run(mode, func(t *testing.T) {

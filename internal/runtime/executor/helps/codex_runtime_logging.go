@@ -1,6 +1,7 @@
 package helps
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -13,11 +14,13 @@ import (
 
 // CodexRuntimeLog routes the worker's actual HTTP exchanges into CPA's existing logs.
 type CodexRuntimeLog struct {
-	ctx   context.Context
-	cfg   *config.Config
-	auth  *coreauth.Auth
-	model string
-	turn  *CodexTurnState
+	ctx     context.Context
+	cfg     *config.Config
+	auth    *coreauth.Auth
+	model   string
+	turn    *CodexTurnState
+	RawBody bool
+	pending []byte
 }
 
 func NewCodexRuntimeLog(ctx context.Context, cfg *config.Config, auth *coreauth.Auth, model string) *CodexRuntimeLog {
@@ -27,6 +30,7 @@ func NewCodexRuntimeLog(ctx context.Context, cfg *config.Config, auth *coreauth.
 func (l *CodexRuntimeLog) Record(entry bridge.UpstreamLog) {
 	switch entry.Kind {
 	case "request":
+		l.Flush()
 		info := UpstreamRequestLog{URL: entry.URL, Method: entry.Method, Headers: entry.Headers, Body: []byte(entry.Body), Provider: "codex"}
 		if l.auth != nil {
 			info.AuthID, info.AuthLabel = l.auth.ID, l.auth.Label
@@ -50,13 +54,39 @@ func (l *CodexRuntimeLog) Record(entry bridge.UpstreamLog) {
 			AppendAPIResponseChunk(l.ctx, l.cfg, []byte(entry.Body))
 		}
 	case "error":
+		l.Flush()
 		RecordAPIResponseError(l.ctx, l.cfg, errors.New(entry.Message))
+	case "body":
+		l.pending = append(l.pending, entry.BodyBytes...)
+		for {
+			index := bytes.IndexByte(l.pending, '\n')
+			if index < 0 {
+				break
+			}
+			AppendAPIResponseChunk(l.ctx, l.cfg, l.pending[:index])
+			l.pending = l.pending[index+1:]
+		}
 	}
 }
 
 func (l *CodexRuntimeLog) Event(event []byte) {
-	AppendAPIResponseChunk(l.ctx, l.cfg, append([]byte("data: "), event...))
+	if !l.RawBody {
+		AppendAPIResponseChunk(l.ctx, l.cfg, append([]byte("data: "), event...))
+	}
 	if l.turn != nil {
 		l.turn.ObserveEvent(event)
 	}
+}
+
+// Flush preserves a final partial wire line on EOF, errors and cancellation.
+func (l *CodexRuntimeLog) Flush() {
+	if len(l.pending) > 0 {
+		AppendAPIResponseChunk(l.ctx, l.cfg, l.pending)
+		l.pending = nil
+	}
+}
+
+func (l *CodexRuntimeLog) Error(err error) {
+	l.Flush()
+	RecordAPIResponseError(l.ctx, l.cfg, err)
 }
