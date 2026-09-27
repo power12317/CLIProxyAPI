@@ -286,14 +286,20 @@ func TestCodexRuntimeCancellationReleasesBlockedStream(t *testing.T) {
 		_, _, _ = c.ReadMessage()
 		close(closed)
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	logCtx, ginCtx := runtimeLoggingContext()
+	ctx, cancel := context.WithCancel(logCtx)
 	defer cancel()
-	res, err := runtimeTestExecutor(w).ExecuteStream(ctx, a, coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{}`)}, runtimeTestOptions())
+	e := runtimeTestExecutor(w)
+	e.cfg.RequestLog = true
+	res, err := e.ExecuteStream(ctx, a, coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{}`)}, runtimeTestOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancel()
 	<-closed
 	for range res.Chunks {
+	}
+	if responseLog := runtimeLogText(t, ginCtx, "API_RESPONSE"); !strings.Contains(responseLog, "context canceled") {
+		t.Fatal("cancellation missing from response log", responseLog)
 	}
 }

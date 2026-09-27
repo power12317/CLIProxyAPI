@@ -269,6 +269,9 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 			case chunks <- chunk:
 				return true
 			case <-ctx.Done():
+				if chunk.Err == nil {
+					helps.RecordAPIResponseError(ctx, e.cfg, ctx.Err())
+				}
 				return false
 			}
 		}
