@@ -5,29 +5,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-func TestCodexRuntimeManagementCannotMutateCredentials(t *testing.T) {
+func TestCodexRuntimeSharedFileAllowsNormalManagement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "original.json")
+	metadata := map[string]any{"type": "codex", "access_token": "latest", "codex_cli": map[string]any{"enabled": true}, "extension": true}
+	if err := codexshared.Write(path, metadata); err != nil {
+		t.Fatal(err)
+	}
 	m := coreauth.NewManager(nil, nil, nil)
-	a := &coreauth.Auth{ID: "codex-runtime:worker", Provider: coreauth.CodexRuntimeProvider, Status: coreauth.StatusActive}
+	a := &coreauth.Auth{ID: "original.json", FileName: "original.json", Provider: "codex", Status: coreauth.StatusActive, Metadata: metadata, Attributes: map[string]string{coreauth.AttributePath: path}}
 	if _, err := m.Register(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, m)
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: dir}, m)
 	for _, tc := range []struct {
 		name, method, path, body string
 		handler                  func(*gin.Context)
+		status                   int
 	}{
-		{"delete", http.MethodDelete, "/auth-files?name=" + url.QueryEscape(a.ID), "", h.DeleteAuthFile},
-		{"refresh", http.MethodPost, "/auth-files/refresh?name=" + url.QueryEscape(a.ID), "", h.RefreshAuthFiles},
-		{"disable", http.MethodPatch, "/auth-files/status", `{"name":"codex-runtime:worker","disabled":true}`, h.PatchAuthFileStatus},
-		{"fields", http.MethodPatch, "/auth-files/fields", `{"name":"codex-runtime:worker","prefix":"new"}`, h.PatchAuthFileFields},
+		{"refresh", http.MethodPost, "/auth-files/refresh?name=" + url.QueryEscape(a.ID), "", h.RefreshAuthFiles, http.StatusConflict},
+		{"fields", http.MethodPatch, "/auth-files/fields", `{"name":"original.json","prefix":"new"}`, h.PatchAuthFileFields, http.StatusOK},
+		{"disable", http.MethodPatch, "/auth-files/status", `{"name":"original.json","disabled":true}`, h.PatchAuthFileStatus, http.StatusOK},
+		{"delete", http.MethodDelete, "/auth-files?name=" + url.QueryEscape(a.ID), "", h.DeleteAuthFile, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -35,15 +45,18 @@ func TestCodexRuntimeManagementCannotMutateCredentials(t *testing.T) {
 			ctx.Request = httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 			ctx.Request.Header.Set("Content-Type", "application/json")
 			tc.handler(ctx)
-			if rec.Code != http.StatusConflict {
+			if rec.Code != tc.status {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+			}
+			if tc.name == "fields" || tc.name == "disable" {
+				got, err := codexshared.Read(path)
+				if err != nil || got["access_token"] != "latest" || got["extension"] != true {
+					t.Fatal(got, err)
+				}
 			}
 		})
 	}
-	if got, ok := m.GetByID(a.ID); !ok || got.Disabled || got.Prefix != "" {
-		t.Fatal("management changed config-owned runtime")
-	}
-	if _, err := h.buildAuthFromFileData("/tmp/runtime-injection.json", []byte(`{"type":" CODEX-RUNTIME ","access_token":"synthetic"}`)); err == nil {
-		t.Fatal("runtime credential injection accepted")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("original file not deleted", err)
 	}
 }

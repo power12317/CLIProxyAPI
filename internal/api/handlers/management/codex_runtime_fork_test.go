@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -31,10 +32,10 @@ import (
 )
 
 // This optional test connects real CPA management/execution code to the fork using only fake OAuth.
-func TestCodexRuntimeForkV2OAuthAndModeSwitch(t *testing.T) {
+func TestCodexRuntimeForkV3OAuthAndModeSwitch(t *testing.T) {
 	binary := os.Getenv("CODEX_RUNTIME_TEST_BINARY")
 	if binary == "" {
-		t.Skip("set CODEX_RUNTIME_TEST_BINARY to the v2 fork app-server")
+		t.Skip("set CODEX_RUNTIME_TEST_BINARY to the v3 fork app-server")
 	}
 	home := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -45,6 +46,14 @@ func TestCodexRuntimeForkV2OAuthAndModeSwitch(t *testing.T) {
 	_ = listener.Close()
 	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/cpa/v1/ws", port)
 	h, sharedFile := runtimeHandler(t, false, endpoint)
+	if err := codexshared.Write(sharedFile, map[string]any{"type": "codex", "extension": "preserved"}); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(home, "state")
+	accountHome := filepath.Join(stateRoot, fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Base(sharedFile)))))
+	if err := os.MkdirAll(accountHome, 0700); err != nil {
+		t.Fatal(err)
+	}
 	idToken := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)) + "." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"fake-user","email":"test@example.invalid","https://api.openai.com/auth":{"chatgpt_account_id":"account","chatgpt_user_id":"fake-user","chatgpt_plan_type":"plus"}}`)) + ".signature"
 	var exchanges, refreshes, posts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +117,7 @@ requires_openai_auth = true
 request_max_retries = 0
 stream_max_retries = 0
 `, upstream.URL, upstream.URL+"/v1")
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(toml), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(accountHome, "config.toml"), []byte(toml), 0600); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(home, "runtime.log")
@@ -119,7 +128,7 @@ stream_max_retries = 0
 	cmd := exec.Command(binary)
 	cmd.Dir = home
 	cmd.Stdout, cmd.Stderr = log, log
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CODEX_HOME=" + home, "RUST_LOG=error", "CODEX_CPA_AUTH_FILE=" + sharedFile, "CODEX_CPA_WORKER_ID=worker-a", "CODEX_CPA_BRIDGE_KEY=test-bridge-key", "CODEX_CPA_PORT=" + strconv.Itoa(port), "CODEX_APP_SERVER_LOGIN_ISSUER=" + upstream.URL, "CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + upstream.URL + "/oauth/token"}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CODEX_HOME=" + stateRoot, "RUST_LOG=error", "CODEX_APP_SERVER_MANAGED_CONFIG_PATH=" + filepath.Join(home, "managed_config.toml"), "CODEX_CPA_AUTH_DIR=" + h.cfg.AuthDir, "CODEX_CPA_PORT=" + strconv.Itoa(port), "CODEX_APP_SERVER_LOGIN_ISSUER=" + upstream.URL, "CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + upstream.URL + "/oauth/token"}
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()
 		t.Fatal(err)
@@ -127,8 +136,13 @@ stream_max_retries = 0
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		<-done
+		_ = cmd.Process.Signal(os.Interrupt)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
 		_ = log.Close()
 		if t.Failed() {
 			raw, _ := os.ReadFile(logPath)
@@ -154,7 +168,7 @@ stream_max_retries = 0
 	if rec := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":true}`); rec.Code != 200 {
 		t.Fatal(rec.Body.String())
 	}
-	start := runtimeCall(t, h.StartCodexRuntimeLogin, "POST", "/", `{"worker_id":"worker-a"}`)
+	start := runtimeCall(t, h.StartCodexRuntimeLogin, "POST", "/", `{"name":"existing-account.json"}`)
 	if start.Code != 200 {
 		t.Fatal(start.Body.String())
 	}
@@ -168,7 +182,7 @@ stream_max_retries = 0
 		t.Fatal("official PKCE missing")
 	}
 	callback := query.Get("redirect_uri") + "?code=fake-code&state=" + url.QueryEscape(query.Get("state"))
-	payload, _ := json.Marshal(map[string]string{"worker_id": "worker-a", "login_id": loginID, "redirect_url": callback})
+	payload, _ := json.Marshal(map[string]string{"login_id": loginID, "redirect_url": callback})
 	completed := runtimeCall(t, h.CompleteCodexRuntimeLogin, "POST", "/", string(payload))
 	if completed.Code != 200 || gjson.Get(completed.Body.String(), "status").String() != "completed" {
 		t.Fatal(completed.Body.String())
@@ -178,7 +192,7 @@ stream_max_retries = 0
 	}
 	var auth *coreauth.Auth
 	for _, a := range h.authManager.List() {
-		if a.FileName == "worker-a.json" {
+		if a.FileName == "existing-account.json" {
 			auth = a
 			break
 		}
@@ -206,7 +220,7 @@ stream_max_retries = 0
 		if strings.Count(string(requests), "=== API REQUEST ") != attempts || !strings.Contains(string(requests), upstream.URL+"/v1/responses") {
 			t.Fatalf("actual upstream request attempts missing: %s", requests)
 		}
-		for _, want := range []string{"Status: 200", "fork-upstream-request", "response.completed", "worker-a.json", ": upstream-keepalive", "event: response.future_extension", "id: upstream-event"} {
+		for _, want := range []string{"Status: 200", "fork-upstream-request", "response.completed", "existing-account.json", ": upstream-keepalive", "event: response.future_extension", "id: upstream-event"} {
 			if !strings.Contains(string(responses), want) {
 				t.Errorf("upstream response log missing %q: %s", want, responses)
 			}
@@ -217,7 +231,8 @@ stream_max_retries = 0
 	}
 	loggedCtx, ginCtx := newLogContext()
 	if _, err := auto.Execute(loggedCtx, auth, req, opts); err != nil {
-		t.Fatal(err)
+		logged, _ := ginCtx.Get("API_RESPONSE")
+		t.Fatalf("%v; upstream log: %s", err, logged)
 	}
 	assertLogs(ginCtx, int(posts.Load()))
 	firstResponses, _ := ginCtx.Get("API_RESPONSE")
@@ -231,7 +246,7 @@ stream_max_retries = 0
 	if refreshes.Load() != 1 || meta["refresh_token"] != "refreshed-refresh" {
 		t.Fatal("Codex did not refresh common file")
 	}
-	if _, err := os.Stat(filepath.Join(home, "auth.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(accountHome, "auth.json")); !os.IsNotExist(err) {
 		t.Fatal("unexpected independent auth.json")
 	}
 	if rec := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":false}`); rec.Code != 200 {
@@ -248,8 +263,8 @@ stream_max_retries = 0
 	}
 	meta, _ = codexshared.Read(sharedFile)
 	state, _ := codexshared.Get(meta)
-	if state.Owner != "cpa" || !state.Enabled {
-		t.Fatal("owner/preference mismatch")
+	if state.Enabled || !h.cfg.Codex.Runtime.CredentialModes[auth.ID] {
+		t.Fatal("effective flag/preference mismatch")
 	}
 	if rec := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":true}`); rec.Code != 200 {
 		t.Fatal(rec.Body.String())
@@ -270,7 +285,7 @@ stream_max_retries = 0
 		t.Fatal("raw events lost", frames)
 	}
 	assertLogs(ginCtx, 1)
-	client, err := bridge.Dial(ctx, endpoint, "test-bridge-key")
+	client, err := bridge.Dial(ctx, endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}

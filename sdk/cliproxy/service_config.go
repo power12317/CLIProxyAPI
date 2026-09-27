@@ -157,9 +157,8 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	if !s.applyManagerConfig(ctx, commit) {
 		return false
 	}
-	if errRuntime := codexruntime.ReconcileOwners(cfg); errRuntime != nil {
-		log.WithError(errRuntime).Warn("could not update shared Codex credential owners")
-		return false
+	if errRuntime := codexruntime.ApplyConfig(ctx, cfg); errRuntime != nil {
+		log.WithError(errRuntime).Warn("could not apply shared Codex credential state")
 	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false
@@ -275,22 +274,11 @@ func (s *Service) registerConfigAPIKeyAuths(ctx context.Context, cfg *config.Con
 		return
 	}
 
-	runtimeIDs := make(map[string]bool)
-	for _, auth := range auths {
-		if coreauth.IsCodexRuntimeAuth(auth) {
-			runtimeIDs[auth.ID] = true
-		}
-	}
-	for _, existing := range s.coreManager.List() {
-		if coreauth.IsCodexRuntimeAuth(existing) && !runtimeIDs[existing.ID] {
-			s.applyCoreAuthRemoval(coreauth.WithSkipPersist(ctx), existing.ID)
-		}
-	}
 	registrationCtx := coreauth.WithDeferredAPIKeyModelAliasRebuild(ctx)
 	tasks := make([]modelRegistrationTask, 0, len(auths))
 	needsAliasRebuild := false
 	for _, auth := range auths {
-		if !coreauth.IsConfigAPIKeyAuth(auth) && !coreauth.IsCodexRuntimeAuth(auth) {
+		if !coreauth.IsConfigAPIKeyAuth(auth) {
 			continue
 		}
 		prepared := s.prepareCoreAuthForModelRegistration(registrationCtx, auth)

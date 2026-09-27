@@ -22,17 +22,18 @@ import (
 
 func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "worker.json")
+	path := filepath.Join(dir, "Original Account.JSON")
 	metadata := map[string]any{"type": "codex", "access_token": "initial", "refresh_token": "initial-refresh", "account_id": "account", "unknown_extension": true}
-	codexshared.Set(metadata, codexshared.State{Enabled: true, WorkerID: "worker", Owner: "codex"})
+	codexshared.Set(metadata, codexshared.State{Enabled: true})
 	if err := codexshared.Write(path, metadata); err != nil {
 		t.Fatal(err)
 	}
-	var rpcCalls, nativeCalls atomic.Int32
+	var rpcCalls, nativeCalls, masterConnections atomic.Int32
 	runtimeTokens := make(chan string, 4)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer bridge-key" {
-			t.Error("missing bridge key")
+		masterConnections.Add(1)
+		if r.Header.Get("Authorization") != "" {
+			t.Error("unexpected bridge key")
 			w.WriteHeader(401)
 			return
 		}
@@ -53,13 +54,16 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read", "cpa/credential/reload":
-				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": bridge.Capabilities{ProtocolVersion: 2, CredentialID: "worker", CredentialFile: "worker.json", AccountID: "account", AuthOwner: "codex", ExecutionMode: "inference-only", RawEvents: true, Operations: []string{"responses"}}})
+				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": bridge.Capabilities{ProtocolVersion: 3, ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}})
 			case "cpa/inference/start":
 				rpcCalls.Add(1)
 				latest, _ := codexshared.Read(path)
 				runtimeTokens <- latest["access_token"].(string)
 				var req bridge.Request
 				_ = json.Unmarshal(msg.Params, &req)
+				if req.CredentialID != "Original Account.JSON" {
+					t.Errorf("credential ID changed: %s", req.CredentialID)
+				}
 				runtimeTestAccept(conn, msg, req)
 				runtimeTestFinish(conn, req, runtimeTerminal)
 				return
@@ -79,8 +83,8 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 		_, _ = io.WriteString(w, "data: "+runtimeTerminal+"\n\n")
 	}))
 	defer native.Close()
-	cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, Workers: []config.CodexRuntimeWorker{{ID: "worker", URL: "ws" + strings.TrimPrefix(wsServer.URL, "http") + "/cpa/v1/ws", Token: "bridge-key", AuthFile: "worker.json", Models: []string{"runtime-model"}}}}}}
-	auth := &coreauth.Auth{ID: "worker.json", FileName: "worker.json", Provider: "codex", Metadata: map[string]any{"access_token": "stale", "refresh_token": "stale"}, Attributes: map[string]string{coreauth.AttributePath: path, coreauth.AttributeAuthKind: coreauth.AuthKindOAuth, "base_url": native.URL}}
+	cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, URL: "ws" + strings.TrimPrefix(wsServer.URL, "http") + "/cpa/v1/ws", CredentialModes: map[string]bool{"Original Account.JSON": true}}}}
+	auth := &coreauth.Auth{ID: "Original Account.JSON", FileName: "Original Account.JSON", Provider: "codex", Metadata: map[string]any{"access_token": "stale", "refresh_token": "stale"}, Attributes: map[string]string{coreauth.AttributePath: path, coreauth.AttributeAuthKind: coreauth.AuthKindOAuth, "base_url": native.URL}}
 	executor := NewCodexAutoExecutor(cfg)
 	req := coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{"model":"runtime-model","input":[]}`)}
 	if _, err := executor.Execute(context.Background(), auth, req, runtimeTestOptions()); err != nil {
@@ -95,13 +99,13 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 	metadata["access_token"], metadata["refresh_token"] = "codex-refreshed", "codex-rotated"
 	_ = codexshared.Write(path, metadata)
 	cfg.Codex.Runtime.Enabled = false
-	if err := bridge.ReconcileOwners(cfg); err != nil {
+	if err := bridge.ReconcileState(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := executor.Execute(context.Background(), auth, req, runtimeTestOptions()); err != nil {
 		t.Fatal(err)
 	}
-	if nativeCalls.Load() != 1 || rpcCalls.Load() != 1 {
+	if nativeCalls.Load() != 1 || rpcCalls.Load() != 1 || masterConnections.Load() != 1 {
 		t.Fatal("disabled runtime was contacted")
 	}
 	original := http.DefaultTransport
@@ -131,7 +135,7 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 		t.Fatal(latest)
 	}
 	cfg.Codex.Runtime.Enabled = true
-	if err := bridge.ReconcileOwners(cfg); err != nil {
+	if err := bridge.ReconcileState(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := executor.Execute(context.Background(), auth, req, runtimeTestOptions()); err != nil {

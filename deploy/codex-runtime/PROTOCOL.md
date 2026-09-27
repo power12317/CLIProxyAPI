@@ -1,5 +1,9 @@
 # CPA / Codex inference bridge v1
 
+> Historical contract, superseded by [protocol v3](PROTOCOL_V3.md). Do not use
+> this Unix-socket contract for deployment. Current deployment instructions are
+> in [README_CN.md](README_CN.md).
+
 Transport: app-server WebSocket over a Unix-domain socket. One inference per connection. Normal app-server initialize (clientInfo, capabilities.experimentalApi=true), then initialized, precedes CPA calls. Notifications use the app-server envelope without a jsonrpc field. IDs for calls are integers; requestId is an opaque string.
 
 ## Capabilities

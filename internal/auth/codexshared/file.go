@@ -9,27 +9,27 @@ import (
 )
 
 type State struct {
-	Enabled  bool   `json:"enabled"`
-	WorkerID string `json:"worker_id"`
-	Owner    string `json:"owner"`
+	Enabled bool `json:"enabled"`
 }
 
 func Get(metadata map[string]any) (State, bool) {
 	v, ok := metadata["codex_cli"].(map[string]any)
 	if !ok {
-		return State{Owner: "cpa"}, false
+		return State{}, false
 	}
-	s := State{Owner: "cpa"}
-	s.Enabled, _ = v["enabled"].(bool)
-	s.WorkerID, _ = v["worker_id"].(string)
-	if owner, _ := v["owner"].(string); owner == "codex" {
-		s.Owner = owner
-	}
-	return s, true
+	enabled, _ := v["enabled"].(bool)
+	return State{Enabled: enabled}, true
 }
 
 func Set(metadata map[string]any, state State) {
-	metadata["codex_cli"] = map[string]any{"enabled": state.Enabled, "worker_id": state.WorkerID, "owner": state.Owner}
+	v, _ := metadata["codex_cli"].(map[string]any)
+	if v == nil {
+		v = make(map[string]any)
+	}
+	delete(v, "worker_id")
+	delete(v, "owner")
+	v["enabled"] = state.Enabled
+	metadata["codex_cli"] = v
 }
 
 func Read(path string) (map[string]any, error) {
@@ -60,7 +60,7 @@ func Write(path string, metadata map[string]any) error {
 
 var tokenFields = map[string]bool{"access_token": true, "refresh_token": true, "id_token": true, "account_id": true, "email": true, "expired": true, "last_refresh": true}
 
-// SaveTokens updates credential values while retaining the current owner and metadata.
+// SaveTokens updates credential values while retaining the current control flags and metadata.
 func SaveTokens(path string, tokens map[string]any) (map[string]any, error) {
 	current, err := Read(path)
 	if err != nil {

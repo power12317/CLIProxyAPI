@@ -62,7 +62,7 @@ func (h *Handler) RefreshAuthFiles(c *gin.Context) {
 		return
 	}
 
-	if coreauth.IsCodexRuntimeAuth(targetAuth) {
+	if coreauth.IsCodexRuntimeOwnedAuth(targetAuth) {
 		c.JSON(http.StatusConflict, gin.H{"error": "OAuth refresh is owned by the Codex runtime"})
 		return
 	}

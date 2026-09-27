@@ -1,5 +1,9 @@
 # Shared-credential v2 validation
 
+> Historical test results for v2, not validation of the current v3 master design.
+> The current contract is [PROTOCOL_V3.md](PROTOCOL_V3.md); current deployment is
+> documented in [README_CN.md](README_CN.md).
+
 Date: 2026-09-27. CPA branch: codex/plan-b-managed-auth, following v1 commit
 12963bd1. This record supersedes v1 deployment instructions, not its historical
 test results.

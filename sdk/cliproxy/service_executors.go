@@ -200,7 +200,6 @@ func (s *Service) registerAvailableExecutors(ctx context.Context, opts executorR
 
 func baselineExecutorAuths() []*coreauth.Auth {
 	providers := []string{
-		coreauth.CodexRuntimeProvider,
 		"codex",
 		"claude",
 		constant.Gemini,
@@ -250,10 +249,6 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 	s.cfgMu.RLock()
 	cfg := s.cfg
 	s.cfgMu.RUnlock()
-	if coreauth.IsCodexRuntimeAuth(a) {
-		s.coreManager.RegisterExecutor(executor.NewCodexRuntimeExecutor(cfg))
-		return
-	}
 	if strings.EqualFold(strings.TrimSpace(a.Provider), "codex") {
 		if !forceReplace {
 			existingExecutor, hasExecutor := s.coreManager.Executor("codex")

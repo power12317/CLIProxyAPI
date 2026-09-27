@@ -51,7 +51,7 @@ func TestCodexRuntimeUpstreamLogsForSuccessAndStream(t *testing.T) {
 			name = "stream"
 		}
 		t.Run(name, func(t *testing.T) {
-			w, a := runtimeTestWorker(t, "logs", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+			w, a := runtimeTestMaster(t, "logs", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 				runtimeLogNotification(c, req, runtimeLogRequest())
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200, Headers: http.Header{
 					"x-request-id": {"actual-request-id"}, "x-codex-turn-state": {"response-state"}, "x-codex-primary-used-percent": {"17"},
@@ -105,7 +105,7 @@ func TestCodexRuntimeUpstreamLogsForSuccessAndStream(t *testing.T) {
 
 func TestCodexRuntimeLogsRetriesAndUpstreamRejection(t *testing.T) {
 	const failure = `{"error":{"type":"rate_limit_error","message":"account quota exhausted"}}`
-	w, a := runtimeTestWorker(t, "reject", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+	w, a := runtimeTestMaster(t, "reject", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 		runtimeLogNotification(c, req, runtimeLogRequest())
 		runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 401, Body: "expired token"})
 		runtimeLogNotification(c, req, runtimeLogRequest())
@@ -136,15 +136,15 @@ func TestCodexRuntimeLogsRawSSEWithoutDuplicatingEvents(t *testing.T) {
 	const event = `{"type":"response.output_text.delta","delta":"你好"}`
 	wire := ": keepalive\nevent: response.output_text.delta\nid: raw-event-id\ndata: " + event + "\n\nevent: response.completed\ndata: " + runtimeTerminal + "\n\n: final partial line"
 	for _, stream := range []bool{false, true} {
-		w, a := runtimeTestWorker(t, "raw-logs", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+		w, a := runtimeTestMaster(t, "raw-logs", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 			runtimeLogNotification(c, req, runtimeLogRequest())
 			runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200})
-			// More than 128 body messages before acceptance, including split UTF-8 bytes.
-			for _, b := range []byte(wire) {
-				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte{b}})
-			}
 			runtimeTestAccept(c, m, req)
-			runtimeTestFinish(c, req, event, runtimeTerminal)
+			// Body chunks are independent of SSE lines and may split UTF-8 bytes.
+			for _, b := range []byte(wire) {
+				runtimeTestBody(c, req, []byte{b})
+			}
+			runtimeTestFinish(c, req)
 		}, func(c *bridge.Capabilities) { c.UpstreamLogs, c.UpstreamBodyLogs = true, true })
 		e := runtimeTestExecutor(w)
 		e.cfg.RequestLog = true
@@ -178,7 +178,7 @@ func TestCodexRuntimeLogsRawSSEWithoutDuplicatingEvents(t *testing.T) {
 func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 	for _, mode := range []string{"failed-event", "disconnect", "transport-error"} {
 		t.Run(mode, func(t *testing.T) {
-			w, a := runtimeTestWorker(t, mode, func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+			w, a := runtimeTestMaster(t, mode, func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 				runtimeLogNotification(c, req, runtimeLogRequest())
 				if mode == "transport-error" {
 					runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "error", Message: "upstream connection reset"})

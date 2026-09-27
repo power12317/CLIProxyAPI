@@ -1,5 +1,9 @@
 # CPA shared-credential bridge v2
 
+> Historical contract, superseded by [protocol v3](PROTOCOL_V3.md). Do not use
+> the worker, credential-file, or authentication configuration below for deployment.
+> Current deployment instructions are in [README_CN.md](README_CN.md).
+
 This revision follows the user's approved simplified design. It does not add
 cross-process locks, leases, epochs, compare-and-swap, or handoff protocols.
 Ordinary owner selection is implemented, but concurrent refresh and mode changes

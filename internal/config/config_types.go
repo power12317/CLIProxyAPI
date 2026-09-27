@@ -184,7 +184,7 @@ type AntigravityConnectionPoolConfig struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
-	// Runtime configures opt-in, externally deployed Codex managed-auth workers.
+	// Runtime configures the optional Codex master integration.
 	Runtime CodexRuntimeConfig `yaml:"runtime" json:"runtime"`
 	// Basispoints switches all Codex model requests to the Basispoints interface.
 	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`

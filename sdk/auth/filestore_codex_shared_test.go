@@ -13,7 +13,7 @@ func TestSharedCodexStatusSavePreservesFileTokens(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "codex.json")
 	metadata := map[string]any{"type": "codex", "access_token": "new-token", "refresh_token": "new-refresh", "extra": "keep"}
-	codexshared.Set(metadata, codexshared.State{Enabled: true, WorkerID: "worker", Owner: "cpa"})
+	codexshared.Set(metadata, codexshared.State{Enabled: true})
 	if err := codexshared.Write(path, metadata); err != nil {
 		t.Fatal(err)
 	}

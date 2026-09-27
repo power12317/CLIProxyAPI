@@ -5,17 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
 )
 
-const ProtocolVersion = 1
-const SharedProtocolVersion = 2
+const ProtocolVersion = 3
 const MaxMessageBytes = 32 << 20
 
 // Error is deliberately request-scoped: an ambiguous inference cannot be replayed.
@@ -34,23 +31,17 @@ func (e *Error) ResponseBody() []byte       { return e.Body }
 func (e *Error) Headers() http.Header       { return e.ResponseHeaders.Clone() }
 func fail(status int, message string) error { return &Error{Status: status, Message: message} }
 
-// Capabilities binds one connection to one managed credential and account.
+// Capabilities describes the master shared by all managed credentials.
 type Capabilities struct {
-	ProtocolVersion    int      `json:"protocolVersion"`
-	RuntimeVersion     string   `json:"runtimeVersion"`
-	UpstreamRevision   string   `json:"upstreamRevision"`
-	CredentialID       string   `json:"credentialId"`
-	AccountID          string   `json:"accountId"`
-	AuthMode           string   `json:"authMode"`
-	ExecutionMode      string   `json:"executionMode"`
-	RawEvents          bool     `json:"rawEvents"`
-	Operations         []string `json:"operations"`
-	PersistentSessions bool     `json:"persistentSessions"`
-	CredentialFile     string   `json:"credentialFile"`
-	AuthOwner          string   `json:"authOwner"`
-	ManualOAuth        bool     `json:"manualOAuth"`
-	UpstreamLogs       bool     `json:"upstreamLogs"`
-	UpstreamBodyLogs   bool     `json:"upstreamBodyLogs"`
+	ProtocolVersion  int      `json:"protocolVersion"`
+	RuntimeVersion   string   `json:"runtimeVersion"`
+	UpstreamRevision string   `json:"upstreamRevision"`
+	ExecutionMode    string   `json:"executionMode"`
+	RawBody          bool     `json:"rawBody"`
+	Operations       []string `json:"operations"`
+	ManualOAuth      bool     `json:"manualOAuth"`
+	UpstreamLogs     bool     `json:"upstreamLogs"`
+	UpstreamBodyLogs bool     `json:"upstreamBodyLogs"`
 }
 
 // UpstreamLog describes an actual HTTP attempt made by the worker.
@@ -71,7 +62,6 @@ type UpstreamLog struct {
 type Request struct {
 	RequestID    string          `json:"requestId"`
 	CredentialID string          `json:"credentialId"`
-	AccountID    string          `json:"accountId"`
 	Operation    string          `json:"operation"`
 	SourceFormat string          `json:"sourceFormat"`
 	SessionID    string          `json:"sessionId"`
@@ -79,9 +69,7 @@ type Request struct {
 }
 
 type Frame struct {
-	Method string
-	Event  json.RawMessage
-	Body   json.RawMessage
+	Body []byte
 }
 
 type rpcError struct {
@@ -109,81 +97,22 @@ type Client struct {
 	onClose          func()
 	nextID           int
 	requestID        string
-	terminal         bool
-	resultSeen       bool
 	done             bool
-	operation        string
+	pending          []message
 	Caps             Capabilities
 	Headers          http.Header
+	StatusCode       int
 	OnUpstream       func(UpstreamLog)
 	upstreamResponse *UpstreamLog
 }
 
-// Open uses a local Unix socket, without proxy environment variables or deadlines.
-func Open(ctx context.Context, socket, credentialID, accountID string) (*Client, error) {
+// Dial opens the internal TCP bridge for inference or explicit management calls.
+func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !filepath.IsAbs(socket) {
-		return nil, fail(503, "Codex runtime requires an absolute Unix socket")
-	}
-	dialer := websocket.Dialer{NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-	}}
-	conn, resp, err := dialer.DialContext(ctx, "ws://localhost/", nil)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fail(503, "Codex runtime connection failed")
-	}
-	c := &Client{conn: conn, ctx: ctx}
-	conn.SetReadLimit(MaxMessageBytes)
-	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
-	ok := false
-	defer func() {
-		if !ok {
-			c.Close()
-		}
-	}()
-	if err = c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "1"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
-		return nil, err
-	}
-	if err = c.write(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
-		return nil, err
-	}
-	if err = c.call("cpa/capabilities/read", map[string]any{}, &c.Caps); err != nil {
-		return nil, err
-	}
-	caps := c.Caps
-	if caps.ProtocolVersion != ProtocolVersion || caps.ExecutionMode != "inference-only" || !caps.RawEvents || caps.RuntimeVersion == "" || caps.UpstreamRevision == "" {
-		return nil, fail(502, "Codex runtime protocol or capabilities mismatch")
-	}
-	if caps.CredentialID != credentialID {
-		return nil, fail(409, "Codex runtime credential mismatch")
-	}
-	if caps.AuthMode != "chatgpt" || caps.AccountID == "" {
-		return nil, fail(401, "Codex runtime requires managed ChatGPT login")
-	}
-	if caps.AccountID != accountID {
-		return nil, fail(409, "Codex runtime account mismatch")
-	}
-	ok = true
-	return c, nil
-}
-
-// Dial opens the authenticated TCP bridge for inference or explicit management calls.
-func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
-	if token == "" {
-		return nil, fail(400, "Codex runtime bridge key is not configured")
-	}
-	header := make(http.Header)
-	header.Set("Authorization", "Bearer "+token)
 	dialer := websocket.Dialer{}
-	conn, resp, err := dialer.DialContext(ctx, endpoint, header)
+	conn, resp, err := dialer.DialContext(ctx, endpoint, nil)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -196,7 +125,7 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 	c := &Client{conn: conn, ctx: ctx}
 	conn.SetReadLimit(MaxMessageBytes)
 	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
-	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "2"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
+	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "3"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -204,11 +133,11 @@ func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
 		c.Close()
 		return nil, err
 	}
-	if err := c.call("cpa/credential/reload", map[string]any{}, &c.Caps); err != nil {
+	if err := c.call("cpa/capabilities/read", map[string]any{}, &c.Caps); err != nil {
 		c.Close()
 		return nil, err
 	}
-	if c.Caps.ProtocolVersion != SharedProtocolVersion || c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawEvents {
+	if c.Caps.ProtocolVersion != ProtocolVersion || c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawBody {
 		c.Close()
 		return nil, fail(502, "Codex runtime protocol or capabilities mismatch")
 	}
@@ -261,14 +190,15 @@ func (c *Client) call(method string, params, out any) error {
 			return err
 		}
 		if len(m.ID) == 0 {
-			if m.Method == "cpa/inference/upstream" {
-				if err := c.observeUpstream(m.Params); err != nil {
-					return err
+			if strings.HasPrefix(m.Method, "cpa/inference/") {
+				if m.Method == "cpa/inference/upstream" && len(c.pending) == 0 {
+					if err := c.observeUpstream(m.Params); err != nil {
+						return err
+					}
+				} else {
+					c.pending = append(c.pending, m)
 				}
 				continue
-			}
-			if strings.HasPrefix(m.Method, "cpa/inference/") {
-				return fail(502, "Codex runtime sent inference data before acceptance")
 			}
 			skipped++
 			continue
@@ -299,11 +229,8 @@ func (c *Client) Start(req Request) error {
 	if c.requestID != "" {
 		return fail(409, "Codex runtime connection already used")
 	}
-	if req.RequestID == "" || req.SessionID == "" {
-		return fail(400, "Codex runtime request and session identity are required")
-	}
-	if req.CredentialID != c.Caps.CredentialID || req.AccountID != c.Caps.AccountID {
-		return fail(409, "Codex runtime request identity mismatch")
+	if req.RequestID == "" || req.CredentialID == "" || req.SessionID == "" {
+		return fail(400, "Codex runtime request, credential and session identity are required")
 	}
 	supported := false
 	for _, op := range c.Caps.Operations {
@@ -318,31 +245,29 @@ func (c *Client) Start(req Request) error {
 	if json.Unmarshal(req.Request, &body) != nil || body == nil {
 		return fail(400, "Codex runtime request must be a JSON object")
 	}
-	if !c.Caps.PersistentSessions {
-		if v := body["previous_response_id"]; len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
-			return fail(400, "Codex runtime does not support previous_response_id")
-		}
-		if string(body["generate"]) == "false" {
-			return fail(400, "Codex runtime does not support prewarm")
-		}
+	if v := body["previous_response_id"]; len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
+		return fail(400, "Codex runtime does not support previous_response_id")
+	}
+	if string(body["generate"]) == "false" {
+		return fail(400, "Codex runtime does not support prewarm")
 	}
 	var result struct {
 		RequestID  string      `json:"requestId"`
 		StatusCode int         `json:"statusCode"`
 		Headers    http.Header `json:"headers"`
 	}
-	c.requestID, c.operation = req.RequestID, req.Operation
+	c.requestID = req.RequestID
 	if err := c.call("cpa/inference/start", req, &result); err != nil {
 		return err
 	}
 	if result.RequestID != req.RequestID || result.StatusCode < 200 || result.StatusCode > 299 {
 		return fail(502, "Invalid Codex runtime inference acceptance")
 	}
-	c.requestID, c.operation, c.Headers = req.RequestID, req.Operation, SafeHeaders(result.Headers)
+	c.StatusCode, c.Headers = result.StatusCode, SafeHeaders(result.Headers)
 	return nil
 }
 
-// Next returns ordered complete wire events; it never reconstructs lost fields.
+// Next returns original HTTP body chunks without parsing Responses events.
 func (c *Client) Next() (Frame, error) {
 	if c.done {
 		return Frame{}, io.EOF
@@ -351,9 +276,18 @@ func (c *Client) Next() (Frame, error) {
 		return Frame{}, fail(409, "Codex runtime inference has not started")
 	}
 	for skipped := 0; skipped < 128; {
-		m, err := c.read()
-		if err != nil {
+		if err := c.ctx.Err(); err != nil {
 			return Frame{}, err
+		}
+		var m message
+		if len(c.pending) > 0 {
+			m, c.pending = c.pending[0], c.pending[1:]
+		} else {
+			var err error
+			m, err = c.read()
+			if err != nil {
+				return Frame{}, err
+			}
 		}
 		if !strings.HasPrefix(m.Method, "cpa/inference/") {
 			skipped++
@@ -367,21 +301,18 @@ func (c *Client) Next() (Frame, error) {
 		}
 		var p struct {
 			RequestID  string          `json:"requestId"`
-			Event      json.RawMessage `json:"event"`
+			BodyBytes  []byte          `json:"bodyBase64"`
 			Body       json.RawMessage `json:"body"`
 			HTTPStatus int             `json:"httpStatus"`
 			Message    string          `json:"message"`
 			Headers    http.Header     `json:"headers"`
 		}
 		if json.Unmarshal(m.Params, &p) != nil || p.RequestID != c.requestID {
-			return Frame{}, fail(502, "Codex runtime event request identity mismatch")
+			return Frame{}, fail(502, "Codex runtime body request identity mismatch")
 		}
 		switch m.Method {
 		case "cpa/inference/completed":
 			c.done = true
-			if !c.terminal && !c.resultSeen {
-				return Frame{}, fail(502, "Codex runtime completed without a terminal response")
-			}
 			return Frame{}, io.EOF
 		case "cpa/inference/error":
 			c.done = true
@@ -396,33 +327,11 @@ func (c *Client) Next() (Frame, error) {
 				}
 			}
 			return Frame{}, c.remoteError(status, p.Message, body, p.Headers)
-		case "cpa/inference/result":
-			if c.operation != "responses/compact" || c.resultSeen || !isObject(p.Body) {
-				return Frame{}, fail(502, "Unexpected Codex runtime result")
+		case "cpa/inference/body":
+			if c.OnUpstream != nil {
+				c.OnUpstream(UpstreamLog{RequestID: p.RequestID, Kind: "body", BodyBytes: p.BodyBytes})
 			}
-			c.resultSeen = true
-			return Frame{Method: m.Method, Body: p.Body}, nil
-		case "cpa/inference/event":
-			if c.operation != "responses" || c.terminal {
-				return Frame{}, fail(502, "Unexpected Codex runtime event after terminal")
-			}
-			var event struct {
-				Type     string          `json:"type"`
-				Response json.RawMessage `json:"response"`
-			}
-			if json.Unmarshal(p.Event, &event) != nil || event.Type == "" {
-				return Frame{}, fail(502, "Invalid Codex runtime wire event")
-			}
-			switch event.Type {
-			case "error":
-				c.terminal = true
-			case "response.completed", "response.incomplete", "response.failed":
-				if !isObject(event.Response) {
-					return Frame{}, fail(502, "Codex runtime terminal response is missing")
-				}
-				c.terminal = true
-			}
-			return Frame{Method: m.Method, Event: p.Event}, nil
+			return Frame{Body: p.BodyBytes}, nil
 		default:
 			return Frame{}, fail(502, "Unknown Codex runtime inference notification")
 		}
@@ -441,7 +350,7 @@ func (c *Client) observeUpstream(raw json.RawMessage) error {
 		c.upstreamResponse = nil
 	case "response":
 		c.upstreamResponse = &entry
-	case "error", "body":
+	case "error":
 	default:
 		return fail(502, "Unknown Codex runtime upstream log kind")
 	}
@@ -490,9 +399,4 @@ func SafeHeaders(headers http.Header) http.Header {
 		}
 	}
 	return out
-}
-
-func isObject(raw json.RawMessage) bool {
-	var object map[string]json.RawMessage
-	return json.Unmarshal(raw, &object) == nil && object != nil
 }

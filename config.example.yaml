@@ -274,17 +274,15 @@ routing:
 
 # Codex provider behavior.
 codex:
-  # Optional Codex fork workers sharing CPA credential JSON files.
-  # See deploy/codex-runtime/README_CN.md for isolated containers and upgrade gates.
+  # Optional Codex master with one independent process per shared CPA credential.
+  # CPAMP controls the switch and account selection through CPA management APIs.
   runtime:
     enabled: false
-    workers: []
-    # - id: worker-a
-    #   url: ws://127.0.0.1:38317/cpa/v1/ws
-    #   auth-file: worker-a.json
-    #   token: YOUR_BRIDGE_KEY
-    #   models: [] # Empty keeps the credential's normal CPA model set.
-    #   disabled: false
+    # Default internal endpoint; no extra setting is needed with the provided Compose.
+    # url: ws://127.0.0.1:38317/cpa/v1/ws
+    # Per-account preferences use existing CPA Auth.ID values and survive the master switch.
+    # Managed by CPAMP; effective enabled state is saved in the original auth files.
+    credential-modes: {}
   # Route Codex models through Basispoints; hosted tools retain native Codex routing.
   # Astra max uses wire xhigh plus input configuration_update reasoning.effort=max.
   basispoints:

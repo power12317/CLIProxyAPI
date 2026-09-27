@@ -1,5 +1,9 @@
 # Plan B validation record
 
+> Historical test results for v1, not validation of the current v3 master design.
+> The current contract is [PROTOCOL_V3.md](PROTOCOL_V3.md); current deployment is
+> documented in [README_CN.md](README_CN.md).
+
 Date: 2026-09-27. CPA branch: `codex/plan-b-managed-auth`, based on `02a86349`.
 CPA implementation commit: `1853b364`.
 Protocol: `cpa/*` version 1. Codex fork branch: `codex/cpa-managed-auth`.

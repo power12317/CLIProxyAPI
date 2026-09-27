@@ -23,7 +23,6 @@ type PayloadFilterRule = internalconfig.PayloadFilterRule
 type PayloadModelRule = internalconfig.PayloadModelRule
 type CodexConfig = internalconfig.CodexConfig
 type CodexRuntimeConfig = internalconfig.CodexRuntimeConfig
-type CodexRuntimeWorker = internalconfig.CodexRuntimeWorker
 type CodexModel = internalconfig.CodexModel
 type CodexTurnStateTicketConfig = internalconfig.CodexTurnStateTicketConfig
 

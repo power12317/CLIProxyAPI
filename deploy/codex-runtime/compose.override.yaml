@@ -4,7 +4,7 @@ services:
     image: ${CPA_RUNTIME_IMAGE:-ghcr.io/power12317/cliproxyapi:codex-runtime}
     pull_policy: always
 
-  codex-worker-a:
+  codex-master:
     image: ${CODEX_RUNTIME_IMAGE:-ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth}
     pull_policy: always
     # Match the default CPA user for its existing 0600 auth files.
@@ -14,17 +14,12 @@ services:
       cli-proxy-api:
         condition: service_started
         restart: true
-    environment:
-      CODEX_CPA_WORKER_ID: worker-a
-      CODEX_CPA_AUTH_FILE: /cpa-auth/worker-a.json
-      CODEX_CPA_BRIDGE_KEY: ${CODEX_BRIDGE_TOKEN:?Set the bridge key}
-      # CODEX_CPA_PORT defaults to 38317; further workers use 38318, 38319, etc.
     volumes:
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/cpa-auth
-      - codex_worker_a_home:/var/lib/codex
+      - codex_master_data:/var/lib/codex
     # Keep extra_hosts and DNS configuration on cli-proxy-api. Docker container
-    # networking inherits its networking files and rejects per-worker overrides.
+    # networking inherits its networking files and rejects container overrides.
     restart: unless-stopped
 
 volumes:
-  codex_worker_a_home:
+  codex_master_data:

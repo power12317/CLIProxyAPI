@@ -3,11 +3,11 @@ package management
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	bridge "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
@@ -19,126 +19,135 @@ func (h *Handler) codexRuntimeConfig() *config.Config {
 	return h.cfg.CloneForRuntime()
 }
 
-func runtimeStatus(cfg *config.Config) gin.H {
-	workers := make([]gin.H, 0, len(cfg.Codex.Runtime.Workers))
-	credentials := make([]gin.H, 0, len(cfg.Codex.Runtime.Workers))
-	for _, w := range cfg.Codex.Runtime.Workers {
-		workers = append(workers, gin.H{"id": w.ID, "url": w.URL, "auth_file": w.AuthFile, "token_configured": w.Token != "", "models": append([]string{}, w.Models...), "disabled": w.Disabled})
-		if w.AuthFile == "" {
-			continue
+func runtimePreference(cfg *config.Config, credential bridge.Credential) bool {
+	if cfg.Codex.Runtime.Enabled {
+		if state, exists := codexshared.Get(credential.Metadata); exists {
+			return state.Enabled
 		}
-		row := gin.H{"name": w.AuthFile, "worker_id": w.ID, "enabled": false, "owner": "cpa", "status": "missing"}
-		if metadata, err := codexshared.Read(bridge.CredentialPath(cfg, w)); err == nil {
-			state, _ := codexshared.Get(metadata)
-			row["enabled"], row["owner"], row["status"] = state.Enabled, state.Owner, state.Owner
-			if account, ok := metadata["account_id"].(string); ok {
-				row["account_id"] = account
+	}
+	if enabled, exists := cfg.Codex.Runtime.CredentialModes[credential.ID]; exists {
+		return enabled
+	}
+	return true
+}
+
+func runtimeStatus(cfg *config.Config) (gin.H, error) {
+	files, err := bridge.ListCredentials(cfg)
+	if err != nil {
+		return nil, err
+	}
+	credentials := make([]gin.H, 0, len(files))
+	for _, credential := range files {
+		metadata := credential.Metadata
+		row := gin.H{"name": credential.ID, "label": credential.ID, "enabled": runtimePreference(cfg, credential), "owner": "cpa", "status": "cpa"}
+		for _, key := range []string{"email", "label"} {
+			if label, _ := metadata[key].(string); label != "" {
+				row["label"] = label
 			}
-			if token, _ := metadata["access_token"].(string); token == "" {
-				row["status"] = "not_authorized"
-			}
-			if disabled, _ := metadata["disabled"].(bool); disabled || w.Disabled {
-				row["status"] = "disabled"
-			}
+		}
+		state, _ := codexshared.Get(metadata)
+		disabled, _ := metadata["disabled"].(bool)
+		if cfg.Codex.Runtime.Enabled && state.Enabled && !disabled {
+			row["owner"], row["status"] = "codex", "codex"
+		}
+		if account, ok := metadata["account_id"].(string); ok {
+			row["account_id"] = account
+		}
+		if token, _ := metadata["access_token"].(string); token == "" {
+			row["status"] = "not_authorized"
+		}
+		if disabled {
+			row["status"] = "disabled"
 		}
 		credentials = append(credentials, row)
 	}
-	return gin.H{"enabled": cfg.Codex.Runtime.Enabled, "workers": workers, "credentials": credentials}
+	return gin.H{"enabled": cfg.Codex.Runtime.Enabled, "credentials": credentials}, nil
+}
+
+func writeRuntimeStatus(c *gin.Context, cfg *config.Config) {
+	status, err := runtimeStatus(cfg)
+	if err != nil {
+		runtimeHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, status)
 }
 
 func (h *Handler) GetCodexRuntime(c *gin.Context) {
-	c.JSON(http.StatusOK, runtimeStatus(h.codexRuntimeConfig()))
+	writeRuntimeStatus(c, h.codexRuntimeConfig())
 }
 
-func (h *Handler) PutCodexRuntime(c *gin.Context) {
-	var req struct {
-		Enabled *bool `json:"enabled"`
-		Workers *[]struct {
-			ID       string   `json:"id"`
-			URL      string   `json:"url"`
-			AuthFile string   `json:"auth_file"`
-			Token    *string  `json:"token"`
-			Models   []string `json:"models"`
-			Disabled bool     `json:"disabled"`
-		} `json:"workers"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": "invalid runtime configuration"})
-		return
-	}
+// saveRuntimeConfig persists panel preferences, applies them, then reloads CPA.
+func (h *Handler) saveRuntimeConfig(c *gin.Context, update func(*config.Config) error, credentialIDs ...string) (*config.Config, bool) {
 	h.mu.Lock()
 	previous := h.cfg
 	next := previous.CloneForRuntime()
-	if req.Enabled != nil {
-		next.Codex.Runtime.Enabled = *req.Enabled
-	}
-	if req.Workers != nil {
-		oldTokens := make(map[string]string)
-		for _, w := range previous.Codex.Runtime.Workers {
-			oldTokens[w.ID] = w.Token
-		}
-		next.Codex.Runtime.Workers = nil
-		for _, w := range *req.Workers {
-			token := oldTokens[w.ID]
-			if w.Token != nil {
-				token = *w.Token
-			}
-			next.Codex.Runtime.Workers = append(next.Codex.Runtime.Workers, config.CodexRuntimeWorker{ID: w.ID, URL: w.URL, Token: token, AuthFile: w.AuthFile, Models: w.Models, Disabled: w.Disabled})
-		}
+	if err := update(next); err != nil {
+		h.mu.Unlock()
+		runtimeHTTPError(c, err)
+		return nil, false
 	}
 	if err := next.ValidateCodexRuntime(); err != nil {
 		h.mu.Unlock()
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return nil, false
 	}
 	h.cfg = next
 	snapshot, ok := h.saveConfigAndSnapshotLocked(c)
 	if !ok {
 		h.cfg = previous
 		h.mu.Unlock()
-		return
+		return nil, false
 	}
 	h.mu.Unlock()
-	// Removed workers return their existing file to CPA without deleting credentials.
-	for _, w := range previous.Codex.Runtime.Workers {
-		if w.AuthFile == "" {
-			continue
-		}
-		found := false
-		for _, updated := range next.Codex.Runtime.Workers {
-			if updated.ID == w.ID && updated.AuthFile == w.AuthFile {
-				found = true
-				break
-			}
-		}
-		if !found {
-			path := bridge.CredentialPath(previous, w)
-			bridge.CancelCredential(path)
-			if metadata, err := codexshared.Read(path); err == nil {
-				state, shared := codexshared.Get(metadata)
-				if shared {
-					state.Owner = "cpa"
-					codexshared.Set(metadata, state)
-					if err := codexshared.Write(path, metadata); err != nil {
-						runtimeHTTPError(c, err)
-						return
-					}
-					h.syncRuntimeAuth(c.Request.Context(), path)
-				}
-			}
-		}
-	}
-	if err := bridge.ReconcileOwners(next); err != nil {
-		runtimeHTTPError(c, err)
-		return
-	}
-	for _, w := range next.Codex.Runtime.Workers {
-		if w.AuthFile != "" {
-			h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(next, w))
-		}
+	errApply := bridge.ApplyConfig(c.Request.Context(), next, credentialIDs...)
+	credentials, errList := bridge.ListCredentials(next)
+	for _, credential := range credentials {
+		h.syncRuntimeAuth(c.Request.Context(), credential.Path)
 	}
 	h.reloadConfigAfterManagementSave(c.Request.Context(), snapshot)
-	c.JSON(200, runtimeStatus(next))
+	if errApply != nil {
+		runtimeHTTPError(c, errApply)
+		return nil, false
+	}
+	if errList != nil {
+		runtimeHTTPError(c, errList)
+		return nil, false
+	}
+	return next, true
+}
+
+func (h *Handler) PutCodexRuntime(c *gin.Context) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if c.ShouldBindJSON(&req) != nil || req.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "enabled is required"})
+		return
+	}
+	cfg, ok := h.saveRuntimeConfig(c, func(next *config.Config) error {
+		if next.Codex.Runtime.Enabled && !*req.Enabled {
+			credentials, err := bridge.ListCredentials(next)
+			if err != nil {
+				return err
+			}
+			if next.Codex.Runtime.CredentialModes == nil {
+				next.Codex.Runtime.CredentialModes = make(map[string]bool)
+			}
+			for _, credential := range credentials {
+				selected := runtimePreference(next, credential)
+				if state, exists := codexshared.Get(credential.Metadata); exists {
+					selected = state.Enabled
+				}
+				next.Codex.Runtime.CredentialModes[credential.ID] = selected
+			}
+		}
+		next.Codex.Runtime.Enabled = *req.Enabled
+		return nil
+	})
+	if ok {
+		writeRuntimeStatus(c, cfg)
+	}
 }
 
 func (h *Handler) syncRuntimeAuth(ctx context.Context, path string) {
@@ -151,58 +160,51 @@ func (h *Handler) syncRuntimeAuth(ctx context.Context, path string) {
 	}
 }
 
-func findRuntimeWorker(cfg *config.Config, id string) (config.CodexRuntimeWorker, bool) {
-	for _, w := range cfg.Codex.Runtime.Workers {
-		if w.ID == id && w.AuthFile != "" {
-			return w, true
+func findRuntimeCredential(cfg *config.Config, name string) (bridge.Credential, bool, error) {
+	credentials, err := bridge.ListCredentials(cfg)
+	if err != nil {
+		return bridge.Credential{}, false, err
+	}
+	for _, credential := range credentials {
+		if credential.ID == name {
+			return credential, true, nil
 		}
 	}
-	return config.CodexRuntimeWorker{}, false
+	return bridge.Credential{}, false, nil
 }
 
-func (h *Handler) setRuntimePreference(ctx context.Context, cfg *config.Config, w config.CodexRuntimeWorker, enabled, create bool) error {
-	path := bridge.CredentialPath(cfg, w)
-	metadata, err := codexshared.Read(path)
-	if err != nil {
-		if !create || !os.IsNotExist(err) {
-			return err
+func (h *Handler) setRuntimePreference(c *gin.Context, name string, enabled bool) (*config.Config, bool) {
+	return h.saveRuntimeConfig(c, func(next *config.Config) error {
+		if next.Codex.Runtime.CredentialModes == nil {
+			next.Codex.Runtime.CredentialModes = make(map[string]bool)
 		}
-		metadata = map[string]any{"type": "codex"}
-	}
-	owner := "cpa"
-	if cfg.Codex.Runtime.Enabled && enabled && !w.Disabled {
-		owner = "codex"
-	}
-	bridge.CancelCredential(path)
-	codexshared.Set(metadata, codexshared.State{Enabled: enabled, WorkerID: w.ID, Owner: owner})
-	if err := codexshared.Write(path, metadata); err != nil {
-		return err
-	}
-	h.syncRuntimeAuth(ctx, path)
-	return nil
+		next.Codex.Runtime.CredentialModes[name] = enabled
+		return nil
+	}, name)
 }
 
 func (h *Handler) SetCodexRuntimeCredential(c *gin.Context) {
 	var req struct {
-		Name     string `json:"name"`
-		WorkerID string `json:"worker_id"`
-		Enabled  *bool  `json:"enabled"`
+		Name    string `json:"name"`
+		Enabled *bool  `json:"enabled"`
 	}
-	if c.ShouldBindJSON(&req) != nil || req.Enabled == nil {
-		c.JSON(400, gin.H{"error": "name, worker_id and enabled are required"})
+	if c.ShouldBindJSON(&req) != nil || req.Name == "" || req.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name and enabled are required"})
 		return
 	}
-	cfg := h.codexRuntimeConfig()
-	w, ok := findRuntimeWorker(cfg, req.WorkerID)
-	if !ok || req.Name != w.AuthFile {
-		c.JSON(400, gin.H{"error": "credential must match the worker auth_file"})
-		return
-	}
-	if err := h.setRuntimePreference(c.Request.Context(), cfg, w, *req.Enabled, false); err != nil {
+	_, found, err := findRuntimeCredential(h.codexRuntimeConfig(), req.Name)
+	if err != nil {
 		runtimeHTTPError(c, err)
 		return
 	}
-	c.JSON(200, runtimeStatus(cfg))
+	if !found {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Codex account is unavailable"})
+		return
+	}
+	cfg, ok := h.setRuntimePreference(c, req.Name, *req.Enabled)
+	if ok {
+		writeRuntimeStatus(c, cfg)
+	}
 }
 
 func runtimeHTTPError(c *gin.Context, err error) {
@@ -214,91 +216,123 @@ func runtimeHTTPError(c *gin.Context, err error) {
 	c.JSON(status, gin.H{"error": err.Error()})
 }
 
-func (h *Handler) runtimeRPC(c *gin.Context, workerID string, prepareLogin bool) (*bridge.Client, config.CodexRuntimeWorker, bool) {
-	cfg := h.codexRuntimeConfig()
+func (h *Handler) runtimeRPC(c *gin.Context, cfg *config.Config, credentialID string) (*bridge.Client, bool) {
 	if !cfg.Codex.Runtime.Enabled {
-		c.JSON(409, gin.H{"error": "Codex runtime integration is disabled"})
-		return nil, config.CodexRuntimeWorker{}, false
+		c.JSON(http.StatusConflict, gin.H{"error": "Codex runtime integration is disabled"})
+		return nil, false
 	}
-	w, ok := findRuntimeWorker(cfg, workerID)
-	if !ok || w.Disabled {
-		c.JSON(400, gin.H{"error": "Codex runtime worker is unavailable"})
-		return nil, w, false
+	credential, found, err := findRuntimeCredential(cfg, credentialID)
+	if err != nil {
+		runtimeHTTPError(c, err)
+		return nil, false
 	}
-	if prepareLogin {
-		if err := h.setRuntimePreference(c.Request.Context(), cfg, w, true, true); err != nil {
-			runtimeHTTPError(c, err)
-			return nil, w, false
-		}
+	if !found {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Codex account is unavailable"})
+		return nil, false
 	}
-	ctx, release := bridge.Track(c.Request.Context(), bridge.CredentialPath(cfg, w))
-	client, err := bridge.Dial(ctx, w.URL, w.Token)
+	state, _ := codexshared.Get(credential.Metadata)
+	disabled, _ := credential.Metadata["disabled"].(bool)
+	if !state.Enabled || disabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "Codex account is disabled"})
+		return nil, false
+	}
+	ctx, release := bridge.Track(c.Request.Context(), credential.Path)
+	client, err := bridge.Dial(ctx, cfg.Codex.Runtime.Endpoint())
 	if err != nil {
 		release()
 		runtimeHTTPError(c, err)
-		return nil, w, false
+		return nil, false
 	}
 	client.OnClose(release)
-	if client.Caps.CredentialID != w.ID || client.Caps.CredentialFile != filepath.Base(w.AuthFile) {
-		client.Close()
-		c.JSON(409, gin.H{"error": "Codex runtime worker or credential file mismatch"})
-		return nil, w, false
-	}
-	return client, w, true
-}
-
-func (h *Handler) TestCodexRuntime(c *gin.Context) {
-	var req struct {
-		WorkerID string `json:"worker_id"`
-	}
-	if c.ShouldBindJSON(&req) != nil {
-		c.JSON(400, gin.H{"error": "worker_id is required"})
-		return
-	}
-	client, _, ok := h.runtimeRPC(c, req.WorkerID, false)
-	if !ok {
-		return
-	}
-	defer client.Close()
-	c.JSON(200, gin.H{"status": "ok", "capabilities": client.Caps})
+	return client, true
 }
 
 func (h *Handler) StartCodexRuntimeLogin(c *gin.Context) {
 	var req struct {
-		WorkerID string `json:"worker_id"`
+		Name string `json:"name"`
 	}
-	if c.ShouldBindJSON(&req) != nil {
-		c.JSON(400, gin.H{"error": "worker_id is required"})
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid OAuth request"})
 		return
 	}
-	client, _, ok := h.runtimeRPC(c, req.WorkerID, true)
+	cfg := h.codexRuntimeConfig()
+	if !cfg.Codex.Runtime.Enabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "Codex runtime integration is disabled"})
+		return
+	}
+	if req.Name == "" {
+		req.Name = uuid.NewString() + ".json"
+		if err := codexshared.Write(bridge.CredentialPath(cfg, req.Name), map[string]any{"type": "codex"}); err != nil {
+			runtimeHTTPError(c, err)
+			return
+		}
+	} else {
+		credential, found, err := findRuntimeCredential(cfg, req.Name)
+		if err != nil {
+			runtimeHTTPError(c, err)
+			return
+		}
+		if !found {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Codex account is unavailable"})
+			return
+		}
+		if disabled, _ := credential.Metadata["disabled"].(bool); disabled {
+			c.JSON(http.StatusConflict, gin.H{"error": "Codex account is disabled"})
+			return
+		}
+	}
+	cfg, ok := h.setRuntimePreference(c, req.Name, true)
+	if !ok {
+		return
+	}
+	client, ok := h.runtimeRPC(c, cfg, req.Name)
 	if !ok {
 		return
 	}
 	defer client.Close()
+	if err := client.Call("cpa/credential/reload", map[string]any{"credentialId": req.Name}, nil); err != nil {
+		runtimeHTTPError(c, err)
+		return
+	}
 	var result struct {
 		LoginID string `json:"loginId"`
 		AuthURL string `json:"authUrl"`
 		State   string `json:"state"`
 	}
-	if err := client.Call("cpa/auth/login/start", map[string]any{}, &result); err != nil {
+	if err := client.Call("cpa/auth/login/start", map[string]any{"credentialId": req.Name}, &result); err != nil {
 		runtimeHTTPError(c, err)
 		return
 	}
-	c.JSON(200, gin.H{"login_id": result.LoginID, "url": result.AuthURL, "state": result.State})
+	RegisterOAuthSessionWithMetadata("codex-runtime:"+result.LoginID, "codex-runtime", map[string]any{"credential_id": req.Name})
+	c.JSON(http.StatusOK, gin.H{"login_id": result.LoginID, "url": result.AuthURL, "state": result.State})
+}
+
+func (h *Handler) runtimeLoginRPC(c *gin.Context, loginID string) (*bridge.Client, string, bool) {
+	cfg := h.codexRuntimeConfig()
+	if !cfg.Codex.Runtime.Enabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "Codex runtime integration is disabled"})
+		return nil, "", false
+	}
+	provider, _, _, metadata, _, ok := GetOAuthSessionDetails("codex-runtime:" + loginID)
+	if !ok || provider != "codex-runtime" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown OAuth login"})
+		return nil, "", false
+	}
+	credentialID, _ := metadata["credential_id"].(string)
+	client, ok := h.runtimeRPC(c, cfg, credentialID)
+	return client, credentialID, ok
 }
 
 func (h *Handler) CompleteCodexRuntimeLogin(c *gin.Context) {
 	var req struct {
-		WorkerID    string `json:"worker_id"`
 		LoginID     string `json:"login_id"`
 		RedirectURL string `json:"redirect_url"`
 	}
 	if c.ShouldBindJSON(&req) != nil {
-		c.JSON(400, gin.H{"error": "invalid OAuth callback"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid OAuth callback"})
 		return
 	}
-	client, w, ok := h.runtimeRPC(c, req.WorkerID, false)
+	client, credentialID, ok := h.runtimeLoginRPC(c, req.LoginID)
 	if !ok {
 		return
 	}
@@ -309,13 +343,13 @@ func (h *Handler) CompleteCodexRuntimeLogin(c *gin.Context) {
 		return
 	}
 	if result["status"] == "completed" {
-		h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(h.codexRuntimeConfig(), w))
+		h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(h.codexRuntimeConfig(), credentialID))
 	}
-	c.JSON(200, result)
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *Handler) GetCodexRuntimeLoginStatus(c *gin.Context) {
-	client, w, ok := h.runtimeRPC(c, c.Query("worker_id"), false)
+	client, credentialID, ok := h.runtimeLoginRPC(c, c.Query("login_id"))
 	if !ok {
 		return
 	}
@@ -326,7 +360,7 @@ func (h *Handler) GetCodexRuntimeLoginStatus(c *gin.Context) {
 		return
 	}
 	if result["status"] == "completed" {
-		h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(h.codexRuntimeConfig(), w))
+		h.syncRuntimeAuth(c.Request.Context(), bridge.CredentialPath(h.codexRuntimeConfig(), credentialID))
 	}
-	c.JSON(200, result)
+	c.JSON(http.StatusOK, result)
 }

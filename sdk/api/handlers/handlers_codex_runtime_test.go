@@ -17,7 +17,7 @@ type runtimeBootstrapExecutor struct {
 	attempts atomic.Int32
 }
 
-func (*runtimeBootstrapExecutor) Identifier() string { return coreauth.CodexRuntimeProvider }
+func (*runtimeBootstrapExecutor) Identifier() string { return "codex" }
 func (e *runtimeBootstrapExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
 	e.attempts.Add(1)
 	chunks := make(chan coreexecutor.StreamChunk, 2)

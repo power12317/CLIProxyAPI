@@ -6,13 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	bridge "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
@@ -24,7 +21,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// CodexRuntimeExecutor delegates to a separately deployed managed-auth worker.
+// CodexRuntimeExecutor delegates through the master to the process for the selected CPA credential.
 type CodexRuntimeExecutor struct{ cfg *config.Config }
 
 func NewCodexRuntimeExecutor(cfg *config.Config) *CodexRuntimeExecutor {
@@ -52,46 +49,12 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 	if e.cfg == nil || !bridge.Enabled(e.cfg) || e.cfg.Home.Enabled || !coreauth.IsCodexRuntimeOwnedAuth(auth) || auth.Disabled {
 		return nil, nil, runtimeError(503, "Codex runtime is not enabled for this credential")
 	}
-	state, shared := codexshared.Get(auth.Metadata)
-	worker := bridge.WorkerForAuth(e.cfg, auth)
-	for i := range e.cfg.Codex.Runtime.Workers {
-		if shared {
-			break
-		}
-		w := &e.cfg.Codex.Runtime.Workers[i]
-		if w.ID == auth.Attributes[coreauth.AttributeCodexRuntimeID] {
-			worker = w
-			break
-		}
-	}
-	if worker == nil || worker.Disabled || (!shared && auth.ID != "codex-runtime:"+worker.ID) {
-		return nil, nil, runtimeError(503, "Codex runtime worker is unavailable")
-	}
-	if !shared && (auth.Attributes["account_id"] != worker.AccountID || auth.Attributes["socket"] != worker.Socket) {
-		return nil, nil, runtimeError(409, "Codex runtime reference changed; select the updated credential")
-	}
-	accountID := worker.AccountID
-	if shared {
-		accountID, _ = auth.Metadata["account_id"].(string)
-		if state.Owner != "codex" || accountID == "" {
-			return nil, nil, runtimeError(401, "Codex runtime credential needs authorization")
-		}
-	}
 	switch coreexecutor.ResponseFormatOrSource(opts) {
 	case sdktranslator.FormatCodex, sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions:
 	default:
 		return nil, nil, runtimeError(400, "Unsupported Codex runtime response protocol")
 	}
 	model := thinking.ParseSuffix(req.Model).ModelName
-	allowed := shared && len(worker.Models) == 0
-	for _, m := range worker.Models {
-		if m == model {
-			allowed = true
-		}
-	}
-	if !allowed {
-		return nil, nil, runtimeError(400, "Model is not configured for the Codex runtime worker")
-	}
 	if coreexecutor.RequiredUpstreamWebsocket(ctx) {
 		return nil, nil, runtimeError(400, "Persistent upstream WebSocket steering is not supported by the Codex runtime")
 	}
@@ -146,26 +109,17 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 	if session == "" || scope == "" {
 		session = uuid.NewString()
 	}
-	identityJSON, _ := json.Marshal([]string{scope, worker.ID, accountID, session})
+	identityJSON, _ := json.Marshal([]string{scope, auth.ID, session})
 	identity := sha256.Sum256(identityJSON)
 	session = hex.EncodeToString(identity[:])
 	body, _ = sjson.SetBytes(body, "prompt_cache_key", session)
-	var client *bridge.Client
-	if worker.URL != "" {
-		client, err = bridge.Dial(ctx, worker.URL, worker.Token)
-		if err == nil && (client.Caps.CredentialID != worker.ID || client.Caps.CredentialFile != filepath.Base(worker.AuthFile) || client.Caps.AccountID != accountID || client.Caps.AuthOwner != "codex") {
-			client.Close()
-			return nil, nil, runtimeError(409, "Codex runtime credential or account mismatch")
-		}
-	} else {
-		client, err = bridge.Open(ctx, worker.Socket, worker.ID, accountID)
-	}
+	client, err := bridge.Dial(ctx, e.cfg.Codex.Runtime.Endpoint())
 	if err != nil {
 		return nil, nil, err
 	}
 	client.OnUpstream = upstreamLog.Record
-	upstreamLog.RawBody = client.Caps.UpstreamBodyLogs
-	err = client.Start(bridge.Request{RequestID: uuid.NewString(), CredentialID: worker.ID, AccountID: accountID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
+	upstreamLog.RawBody = true
+	err = client.Start(bridge.Request{RequestID: uuid.NewString(), CredentialID: auth.ID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
 	if err != nil {
 		client.Close()
 		return nil, nil, err
@@ -175,6 +129,7 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 }
 
 func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (resp coreexecutor.Response, err error) {
+	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
 	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
@@ -191,51 +146,55 @@ func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth,
 	}
 	defer client.Close()
 	client.Headers.Set("Content-Type", "application/json")
-	var terminal, compact []byte
+	reader := bridge.NewSSEReader(&bridge.BodyReader{Client: client})
+	outputItems := make(map[int64][]byte)
+	var outputFallback [][]byte
+	var terminal []byte
+	sawOutputDelta := false
 	for {
-		frame, errNext := client.Next()
+		frame, errNext := reader.Next()
 		if errNext == io.EOF {
 			break
 		}
 		if errNext != nil {
 			return resp, errNext
 		}
-		if len(frame.Body) > 0 {
-			helps.AppendAPIResponseChunk(ctx, e.cfg, frame.Body)
-			compact = frame.Body
+		event := frame.Data
+		if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 			continue
 		}
-		upstreamLog.Event(frame.Event)
-		reporter.ObserveCodexResponseModel(frame.Event)
-		switch gjson.GetBytes(frame.Event, "type").String() {
-		case "error":
-			return resp, codexRuntimeEventError(frame.Event)
-		case "response.completed", "response.incomplete", "response.failed":
-			terminal = frame.Event
+		upstreamLog.Event(event)
+		reporter.ObserveCodexResponseModel(event)
+		if failure, failureBody, ok := codexTerminalFailureErr(event); ok {
+			return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
 		}
-	}
-	if len(compact) > 0 {
-		reporter.EnsurePublished(ctx)
-		return coreexecutor.Response{Payload: compact, Headers: client.Headers}, nil
+		sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
+		if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
+			failure := newCodexEmptyIncompleteStreamError()
+			return resp, runtimeError(failure.StatusCode(), failure.Error())
+		}
+		switch gjson.GetBytes(event, "type").String() {
+		case "response.output_item.done":
+			collectCodexOutputItemDone(event, outputItems, &outputFallback)
+		case "response.completed", "response.incomplete", "response.done":
+			terminal = patchCodexCompletedOutput(normalizeCodexWebsocketCompletion(event), outputItems, outputFallback)
+		}
 	}
 	if len(terminal) == 0 {
-		return resp, runtimeError(502, "Codex runtime response did not complete")
+		failure := newCodexIncompleteStreamError()
+		return resp, runtimeError(failure.StatusCode(), failure.Error())
 	}
-	format := coreexecutor.ResponseFormatOrSource(opts)
-	if gjson.GetBytes(terminal, "type").String() == "response.failed" {
-		errFailed := codexRuntimeEventError(terminal)
-		upstreamLog.Error(errFailed)
-		detail, _ := helps.ParseCodexUsage(terminal)
-		reporter.PublishFailureWithDetail(ctx, detail, errFailed)
-		if format != sdktranslator.FormatCodex && format != sdktranslator.FormatOpenAIResponse {
-			return resp, errFailed
-		}
-	} else if detail, ok := helps.ParseCodexUsage(terminal); ok {
+	if detail, ok := helps.ParseCodexUsage(terminal); ok {
 		reporter.Publish(ctx, detail)
 	}
+	publishCodexImageToolUsage(ctx, reporter, body, terminal)
+	format := coreexecutor.ResponseFormatOrSource(opts)
 	var output []byte
 	if format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex {
 		output = []byte(gjson.GetBytes(terminal, "response").Raw)
+		if format == sdktranslator.FormatOpenAIResponse {
+			output = helps.EnsureResponsesUsageDetails(output)
+		}
 	} else {
 		var param any
 		original := req.Payload
@@ -252,6 +211,7 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 	if opts.Alt == "responses/compact" {
 		return nil, runtimeError(400, "Compaction is not a streaming operation")
 	}
+	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	reporter.SetStream(true)
 	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
@@ -284,47 +244,81 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 			original = opts.OriginalRequest
 		}
 		format := coreexecutor.ResponseFormatOrSource(opts)
+		reader := bridge.NewSSEReader(&bridge.BodyReader{Client: client})
+		claudeTokens := helps.NewClaudeInputTokenState(opts.SourceFormat, sdktranslator.FormatCodex, format, original)
+		outputItems := make(map[int64][]byte)
+		var outputFallback [][]byte
+		sawOutputDelta, terminal := false, false
+		fail := func(err error) {
+			upstreamLog.Error(err)
+			reporter.PublishFailure(ctx, err)
+			send(coreexecutor.StreamChunk{Err: err})
+		}
 		for {
-			frame, errNext := client.Next()
+			frame, errNext := reader.Next()
 			if errNext == io.EOF {
-				reporter.EnsurePublished(ctx)
+				if !terminal {
+					failure := newCodexIncompleteStreamError()
+					fail(runtimeError(failure.StatusCode(), failure.Error()))
+				} else {
+					reporter.EnsurePublished(ctx)
+				}
 				return
 			}
 			if errNext != nil {
-				upstreamLog.Error(errNext)
-				reporter.PublishFailure(ctx, errNext)
-				send(coreexecutor.StreamChunk{Err: errNext})
+				fail(errNext)
 				return
 			}
-			if len(frame.Event) == 0 {
-				upstreamLog.Error(fmt.Errorf("unexpected runtime result"))
-				reporter.PublishFailure(ctx, fmt.Errorf("unexpected runtime result"))
-				send(coreexecutor.StreamChunk{Err: runtimeError(502, "Unexpected Codex runtime result")})
-				return
-			}
-			upstreamLog.Event(frame.Event)
-			reporter.ObserveCodexResponseModel(frame.Event)
-			eventType := gjson.GetBytes(frame.Event, "type").String()
-			if eventType == "response.failed" || eventType == "error" {
-				errFailed := codexRuntimeEventError(frame.Event)
-				upstreamLog.Error(errFailed)
-				detail, _ := helps.ParseCodexUsage(frame.Event)
-				reporter.PublishFailureWithDetail(ctx, detail, errFailed)
-				if format != sdktranslator.FormatCodex && format != sdktranslator.FormatOpenAIResponse {
-					send(coreexecutor.StreamChunk{Err: errFailed})
-					return
+			event := frame.Data
+			if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
+				if (format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex) && len(frame.Wire) > 0 {
+					if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
+						return
+					}
 				}
-			} else if detail, ok := helps.ParseCodexUsage(frame.Event); ok {
-				reporter.Publish(ctx, detail)
+				continue
 			}
-			line := append([]byte("data: "), frame.Event...)
+			upstreamLog.Event(event)
+			observeCodexTokenEvent(reporter, event)
+			if failure, failureBody, ok := codexTerminalFailureErr(event); ok {
+				fail(&bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
+				return
+			}
+			sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
+			if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
+				failure := newCodexEmptyIncompleteStreamError()
+				fail(runtimeError(failure.StatusCode(), failure.Error()))
+				return
+			}
+			switch gjson.GetBytes(event, "type").String() {
+			case "response.output_item.done":
+				collectCodexOutputItemDone(event, outputItems, &outputFallback)
+			case "response.completed", "response.incomplete", "response.done":
+				terminal = true
+				event = normalizeCodexWebsocketCompletion(event)
+				if detail, ok := helps.ParseCodexUsage(event); ok {
+					reporter.Publish(ctx, detail)
+				}
+				publishCodexImageToolUsage(ctx, reporter, body, event)
+				if !helps.IsNativeCodexRequest(req.Payload, opts) {
+					event = patchCodexCompletedOutput(event, outputItems, outputFallback)
+				}
+			}
 			if format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex {
-				line = append(line, '\n', '\n')
-				if !send(coreexecutor.StreamChunk{Payload: line}) {
+				if !bytes.Equal(event, frame.Data) {
+					frame.Wire = append(append([]byte("data: "), event...), '\n', '\n')
+				}
+				if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
 					return
 				}
 			} else {
-				for _, chunk := range sdktranslator.TranslateStream(ctx, sdktranslator.FormatCodex, format, req.Model, original, body, line, &param) {
+				// Translators accept one data line; fold multiline SSE JSON first.
+				var compact bytes.Buffer
+				if json.Compact(&compact, event) == nil {
+					event = compact.Bytes()
+				}
+				line := append([]byte("data: "), event...)
+				for _, chunk := range helps.TranslateStreamWithClaudeInputTokens(ctx, sdktranslator.FormatCodex, format, req.Model, original, body, line, &param, claudeTokens) {
 					if !send(coreexecutor.StreamChunk{Payload: chunk}) {
 						return
 					}
@@ -333,11 +327,4 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 		}
 	}()
 	return &coreexecutor.StreamResult{Headers: client.Headers, Chunks: chunks}, nil
-}
-
-func codexRuntimeEventError(event []byte) error {
-	if native, body, ok := codexTerminalFailureErr(event); ok {
-		return &bridge.Error{Status: native.StatusCode(), Message: native.Error(), Body: body}
-	}
-	return runtimeError(502, "Codex runtime model response failed")
 }
