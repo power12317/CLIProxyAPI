@@ -1,0 +1,38 @@
+name: purge-private-deployment
+on:
+  push:
+    branches: [codex/plan-b-managed-auth]
+    paths: [.github/workflows/purge-private-deployment.yml]
+permissions:
+  contents: read
+  actions: write
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove obsolete branch runs, artifacts, and caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GH_REPO/actions/runs?branch=codex%2Fplan-b-managed-auth&per_page=100" --jq '.workflow_runs[] | [.id, .head_sha, .status] | @tsv' > /tmp/branch-runs.tsv
+          while IFS=$'\t' read -r run_id run_sha run_status; do
+            if [ "$run_sha" = "$GITHUB_SHA" ]; then continue; fi
+            if [ "$run_status" != "completed" ]; then
+              gh api -X POST "repos/$GH_REPO/actions/runs/$run_id/cancel" || true
+            fi
+            deleted=false
+            for attempt in 1 2 3 4 5 6; do
+              if gh api -X DELETE "repos/$GH_REPO/actions/runs/$run_id"; then deleted=true; break; fi
+              sleep 5
+            done
+            if [ "$deleted" != true ]; then exit 1; fi
+            echo "Removed obsolete run $run_id"
+          done < /tmp/branch-runs.tsv
+          gh api --paginate "repos/$GH_REPO/actions/caches?ref=refs%2Fheads%2Fcodex%2Fplan-b-managed-auth&per_page=100" --jq '.actions_caches[].id' > /tmp/branch-caches.txt
+          while read -r cache_id; do
+            if [ -n "$cache_id" ]; then gh api -X DELETE "repos/$GH_REPO/actions/caches/$cache_id"; fi
+          done < /tmp/branch-caches.txt
+          echo "Branch run and cache removal finished"

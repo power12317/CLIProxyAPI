@@ -9,8 +9,8 @@ supersedes the v1/v2 validation records for current deployment decisions.
 - `go build -o test-output ./cmd/server && rm test-output`: passed.
 - Focused race checks for the master client, management controls, executor,
   shared credential switching, and SDK refresh ownership: passed.
-- `docker compose config --format json` for the server Compose and merged
-  override: passed. No master port publication, per-account configuration,
+- `docker compose config --format json` for the generic deployment
+  overlay: passed. No master port publication, per-account configuration,
   bridge key, or CPAMP service is present.
 
 The regressions cover original credential IDs (case, spaces, Unicode and relative

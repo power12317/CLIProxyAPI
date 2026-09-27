@@ -74,7 +74,7 @@ The supported deployment uses local shared file storage. Home and remote credent
 stores are outside this test branch. Ordinary Responses HTTP/SSE is the implemented
 bridge operation; protocol capability negotiation declares the available operations.
 
-Use [README_CN.md](README_CN.md) and the supplied Compose files for deployment.
+Use the generic [Compose overlay](compose.override.yaml) with your privately maintained deployment configuration.
 The exact frozen wire contract is [PROTOCOL_V3.md](PROTOCOL_V3.md). Earlier protocol
 and validation documents are historical and do not establish v3 test results.
 Pushes to each development branch trigger its Docker build. Delivery confirms the
