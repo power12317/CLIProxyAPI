@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
@@ -154,6 +155,10 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 
 	if !s.applyManagerConfig(ctx, commit) {
+		return false
+	}
+	if errRuntime := codexruntime.ReconcileOwners(cfg); errRuntime != nil {
+		log.WithError(errRuntime).Warn("could not update shared Codex credential owners")
 		return false
 	}
 	if errContext := ctx.Err(); errContext != nil {

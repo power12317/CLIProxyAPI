@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	bridge "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
@@ -47,22 +49,33 @@ func (e *CodexRuntimeExecutor) CountTokens(context.Context, *coreauth.Auth, core
 }
 
 func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (*bridge.Client, []byte, error) {
-	if e.cfg == nil || !e.cfg.Codex.Runtime.Enabled || e.cfg.Home.Enabled || !coreauth.IsCodexRuntimeAuth(auth) || auth.Disabled {
+	if e.cfg == nil || !bridge.Enabled(e.cfg) || e.cfg.Home.Enabled || !coreauth.IsCodexRuntimeOwnedAuth(auth) || auth.Disabled {
 		return nil, nil, runtimeError(503, "Codex runtime is not enabled for this credential")
 	}
-	var worker *config.CodexRuntimeWorker
+	state, shared := codexshared.Get(auth.Metadata)
+	worker := bridge.WorkerForAuth(e.cfg, auth)
 	for i := range e.cfg.Codex.Runtime.Workers {
+		if shared {
+			break
+		}
 		w := &e.cfg.Codex.Runtime.Workers[i]
 		if w.ID == auth.Attributes[coreauth.AttributeCodexRuntimeID] {
 			worker = w
 			break
 		}
 	}
-	if worker == nil || worker.Disabled || auth.ID != "codex-runtime:"+worker.ID {
+	if worker == nil || worker.Disabled || (!shared && auth.ID != "codex-runtime:"+worker.ID) {
 		return nil, nil, runtimeError(503, "Codex runtime worker is unavailable")
 	}
-	if auth.Attributes["account_id"] != worker.AccountID || auth.Attributes["socket"] != worker.Socket {
+	if !shared && (auth.Attributes["account_id"] != worker.AccountID || auth.Attributes["socket"] != worker.Socket) {
 		return nil, nil, runtimeError(409, "Codex runtime reference changed; select the updated credential")
+	}
+	accountID := worker.AccountID
+	if shared {
+		accountID, _ = auth.Metadata["account_id"].(string)
+		if state.Owner != "codex" || accountID == "" {
+			return nil, nil, runtimeError(401, "Codex runtime credential needs authorization")
+		}
 	}
 	switch coreexecutor.ResponseFormatOrSource(opts) {
 	case sdktranslator.FormatCodex, sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions:
@@ -70,7 +83,7 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 		return nil, nil, runtimeError(400, "Unsupported Codex runtime response protocol")
 	}
 	model := thinking.ParseSuffix(req.Model).ModelName
-	allowed := false
+	allowed := shared && len(worker.Models) == 0
 	for _, m := range worker.Models {
 		if m == model {
 			allowed = true
@@ -133,15 +146,24 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 	if session == "" || scope == "" {
 		session = uuid.NewString()
 	}
-	identityJSON, _ := json.Marshal([]string{scope, worker.ID, worker.AccountID, session})
+	identityJSON, _ := json.Marshal([]string{scope, worker.ID, accountID, session})
 	identity := sha256.Sum256(identityJSON)
 	session = hex.EncodeToString(identity[:])
 	body, _ = sjson.SetBytes(body, "prompt_cache_key", session)
-	client, err := bridge.Open(ctx, worker.Socket, worker.ID, worker.AccountID)
+	var client *bridge.Client
+	if worker.URL != "" {
+		client, err = bridge.Dial(ctx, worker.URL, worker.Token)
+		if err == nil && (client.Caps.CredentialID != worker.ID || client.Caps.CredentialFile != filepath.Base(worker.AuthFile) || client.Caps.AccountID != accountID || client.Caps.AuthOwner != "codex") {
+			client.Close()
+			return nil, nil, runtimeError(409, "Codex runtime credential or account mismatch")
+		}
+	} else {
+		client, err = bridge.Open(ctx, worker.Socket, worker.ID, accountID)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
-	err = client.Start(bridge.Request{RequestID: uuid.NewString(), CredentialID: worker.ID, AccountID: worker.AccountID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
+	err = client.Start(bridge.Request{RequestID: uuid.NewString(), CredentialID: worker.ID, AccountID: accountID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
 	if err != nil {
 		client.Close()
 		return nil, nil, err

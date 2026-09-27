@@ -26,9 +26,9 @@ import (
 // TestCodexRuntimeForkContract runs the CPA executor against an actual fork binary.
 // Its isolated HOME, synthetic OAuth grant, and HTTP mocks never use user credentials.
 func TestCodexRuntimeForkContract(t *testing.T) {
-	binary := os.Getenv("CODEX_RUNTIME_TEST_BINARY")
+	binary := os.Getenv("CODEX_RUNTIME_V1_TEST_BINARY")
 	if binary == "" {
-		t.Skip("set CODEX_RUNTIME_TEST_BINARY to a built fork app-server")
+		t.Skip("set CODEX_RUNTIME_V1_TEST_BINARY to the historical Unix v1 fork artifact")
 	}
 	if !filepath.IsAbs(binary) {
 		t.Fatal("CODEX_RUNTIME_TEST_BINARY must be absolute")

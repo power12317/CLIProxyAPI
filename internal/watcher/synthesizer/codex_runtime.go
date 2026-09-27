@@ -12,6 +12,9 @@ func (s *ConfigSynthesizer) synthesizeCodexRuntime(ctx *SynthesisContext) []*cor
 	}
 	var out []*coreauth.Auth
 	for _, worker := range ctx.Config.Codex.Runtime.Workers {
+		if worker.AuthFile != "" {
+			continue
+		}
 		models := make([]config.CodexModel, 0, len(worker.Models))
 		for _, model := range worker.Models {
 			models = append(models, config.CodexModel{Name: model, Alias: model})

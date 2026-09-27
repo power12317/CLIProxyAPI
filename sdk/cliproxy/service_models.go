@@ -9,6 +9,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/modelconfig"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
@@ -141,6 +142,19 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		}
 		models = applyExcludedModels(models, excluded)
 	case "codex":
+		if coreauth.IsCodexRuntimeOwnedAuth(a) {
+			s.cfgMu.RLock()
+			runtimeConfig := s.cfg
+			s.cfgMu.RUnlock()
+			if worker := codexruntime.WorkerForAuth(runtimeConfig, a); worker != nil && len(worker.Models) > 0 {
+				entry := &config.CodexKey{}
+				for _, model := range worker.Models {
+					entry.Models = append(entry.Models, config.CodexModel{Name: model, Alias: model})
+				}
+				models = buildCodexConfigModels(entry)
+				break
+			}
+		}
 		if authKind == "apikey" {
 			if entry := s.resolveConfigCodexKey(a); entry != nil {
 				models = buildCodexConfigModels(entry)

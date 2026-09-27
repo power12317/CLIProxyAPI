@@ -83,7 +83,7 @@ func cloneCodexAuthAttributes(attributes map[string]string) map[string]string {
 // GetCodexCapabilities exposes optional Codex OAuth features to newer management panels.
 // Older CPA versions do not have this endpoint; clients must treat a 404 as legacy mode.
 func (h *Handler) GetCodexCapabilities(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"system_scoped_oauth": true})
+	c.JSON(http.StatusOK, gin.H{"system_scoped_oauth": true, "codex_runtime": true})
 }
 
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {

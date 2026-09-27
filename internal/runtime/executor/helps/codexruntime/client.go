@@ -15,6 +15,7 @@ import (
 )
 
 const ProtocolVersion = 1
+const SharedProtocolVersion = 2
 const MaxMessageBytes = 32 << 20
 
 // Error is deliberately request-scoped: an ambiguous inference cannot be replayed.
@@ -41,6 +42,9 @@ type Capabilities struct {
 	RawEvents          bool     `json:"rawEvents"`
 	Operations         []string `json:"operations"`
 	PersistentSessions bool     `json:"persistentSessions"`
+	CredentialFile     string   `json:"credentialFile"`
+	AuthOwner          string   `json:"authOwner"`
+	ManualOAuth        bool     `json:"manualOAuth"`
 }
 
 type Request struct {
@@ -79,6 +83,7 @@ type Client struct {
 	ctx        context.Context
 	stop       func() bool
 	once       sync.Once
+	onClose    func()
 	nextID     int
 	requestID  string
 	terminal   bool
@@ -145,14 +150,61 @@ func Open(ctx context.Context, socket, credentialID, accountID string) (*Client,
 	return c, nil
 }
 
+// Dial opens the authenticated TCP bridge for inference or explicit management calls.
+func Dial(ctx context.Context, endpoint, token string) (*Client, error) {
+	if token == "" {
+		return nil, fail(400, "Codex runtime bridge key is not configured")
+	}
+	header := make(http.Header)
+	header.Set("Authorization", "Bearer "+token)
+	dialer := websocket.Dialer{}
+	conn, resp, err := dialer.DialContext(ctx, endpoint, header)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fail(503, "Codex runtime connection failed")
+	}
+	c := &Client{conn: conn, ctx: ctx}
+	conn.SetReadLimit(MaxMessageBytes)
+	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
+	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "2"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if err := c.write(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if err := c.call("cpa/credential/reload", map[string]any{}, &c.Caps); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if c.Caps.ProtocolVersion != SharedProtocolVersion || c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawEvents {
+		c.Close()
+		return nil, fail(502, "Codex runtime protocol or capabilities mismatch")
+	}
+	return c, nil
+}
+
+func (c *Client) Call(method string, params, out any) error { return c.call(method, params, out) }
+
 func (c *Client) Close() {
 	c.once.Do(func() {
 		if c.stop != nil {
 			c.stop()
 		}
 		_ = c.conn.Close()
+		if c.onClose != nil {
+			c.onClose()
+		}
 	})
 }
+
+func (c *Client) OnClose(fn func()) { c.onClose = fn }
 func (c *Client) ioError() error {
 	if c.ctx.Err() != nil {
 		return c.ctx.Err()

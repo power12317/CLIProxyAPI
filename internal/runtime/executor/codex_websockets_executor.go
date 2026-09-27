@@ -14,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
+	bridge "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexruntime"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/tidwall/gjson"
@@ -59,6 +60,14 @@ func (e *CodexAutoExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth
 	if e == nil || e.httpExec == nil {
 		return nil
 	}
+	fresh, _, err := bridge.LoadSharedAuth(e.httpExec.cfg, auth)
+	if err != nil {
+		return err
+	}
+	if cliproxyauth.IsCodexRuntimeOwnedAuth(fresh) {
+		return runtimeError(400, "Use the Codex runtime for this credential")
+	}
+	auth = fresh
 	return e.httpExec.PrepareRequest(req, auth)
 }
 
@@ -66,10 +75,37 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 	if e == nil || e.httpExec == nil {
 		return nil, fmt.Errorf("codex auto executor: http executor is nil")
 	}
-	return e.httpExec.HttpRequest(ctx, auth, req)
+	ctx, auth, release, remote, err := bridge.PrepareShared(ctx, e.httpExec.cfg, auth)
+	if err != nil {
+		return nil, err
+	}
+	if remote {
+		release()
+		return nil, runtimeError(400, "Arbitrary HTTP requests are unavailable in Codex runtime mode")
+	}
+	resp, err := e.httpExec.HttpRequest(ctx, auth, req.WithContext(ctx))
+	if err != nil || resp == nil || resp.Body == nil {
+		release()
+	} else {
+		resp.Body = bridge.ReleaseBody(resp.Body, release)
+	}
+	return resp, err
 }
 
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if e != nil && e.httpExec != nil {
+		var release func()
+		var remote bool
+		var err error
+		ctx, auth, release, remote, err = bridge.PrepareShared(ctx, e.httpExec.cfg, auth)
+		if err != nil {
+			return cliproxyexecutor.Response{}, err
+		}
+		defer release()
+		if remote {
+			return NewCodexRuntimeExecutor(e.httpExec.cfg).Execute(ctx, auth, req, opts)
+		}
+	}
 	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
@@ -108,6 +144,30 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	if e != nil && e.httpExec != nil {
+		sharedCtx, fresh, release, remote, err := bridge.PrepareShared(ctx, e.httpExec.cfg, auth)
+		if err != nil {
+			return nil, err
+		}
+		if remote {
+			result, err := NewCodexRuntimeExecutor(e.httpExec.cfg).ExecuteStream(sharedCtx, fresh, req, opts)
+			if err != nil {
+				release()
+				return nil, err
+			}
+			return cliproxyexecutor.ReleaseSessionAfterStream(sharedCtx, result, release), nil
+		}
+		result, err := e.executeNativeStream(sharedCtx, fresh, req, opts)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		return cliproxyexecutor.ReleaseSessionAfterStream(sharedCtx, result, release), nil
+	}
+	return nil, fmt.Errorf("codex auto executor: executor is nil")
+}
+
+func (e *CodexAutoExecutor) executeNativeStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
@@ -167,6 +227,14 @@ func (e *CodexAutoExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.
 	if e == nil || e.httpExec == nil {
 		return cliproxyexecutor.Response{}, fmt.Errorf("codex auto executor: http executor is nil")
 	}
+	fresh, _, err := bridge.LoadSharedAuth(e.httpExec.cfg, auth)
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	if cliproxyauth.IsCodexRuntimeOwnedAuth(fresh) {
+		return cliproxyexecutor.Response{}, runtimeError(400, "Token counting is unavailable in Codex runtime mode")
+	}
+	auth = fresh
 	return e.httpExec.CountTokens(ctx, auth, req, opts)
 }
 

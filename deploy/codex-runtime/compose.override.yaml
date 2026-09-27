@@ -1,38 +1,30 @@
-# Apply after the existing CPA Compose file. All images must be built and tested first.
+# Apply after the existing CPA Compose file; build the matching v2 images first.
 services:
   cli-proxy-api:
     image: ${CPA_RUNTIME_IMAGE:?Set CPA_RUNTIME_IMAGE to the tested CPA Plan B image}
     pull_policy: never
-    volumes:
-      - codex_worker_a_socket:/run/codex-worker-a:ro
 
   codex-worker-a:
     image: ${CODEX_RUNTIME_IMAGE:?Set CODEX_RUNTIME_IMAGE to the tested Codex fork image}
     pull_policy: never
+    # Match the default CPA user for its existing 0600 auth files.
+    user: "0:0"
     network_mode: "service:cli-proxy-api"
     depends_on:
       cli-proxy-api:
         condition: service_started
         restart: true
     environment:
-      CODEX_HOME: /var/lib/codex
-    entrypoint: ["/usr/local/bin/codex-app-server"]
-    command:
-      - "--listen"
-      - "unix:///run/codex/cpa.sock"
-      - "-c"
-      - "cpa_bridge.enabled=true"
-      - "-c"
-      - 'cpa_bridge.credential_id="worker-a"'
-      - "-c"
-      - 'cli_auth_credentials_store="file"'
+      CODEX_CPA_WORKER_ID: worker-a
+      CODEX_CPA_AUTH_FILE: /cpa-auth/worker-a.json
+      CODEX_CPA_BRIDGE_KEY: ${CODEX_BRIDGE_TOKEN:?Set the bridge key}
+      # CODEX_CPA_PORT defaults to 38317; further workers use 38318, 38319, etc.
     volumes:
+      - ${CLI_PROXY_AUTH_PATH:-./auths}:/cpa-auth
       - codex_worker_a_home:/var/lib/codex
-      - codex_worker_a_socket:/run/codex
     # Keep extra_hosts and DNS configuration on cli-proxy-api. Docker container
     # networking inherits its networking files and rejects per-worker overrides.
     restart: unless-stopped
 
 volumes:
   codex_worker_a_home:
-  codex_worker_a_socket:

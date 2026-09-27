@@ -42,7 +42,7 @@ func TestGetCodexCapabilities(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if body := rec.Body.String(); body != `{"system_scoped_oauth":true}` {
+	if body := rec.Body.String(); body != `{"codex_runtime":true,"system_scoped_oauth":true}` {
 		t.Fatalf("body = %q", body)
 	}
 }

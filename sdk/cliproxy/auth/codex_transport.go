@@ -35,6 +35,9 @@ func (m *Manager) drainCodexSessionPool() {
 }
 
 func (m *Manager) codexWebsocketAuthEnabled(auth *Auth) bool {
+	if IsCodexRuntimeOwnedAuth(auth) {
+		return false
+	}
 	cfg := m.runtimeConfigSnapshot()
 	if cfg != nil && cfg.Codex.Basispoints.Enabled && auth != nil && strings.EqualFold(auth.Provider, "codex") {
 		return false
