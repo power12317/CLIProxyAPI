@@ -12,6 +12,10 @@ var SharedCache Cache
 
 // AccountID reads account metadata only; upstream performs token verification.
 func AccountID(token string) string {
+	return accountClaim(token, "chatgpt_account_id")
+}
+
+func accountClaim(token, name string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return ""
@@ -21,14 +25,14 @@ func AccountID(token string) string {
 		return ""
 	}
 	var claims struct {
-		Auth struct {
-			Account string `json:"chatgpt_account_id"`
-		} `json:"https://api.openai.com/auth"`
+		Auth map[string]json.RawMessage `json:"https://api.openai.com/auth"`
 	}
 	if json.Unmarshal(raw, &claims) != nil {
 		return ""
 	}
-	return claims.Auth.Account
+	var value string
+	_ = json.Unmarshal(claims.Auth[name], &value)
+	return value
 }
 
 func Headers(token, account string) http.Header {
@@ -53,6 +57,9 @@ func Headers(token, account string) http.Header {
 	} {
 		headers.Set(name, value)
 	}
+	if userID := accountClaim(token, "chatgpt_account_user_id"); userID != "" {
+		headers.Set("X-OpenAI-Account-User-Id", userID)
+	}
 	return headers
 }
 
@@ -62,7 +69,7 @@ func ResponseHeaders(headers http.Header, stream bool) http.Header {
 	if out == nil {
 		out = make(http.Header)
 	}
-	for _, key := range []string{"Set-Cookie", "Set-Cookie2", "Content-Length", "Content-Encoding", "Transfer-Encoding"} {
+	for _, key := range []string{"Set-Cookie", "Set-Cookie2", "Content-Length", "Content-Encoding", "Transfer-Encoding", "Connection", "Upgrade", "Sec-WebSocket-Accept", "Sec-WebSocket-Protocol", "Sec-WebSocket-Extensions"} {
 		out.Del(key)
 	}
 	if stream {

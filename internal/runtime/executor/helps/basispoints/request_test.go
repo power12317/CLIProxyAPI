@@ -110,7 +110,7 @@ func TestPrepareMetadataLimitsDoNotSplitUnicodeOrRoundNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := gjson.GetBytes(body, "metadata").Map()
-	if len(metadata) != 5 || metadata["large"].String() != "9007199254740993" || metadata[strings.Repeat("界", 64)].String() != strings.Repeat("界", 512) {
+	if len(metadata) != 6 || metadata["large"].String() != "9007199254740993" || metadata[strings.Repeat("界", 64)].String() != strings.Repeat("界", 512) {
 		t.Fatalf("metadata is not wire-safe: %s", body)
 	}
 	if !utf8.Valid(body) {

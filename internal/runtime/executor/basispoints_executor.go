@@ -25,8 +25,9 @@ import (
 // BasispointsExecutor shares the Codex credential lifecycle and changes only the
 // upstream interface and its request/response protocol.
 type BasispointsExecutor struct {
-	cfg      *config.Config
-	cooldown *basispoints.Cooldown
+	cfg           *config.Config
+	cooldown      *basispoints.Cooldown
+	websocketDial basispoints.WebsocketDial
 }
 
 func NewBasispointsExecutor(cfg *config.Config) *BasispointsExecutor {
@@ -130,20 +131,54 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		helps.RecordBasispointsFailure(ctx, e.cfg, original, nil, nil, "attachment_upload", err)
 		return nil, nil, nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, basispoints.ResponsesURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	httpReq.Header = headers
 	var authLabel, authType, authValue string
 	if auth != nil {
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
-	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{URL: httpReq.URL.String(), Method: httpReq.Method, Headers: httpReq.Header.Clone(), Body: body, Provider: "codex", AuthID: authID, AuthLabel: authLabel, AuthType: authType, AuthValue: authValue})
-	response, err := client.Do(httpReq)
+	upstreamLog := helps.UpstreamRequestLog{URL: basispoints.ResponsesURL, Method: http.MethodPost, Headers: headers.Clone(), Body: body, Provider: "codex", AuthID: authID, AuthLabel: authLabel, AuthType: authType, AuthValue: authValue}
+	wantWebsocket := coreexecutor.DownstreamWebsocket(ctx) || coreexecutor.PreferredUpstreamWebsocket(ctx) || (e.cfg != nil && e.cfg.Codex.ForceWebsocket)
+	var wsRequest *basispoints.WebsocketRequest
+	if wantWebsocket {
+		wsRequest, err = basispoints.NewWebsocketRequest(headers, body)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if !wsRequest.FitsMessageLimit() {
+			wsRequest = nil
+		}
+	}
+	target := basispoints.ResponsesURL
+	if wsRequest != nil {
+		target = wsRequest.URL
+		turnState = helps.NewBasispointsLogState(ctx, auth, target, req.Payload, body, opts.Headers, baseModel)
+		turnState.ObserveRequest(headers, nil)
+	}
+	var response *http.Response
+	if wsRequest != nil {
+		response, err = e.openWebsocket(ctx, auth, wsRequest, upstreamLog, reporter, func(raw []byte) {
+			turnState.ObserveEvent(raw)
+			helps.AppendAPIResponseChunk(ctx, e.cfg, append(append([]byte("data: "), raw...), '\n', '\n'))
+		})
+	}
+	if wsRequest == nil || errors.Is(err, coreexecutor.ErrCodexWebsocketFallback) {
+		if target != basispoints.ResponsesURL {
+			turnState = helps.NewBasispointsLogState(ctx, auth, basispoints.ResponsesURL, req.Payload, body, opts.Headers, baseModel)
+			turnState.ObserveRequest(headers, nil)
+		}
+		target = basispoints.ResponsesURL
+		coreexecutor.ReportUpstreamWebsocket(ctx, false)
+		httpReq, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, basispoints.ResponsesURL, bytes.NewReader(body))
+		if errRequest != nil {
+			return nil, nil, nil, errRequest
+		}
+		httpReq.Header = headers
+		helps.RecordAPIRequest(ctx, e.cfg, upstreamLog)
+		response, err = client.Do(httpReq)
+	}
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
+		helps.RecordBasispointsFailure(ctx, e.cfg, original, body, nil, "upstream_transport", err, target)
 		return nil, nil, nil, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, response.StatusCode, response.Header.Clone())
@@ -151,12 +186,15 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	turnState.ObserveResponse(response)
 	turnState.LogResponse(ctx, e.cfg, false)
 	bridge.ObserveEvent = func(raw []byte) {
+		if response.StatusCode == http.StatusSwitchingProtocols {
+			reporter.MarkFirstResponseByte()
+		}
 		turnState.ObserveEvent(raw)
 		if !strings.Contains(response.Header.Get("Content-Type"), "application/json") {
 			helps.AppendAPIResponseChunk(ctx, e.cfg, append(append([]byte("data: "), raw...), '\n', '\n'))
 		}
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response.StatusCode != http.StatusSwitchingProtocols && (response.StatusCode < 200 || response.StatusCode >= 300) {
 		defer func() {
 			if errClose := response.Body.Close(); errClose != nil {
 				log.WithError(errClose).Debug("basispoints: close error response")
@@ -171,10 +209,11 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		requestScoped := (&basispoints.Error{Status: response.StatusCode}).IsRequestScoped()
 		errRejected := statusErr{code: response.StatusCode, msg: string(raw), requestScoped: requestScoped, retryAfter: openAICompatRetryAfter(response.StatusCode, response.Header, raw, time.Now())}
 		if requestScoped {
-			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, raw, "upstream_rejected", errRejected)
+			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, raw, "upstream_rejected", errRejected, target)
 		}
 		return nil, nil, nil, errRejected
 	}
+	bridge.UpstreamURL = target
 	return response, bridge, body, nil
 }
 
@@ -203,7 +242,7 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 		if len(opts.OriginalRequest) > 0 {
 			original = opts.OriginalRequest
 		}
-		helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", err)
+		helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", err, bridge.UpstreamURL)
 		return result, err
 	}
 	if len(completed) == 0 {
@@ -273,7 +312,7 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 			if len(opts.OriginalRequest) > 0 {
 				original = opts.OriginalRequest
 			}
-			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", errRead)
+			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", errRead, bridge.UpstreamURL)
 			reporter.PublishFailure(ctx, errRead)
 			select {
 			case out <- coreexecutor.StreamChunk{Err: errRead}:
@@ -286,7 +325,12 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 	return &coreexecutor.StreamResult{Headers: basispoints.ResponseHeaders(response.Header, true), Chunks: out}, nil
 }
 
-func (e *BasispointsExecutor) read(ctx context.Context, response *http.Response, bridge *basispoints.Bridge, emit func([]byte) error) error {
+func (e *BasispointsExecutor) read(ctx context.Context, response *http.Response, bridge *basispoints.Bridge, emit func([]byte) error) (err error) {
+	defer func() {
+		if err != nil && response.StatusCode == http.StatusSwitchingProtocols {
+			err = &coreexecutor.CodexReplayUnsafeError{Cause: err}
+		}
+	}()
 	if strings.Contains(response.Header.Get("Content-Type"), "application/json") {
 		raw, err := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 		if err != nil {

@@ -21,7 +21,7 @@ import (
 // RecordBasispointsFailure promotes this failed request to full local error
 // logging even with request-log disabled. Request bodies and the failing event
 // are complete; authorization headers are not copied into these diagnostics.
-func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original, wire, upstream []byte, phase string, err error) {
+func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original, wire, upstream []byte, phase string, err error, targets ...string) {
 	if cfg == nil || cfg.CommercialMode || err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
@@ -36,8 +36,15 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 	fullLogging := *cfg
 	fullLogging.RequestLog = true
 	if !cfg.RequestLog || phase == "prepare" || phase == "attachment_upload" {
+		target, method := basispoints.ResponsesURL, http.MethodPost
+		if len(targets) > 0 && targets[0] != "" {
+			target = targets[0]
+			if strings.HasPrefix(target, "wss://") || strings.HasPrefix(target, "ws://") {
+				method = http.MethodGet
+			}
+		}
 		RecordAPIRequest(ctx, &fullLogging, UpstreamRequestLog{
-			URL: basispoints.ResponsesURL, Method: http.MethodPost, Body: wire, Provider: "codex",
+			URL: target, Method: method, Body: wire, Provider: "codex",
 		})
 	}
 	RecordAPIResponseError(ctx, &fullLogging, fmt.Errorf("Basispoints phase=%s: %w", phase, err))

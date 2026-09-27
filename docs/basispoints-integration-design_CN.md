@@ -56,7 +56,7 @@ CPAMP 在现有 Codex 配置附近增加：
   → 现有鉴权、账号轮询和凭据刷新
   → basispoints.enabled
       false → 现有 Codex executor
-      true  → Basispoints 协议适配 → Basispoints HTTP/SSE
+      true  → Basispoints 协议适配 → Basispoints HTTP/SSE 或原生 WebSocket
   → 按原客户端协议返回结果或上游错误
 ```
 
@@ -122,6 +122,10 @@ x-basispoints-auth-mode: chatgpt
 只转交本次客户端声明的工具，避免把上游其它 Office 工具当作本地工具执行。回放数据按会话和账号关联，使用有界缓存。
 
 同一用户轮的工具回合保持 `turn_id`，只递增 `agent_iteration`；传输重试不制造新 turn。新的用户轮才生成新的 turn 标识。
+
+2026-09-27 原生协议对齐：令牌存在 `chatgpt_account_user_id` 时补充 `X-OpenAI-Account-User-Id`，默认携带 `metadata.bps_tools_version_id=tools-excel-core-2026-06-16-3af59f22`。`agent_iteration` 按工具结果批次推进，同一次模型输出中的多个并行工具结果只推进一轮。`turn_id`、模型和强度处理保持原有实现。
+
+开启强制 WebSocket 或下游使用 WebSocket 时，Basispoints 使用自身的 WSS 握手与 `response.create` 协议；普通请求继续使用 SSE。流中断使用恢复令牌和游标续传，已有请求不通过重新生成来恢复。握手连续失败五次后本次回退 SSE，认证、策略及参数错误直接保留；403 仍触发半小时暂停。完整历史桥接与账号轮转继续使用原有逻辑。详见 [原生传输说明](basispoints-native-transport.md)。
 
 ### 5.4 流式与错误
 

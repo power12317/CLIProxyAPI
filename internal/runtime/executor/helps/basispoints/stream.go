@@ -97,7 +97,7 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 				}
 				return nil
 			}
-		case "response.completed", "response.done", "response.incomplete", "response.failed":
+		case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled":
 			response, ok := event["response"].(object)
 			if !ok {
 				return failure(502, "invalid_stream", "terminal event has no response object")
@@ -107,7 +107,7 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 			// contain an unfinished run_officejs envelope. Text still streams live.
 			for _, value := range items {
 				if item, ok := value.(object); ok && isTool(item) {
-					if kind == "response.failed" || kind == "response.incomplete" {
+					if kind == "response.failed" || kind == "response.incomplete" || kind == "response.cancelled" {
 						return failure(502, "incomplete_tools", "Basispoints did not complete the tool response")
 					}
 					if _, errConvert := b.convertItem(item); errConvert != nil {
@@ -146,7 +146,7 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 			if err = send(event); err != nil {
 				return err
 			}
-			if kind == "response.failed" {
+			if kind == "response.failed" || kind == "response.cancelled" {
 				return StreamError(raw)
 			}
 			return nil

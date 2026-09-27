@@ -18,6 +18,7 @@ import (
 )
 
 const ResponsesURL = "https://bps.openai.com/basispoints/api/responses"
+const ToolsVersionID = "tools-excel-core-2026-06-16-3af59f22"
 const maxItemBytes = 8 << 20
 
 type object = map[string]any
@@ -106,6 +107,8 @@ type Bridge struct {
 	ObserveEvent func([]byte)
 	// LastEvent retains the complete event that failed conversion for error logs.
 	LastEvent []byte
+	// UpstreamURL identifies the selected transport in failure diagnostics.
+	UpstreamURL string
 }
 
 func decode(raw []byte) (object, error) {
@@ -271,6 +274,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	}
 	bridge.scope = digest([]string{scope, session})
 	turnIndex, iteration := -1, 1
+	resultBatch := false
 	var turnContent any
 	translatedInput := make([]any, 0, len(input))
 	seenCalls := make(map[string]bool)
@@ -282,6 +286,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		delete(item, "internal_chat_message_metadata_passthrough")
 		if item["role"] == "user" {
 			turnIndex, iteration, turnContent = i, 1, item["content"]
+			resultBatch = false
 		}
 		kind := stringValue(item["type"])
 		if kind == "additional_tools" {
@@ -302,6 +307,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		}
 		callID := stringValue(item["call_id"])
 		if kind == "function_call" || kind == "custom_tool_call" {
+			resultBatch = false
 			native := cache.get(bridge.scope + "/" + callID)
 			if native == nil {
 				native, err = rebuildToolCall(item)
@@ -331,7 +337,12 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			}
 			delete(item, "name")
 			delete(item, "namespace")
-			iteration++
+			// Parallel results from one model response advance one agent iteration.
+			// Deriving this from history keeps retries and account rotation stable.
+			if !resultBatch {
+				iteration++
+				resultBatch = true
+			}
 		}
 		translatedInput = append(translatedInput, item)
 	}
@@ -377,6 +388,9 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		}
 	}
 	metadata := requestMetadata(body["metadata"])
+	if stringValue(metadata["bps_tools_version_id"]) == "" {
+		metadata["bps_tools_version_id"] = ToolsVersionID
+	}
 	metadata["task_id"] = uuid.NewSHA1(uuid.NameSpaceURL, []byte(bridge.scope)).String()
 	metadata["turn_id"] = uuid.NewSHA1(uuid.NameSpaceURL, []byte(bridge.scope+"/"+strconv.Itoa(turnIndex)+"/"+digest(turnContent))).String()
 	metadata["agent_iteration"] = strconv.Itoa(iteration)

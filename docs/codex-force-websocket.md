@@ -6,6 +6,12 @@ implicit default destination. It does not rewrite custom provider destinations o
 change downstream authentication, protocol, or response format. Standalone
 `responses/compact` continues to use its HTTP endpoint.
 
+When Basispoints routing is enabled, this setting also selects the native
+Basispoints WebSocket transport. A downstream WebSocket request selects that
+transport even with this setting disabled. See
+[Basispoints native transport](basispoints-native-transport.md) for its distinct
+handshake, resume protocol, and SSE fallback rules.
+
 ```yaml
 codex:
   force-websocket: true
