@@ -219,7 +219,11 @@ stream_max_retries = 0
 	if _, err := auto.Execute(loggedCtx, auth, req, opts); err != nil {
 		t.Fatal(err)
 	}
-	assertLogs(ginCtx, 2)
+	assertLogs(ginCtx, int(posts.Load()))
+	firstResponses, _ := ginCtx.Get("API_RESPONSE")
+	if !strings.Contains(string(firstResponses.([]byte)), "Status: 401") {
+		t.Fatal("upstream authentication recovery missing from logs")
+	}
 	meta, err := codexshared.Read(sharedFile)
 	if err != nil {
 		t.Fatal(err)

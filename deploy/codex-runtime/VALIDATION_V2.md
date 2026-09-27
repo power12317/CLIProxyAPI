@@ -81,7 +81,40 @@ handoff protocol was added. The user explicitly declined extra protective
 mechanisms; concurrent refresh and mode switching are not strictly serialized.
 Existing ordinary in-process bookkeeping and official OAuth behavior remain.
 
-No real account credentials or paid inference were used. Linux container images
-were not built (the local Docker daemon did not respond in the Codex task), no
-images/branches were pushed, and no server deployment was performed. Actual
-server IPv6 reachability and real-account authorization remain deployment tests.
+No real account credentials or paid inference were used. The initial v2 validation
+above did not build or push Linux images. Actual server IPv6 reachability and
+real-account authorization remain deployment tests.
+
+## Request-log parity and branch publication (2026-09-27)
+
+The runtime bridge now sends ordered, actual upstream request, response and
+transport-error entries into CPA's existing log helpers. This includes attempts
+made during official authentication recovery, complete response JSON events,
+upstream failure bodies/headers/status, credential/session/turn/model fields,
+gateway node, and cancellation. The existing usage pipeline remains in place;
+the shared credential keeps its `codex` provider label.
+
+Validation completed:
+
+- `go test ./...`: 100 packages passed.
+- Focused runtime, bridge and turn-state race tests passed.
+- Required `go build -o test-output ./cmd/server && rm test-output` passed.
+- `TestCodexRuntimeForkV2OAuthAndModeSwitch` passed against the updated actual
+  fork binary. It checks OAuth, refresh, switching back to native CPA and then
+  back to runtime streaming, plus logs from each path. The logged attempt count
+  must equal the mock upstream's actual request count; the test does not assume
+  a fixed number of requests in the official authentication-recovery sequence.
+- The full server Compose parses successfully and contains only CPA, one Codex
+  worker and gost. CPAMP is independently deployed.
+
+CPAMP's existing request/error-log proxy and request-monitoring pipeline need no
+production logging changes. Its dedicated topic added native/runtime regression
+coverage. Log structure, retrieval and correlation remain shared; actual headers,
+bodies and upstream attempts reflect the selected executor. Successful runtime
+streams preserve complete JSON events, not an exact copy of raw SSE comment,
+event-name or ID lines.
+
+The CPA branch automatically publishes `ghcr.io/power12317/cliproxyapi:codex-runtime`
+and `:codex-runtime-<full commit>` for Linux amd64/arm64. The other projects publish
+their own branch images. See README_CN.md for deployment references and each
+repository's Actions run for the exact commit being published.
