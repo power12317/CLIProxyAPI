@@ -45,9 +45,13 @@ func TestNativeRoutingUsesSelectionInsteadOfDeclarations(t *testing.T) {
 
 func TestNativeRoutingPreservesHostedHistory(t *testing.T) {
 	for _, kind := range []string{"web_search_call", "image_generation_call", "mcp_call", "tool_search_call"} {
-		body, _ := json.Marshal(object{"input": []any{object{"type": kind, "execution": "server"}}})
-		if NativeToolReason(body) != kind {
-			t.Fatalf("native history %s was misrouted", kind)
+		completed, _ := json.Marshal(object{"input": []any{object{"type": kind, "execution": "server", "status": "completed"}}})
+		if NativeToolReason(completed) != "" {
+			t.Fatalf("completed native history %s was incorrectly routed", kind)
+		}
+		active, _ := json.Marshal(object{"input": []any{object{"type": kind, "execution": "server", "status": "in_progress"}}})
+		if NativeToolReason(active) != kind {
+			t.Fatalf("active native history %s was not routed", kind)
 		}
 	}
 	body, _ := json.Marshal(object{"input": []any{object{"type": "tool_search_call", "execution": "client"}, object{"type": "tool_search_output", "execution": "client", "tools": []any{object{"type": "function", "name": "local"}}}}})

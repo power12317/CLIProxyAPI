@@ -41,8 +41,16 @@ func NativeToolReason(raw []byte) string {
 	for _, item := range gjson.GetBytes(raw, "input").Array() {
 		switch kind := item.Get("type").String(); kind {
 		case "web_search_call", "file_search_call", "image_generation_call", "code_interpreter_call", "computer_call", "mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response":
+			// Completed hosted items are historical context from an earlier native
+			// turn. Only an active or otherwise unfinished item requires native routing.
+			if item.Get("status").String() == "completed" {
+				continue
+			}
 			return kind
 		case "tool_search_call", "tool_search_output":
+			if item.Get("status").String() == "completed" {
+				continue
+			}
 			if item.Get("execution").String() != "client" {
 				return kind
 			}
