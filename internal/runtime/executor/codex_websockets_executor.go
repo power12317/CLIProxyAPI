@@ -79,6 +79,13 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 }
 
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if e != nil && e.httpExec != nil && isCodexOpenAIImageRequest(opts) {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		if e.basispointsExec.enabled() {
+			helps.LogBasispointsNativeToolRoute(ctx, "openai_image_request")
+		}
+		return e.httpExec.Execute(ctx, auth, req, opts)
+	}
 	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
@@ -130,6 +137,13 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	if e != nil && e.httpExec != nil && isCodexOpenAIImageRequest(opts) {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		if e.basispointsExec.enabled() {
+			helps.LogBasispointsNativeToolRoute(ctx, "openai_image_request")
+		}
+		return e.httpExec.ExecuteStream(ctx, auth, req, opts)
+	}
 	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {

@@ -22,7 +22,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 	cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}, ResponseSteering: true}}
 	executor := NewCodexAutoExecutor(cfg)
 	auth := &coreauth.Auth{ID: "basispoints-route-test", Provider: "codex", Metadata: map[string]any{"access_token": "test-token", "account_id": "test-account", "websockets": true}}
-	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-6-luna", "future-model"} {
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-6-luna", "future-model", "gpt-image-2.5"} {
 		for _, effort := range []string{"", "low", "max", "ultra"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
 				body := `{"model":"` + model + `","input":"hello"}`

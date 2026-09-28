@@ -20,6 +20,13 @@ Its main asset is `x-square-DUrhLSGN.js`, SHA-256
 
 ## Transport selection
 
+Image generation and editing API requests use the existing native Codex image
+executor before Basispoints or Responses WebSocket selection. The existing
+request detector checks the openai-image source format and the generations/edits
+endpoint path, not a model name or prefix. This applies to streaming and
+non-streaming requests, including multipart edits. Completed image_generation_call
+history alone still does not require a native route.
+
 Explicit native tool selections and native hosted-tool continuations are routed
 by CodexAutoExecutor before entering Basispoints. They do not upload Basispoints
 attachments, send a Basispoints request, or dial its WebSocket. The complete client
