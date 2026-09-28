@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -160,6 +162,7 @@ func TestBasispointsAttachment403StartsCooldown(t *testing.T) {
 	})))
 	auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "fixture-token", "account_id": t.Name()}}
 	req := coreexecutor.Request{Model: "gpt-6-astra", Payload: []byte(`{"model":"gpt-6-astra","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,eA=="}]}]}`)}
+	req.Payload = bytes.Replace(req.Payload, []byte("eA=="), []byte(base64.StdEncoding.EncodeToString(basispointsTestPNG(t))), 1)
 	_, err := exec.Execute(ctx, auth, req, coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse})
 	var status interface{ StatusCode() int }
 	if !errors.As(err, &status) || status.StatusCode() != 403 || exec.cooldown.PausedUntil().IsZero() || requests != 1 {

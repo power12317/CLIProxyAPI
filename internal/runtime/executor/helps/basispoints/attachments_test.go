@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,7 +25,7 @@ type attachmentTransport func(*http.Request) (*http.Response, error)
 func (f attachmentTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestInlineImagesUploadAndAccountRotation(t *testing.T) {
-	image := []byte("exact image upload bytes")
+	image := attachmentTestPNG(t)
 	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(image)
 	body := object{"model": "gpt-6-astra", "reasoning_effort": "xhigh", "metadata": object{"turn_id": "same-turn", "number": json.Number("9007199254740993")}, "input": []any{
 		object{"type": "configuration_update", "reasoning": object{"effort": "max"}},
@@ -101,6 +104,8 @@ func TestImagesWithoutInlineDataAreUntouched(t *testing.T) {
 }
 
 func TestAttachmentErrorsKeepStatusAndDoNotCache(t *testing.T) {
+	imageData := attachmentTestPNG(t)
+	encodedImage := base64.StdEncoding.EncodeToString(imageData)
 	for _, tc := range []struct {
 		status int
 		body   string
@@ -112,13 +117,13 @@ func TestAttachmentErrorsKeepStatusAndDoNotCache(t *testing.T) {
 		calls := 0
 		client := &http.Client{Transport: attachmentTransport(func(r *http.Request) (*http.Response, error) {
 			calls++
-			return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+			return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(strings.ReplaceAll(tc.body, "secret-image", encodedImage))), Header: make(http.Header)}, nil
 		})}
-		raw := []byte(`{"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString([]byte("secret-image")) + `"}]}]}`)
+		raw := []byte(`{"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + encodedImage + `"}]}]}`)
 		for i := 0; i < 2; i++ {
 			_, err := UploadInputImages(t.Context(), client, raw, Headers("token", "account"), "caller", cache)
 			var status interface{ StatusCode() int }
-			if !errors.As(err, &status) || status.StatusCode() != tc.want || strings.Contains(err.Error(), "secret-image") || strings.Contains(err.Error(), "token") {
+			if !errors.As(err, &status) || status.StatusCode() != tc.want || strings.Contains(err.Error(), encodedImage) || strings.Contains(err.Error(), "token") {
 				t.Fatalf("status=%d error=%v", tc.status, err)
 			}
 		}
@@ -166,9 +171,11 @@ func TestAttachmentCacheConcurrentUploadAndCancellation(t *testing.T) {
 }
 
 func TestDecodeInlineImageFormats(t *testing.T) {
-	for _, dataURL := range []string{"data:image/png;base64,eA==", "data:image/png;base64,eA%3D%3D", "data:image/png,x", "DATA:image/png;BASE64,eA=="} {
+	imageData := attachmentTestPNG(t)
+	encoded := base64.StdEncoding.EncodeToString(imageData)
+	for _, dataURL := range []string{"data:image/png;base64," + encoded, "data:image/png;base64," + strings.ReplaceAll(encoded, "=", "%3D"), "data:image/png," + url.PathEscape(string(imageData)), "DATA:image/png;BASE64," + encoded} {
 		kind, data, err := decodeInlineImage(dataURL)
-		if err != nil || kind != "image/png" || string(data) != "x" {
+		if err != nil || kind != "image/png" || !bytes.Equal(data, imageData) {
 			t.Fatalf("decode %q: %s %q %v", dataURL, kind, data, err)
 		}
 	}
@@ -177,4 +184,13 @@ func TestDecodeInlineImageFormats(t *testing.T) {
 			t.Fatalf("invalid data URL accepted: %s", dataURL)
 		}
 	}
+}
+
+func attachmentTestPNG(t *testing.T) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	if err := png.Encode(&out, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
 }

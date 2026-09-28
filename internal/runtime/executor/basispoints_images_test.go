@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -16,12 +17,54 @@ import (
 	"sync"
 	"testing"
 
+	gorillaws "github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	"github.com/tidwall/gjson"
 )
+
+func basispointsTestPNG(t *testing.T) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	if err := png.Encode(&out, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+func TestBasispointsInvalidImageDoesNotDispatch(t *testing.T) {
+	for _, websocket := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("websocket=%t/stream=%t", websocket, stream), func(t *testing.T) {
+				calls := 0
+				ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
+					calls++
+					return nil, errors.New("must not upload or generate")
+				})))
+				exec := NewBasispointsExecutor(&config.Config{Codex: config.CodexConfig{ForceWebsocket: websocket}})
+				exec.websocketDial = func(context.Context, string, http.Header, []string) (*gorillaws.Conn, *http.Response, error) {
+					calls++
+					return nil, nil, errors.New("must not open websocket")
+				}
+				body, _ := json.Marshal(map[string]any{"input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64,eA=="}}}}})
+				req := coreexecutor.Request{Model: "gpt-6-sol", Payload: body}
+				opts := coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}
+				var err error
+				if stream {
+					_, err = exec.ExecuteStream(ctx, basispointsTestAuth(), req, opts)
+				} else {
+					_, err = exec.Execute(ctx, basispointsTestAuth(), req, opts)
+				}
+				if clienterror.HTTPStatusFromError(err) != 400 || calls != 0 || !strings.Contains(err.Error(), "invalid_image") {
+					t.Fatalf("invalid image dispatch: err=%v calls=%d", err, calls)
+				}
+			})
+		}
+	}
+}
 
 func TestBasispointsImagesAndMaxThroughHTTP(t *testing.T) {
 	for _, stream := range []bool{false, true} {

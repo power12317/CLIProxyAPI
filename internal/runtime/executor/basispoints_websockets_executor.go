@@ -28,6 +28,10 @@ func (e *BasispointsExecutor) openWebsocket(ctx context.Context, auth *coreauth.
 	upstreamLog.Headers = request.Headers.Clone()
 	upstreamLog.Headers.Set("Sec-WebSocket-Protocol", "responses, [REDACTED]")
 	upstreamLog.Body = request.LogFrame()
+	request.ObserveRequest = func(frame []byte) {
+		upstreamLog.Body = frame
+		helps.RecordAPIRequest(ctx, e.cfg, upstreamLog)
+	}
 	for attempt := 0; attempt < coreexecutor.CodexWebsocketMaxFailures; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err

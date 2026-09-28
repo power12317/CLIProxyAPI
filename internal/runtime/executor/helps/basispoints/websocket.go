@@ -24,6 +24,7 @@ type WebsocketDial func(context.Context, string, http.Header, []string) (*websoc
 type WebsocketRequest struct {
 	// ObserveConnection reports only physical connection establishment and closure.
 	ObserveConnection func(bool)
+	ObserveRequest    func([]byte)
 	session           *WebsocketSession
 	URL               string
 	Headers           http.Header
@@ -129,20 +130,22 @@ func (r *WebsocketRequest) Open(ctx context.Context, dial WebsocketDial, observe
 // websocketReader presents native JSON events to the existing SSE protocol bridge.
 // No read or write deadlines are added after connection establishment.
 type websocketReader struct {
-	ctx      context.Context
-	request  *WebsocketRequest
-	dial     WebsocketDial
-	observe  func([]byte)
-	stop     func() bool
-	mu       sync.Mutex
-	conn     *websocketConnection
-	exchange *websocketExchange
-	closed   bool
-	resume   string
-	cursor   int64
-	attempts int
-	buffer   bytes.Buffer
-	terminal bool
+	ctx              context.Context
+	request          *WebsocketRequest
+	dial             WebsocketDial
+	observe          func([]byte)
+	stop             func() bool
+	mu               sync.Mutex
+	conn             *websocketConnection
+	exchange         *websocketExchange
+	closed           bool
+	resume           string
+	cursor           int64
+	attempts         int
+	buffer           bytes.Buffer
+	terminal         bool
+	recreated        bool
+	responseObserved bool
 }
 
 func (r *websocketReader) Close() error {
@@ -171,7 +174,22 @@ func (r *websocketReader) finish() {
 	r.request.session.activity.Release()
 }
 
-func (r *websocketReader) reconnect() error {
+func (r *websocketReader) reconnect(resend bool) error {
+	if resend {
+		frame, err := decode(r.request.Frame)
+		if err != nil {
+			return err
+		}
+		r.request.requestID = uuid.NewString()
+		r.request.resume = "resume_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		frame["basispoints_request_id"] = r.request.requestID
+		frame["basispoints_resume_token"] = r.request.resume
+		r.request.Frame, err = json.Marshal(frame)
+		if err != nil {
+			return err
+		}
+		r.resume, r.cursor, r.attempts = r.request.resume, -1, 0
+	}
 	for r.attempts < 3 {
 		if err := r.ctx.Err(); err != nil {
 			return err
@@ -205,11 +223,19 @@ func (r *websocketReader) reconnect() error {
 		r.conn, r.exchange = conn, exchange
 		r.mu.Unlock()
 		frame, _ := json.Marshal(object{"type": "basispoints.response.resume", "resume_token": r.resume, "after_cursor": r.cursor})
+		if resend {
+			frame = r.request.Frame
+			if r.request.ObserveRequest != nil {
+				r.request.ObserveRequest(r.request.LogFrame())
+			}
+		}
 		err = conn.write(frame)
 		if err == nil {
 			return nil
 		}
 		conn.close(err)
+		// A failed write may have dispatched the new generation. Resume it.
+		resend = false
 	}
 	return failure(502, "websocket_resume_failed", "Basispoints WebSocket disconnected and could not resume")
 }
@@ -230,7 +256,7 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 		r.mu.Unlock()
 		raw, err := conn.read(r.ctx, exchange)
 		if err != nil {
-			if err = r.reconnect(); err != nil {
+			if err = r.reconnect(false); err != nil {
 				return 0, err
 			}
 			continue
@@ -253,6 +279,22 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 			}
 			continue
 		}
+		if kind == "error" && event.Get("status").Int() == http.StatusBadRequest && event.Get("error.code").String() == "websocket_connection_limit_reached" {
+			// This connection cannot accept another request. Replace it once for
+			// a rejected generation, independently of credential retry settings.
+			conn.close(io.ErrClosedPipe)
+			if !r.recreated && !r.responseObserved {
+				r.recreated = true
+				if r.observe != nil {
+					r.observe(raw)
+				}
+				if err = r.reconnect(true); err != nil {
+					return 0, err
+				}
+				continue
+			}
+		}
+		r.responseObserved = true
 		if cursor := event.Get("basispoints_replay_cursor"); cursor.Type == gjson.Number {
 			if cursor.Int() <= r.cursor {
 				continue

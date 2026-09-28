@@ -95,14 +95,21 @@ func UploadInputImages(ctx context.Context, client *http.Client, raw []byte, hea
 	if cache == nil {
 		cache = &AttachmentCache{}
 	}
+	type inlineUpload struct {
+		part      object
+		mediaType string
+		data      []byte
+	}
+	var uploads []inlineUpload
 	changed := false
 	items, _ := body["input"].([]any)
 	for _, value := range items {
 		item, _ := value.(object)
-		if item["role"] != "user" || (item["type"] != nil && item["type"] != "" && item["type"] != "message") {
-			continue
-		}
+		userMessage := item["role"] == "user" && (item["type"] == nil || item["type"] == "" || item["type"] == "message")
 		parts, _ := item["content"].([]any)
+		if item["type"] == "function_call_output" || item["type"] == "custom_tool_call_output" {
+			parts, _ = item["output"].([]any)
+		}
 		for _, value := range parts {
 			part, _ := value.(object)
 			imageURL := stringValue(part["image_url"])
@@ -116,26 +123,34 @@ func UploadInputImages(ctx context.Context, client *http.Client, raw []byte, hea
 			if errDecode != nil {
 				return nil, errDecode
 			}
-			// Include the actual credential identity in the digest, without retaining
-			// its token. Cache hits cannot constrain account rotation.
-			imageHash := sha256.Sum256(data)
-			key := Scope(scope, headers.Get("Chatgpt-Account-Id"), headers.Get("Authorization"), mediaType, fmt.Sprintf("%x", imageHash))
-			fileID, errUpload := cache.getOrUpload(ctx, key, func() (string, error) {
-				return uploadImage(ctx, client, headers, mediaType, data)
-			})
-			if errUpload != nil {
-				return nil, errUpload
+			if userMessage {
+				uploads = append(uploads, inlineUpload{part: part, mediaType: mediaType, data: data})
+			} else if end := 5 + strings.IndexAny(imageURL[5:], ";,"); imageURL[5:end] != mediaType {
+				part["image_url"] = "data:" + mediaType + imageURL[end:]
+				changed = true
 			}
-			delete(part, "image_url")
-			part["file_id"] = fileID
-			if _, exists := part["detail"]; !exists {
-				part["detail"] = "auto"
-			}
-			changed = true
 		}
 	}
-	if !changed {
+	if len(uploads) == 0 && !changed {
 		return raw, nil
+	}
+	// Validate the whole request before uploading anything. Tool-result images
+	// are checked too, but keep their existing inline representation.
+	for _, image := range uploads {
+		imageHash := sha256.Sum256(image.data)
+		// Cache identity never changes credential selection or account rotation.
+		key := Scope(scope, headers.Get("Chatgpt-Account-Id"), headers.Get("Authorization"), image.mediaType, fmt.Sprintf("%x", imageHash))
+		fileID, errUpload := cache.getOrUpload(ctx, key, func() (string, error) {
+			return uploadImage(ctx, client, headers, image.mediaType, image.data)
+		})
+		if errUpload != nil {
+			return nil, errUpload
+		}
+		delete(image.part, "image_url")
+		image.part["file_id"] = fileID
+		if _, exists := image.part["detail"]; !exists {
+			image.part["detail"] = "auto"
+		}
 	}
 	return json.Marshal(body)
 }
@@ -153,6 +168,15 @@ func decodeInlineImage(raw string) (string, []byte, error) {
 	if err != nil || !strings.HasPrefix(mediaType, "image/") {
 		return "", nil, failure(400, "invalid_image", "input_image data URL must declare an image media type")
 	}
+	switch mediaType {
+	case "image/jpg", "image/pjpeg":
+		mediaType = "image/jpeg"
+	case "image/x-png":
+		mediaType = "image/png"
+	}
+	if imageExtension(mediaType) == "" {
+		return "", nil, failure(400, "invalid_image", "input_image supports only JPEG, PNG, GIF and WebP")
+	}
 	decoded, err := url.PathUnescape(encoded)
 	if err != nil {
 		return "", nil, failure(400, "invalid_image", "input_image data URL has invalid percent encoding")
@@ -164,16 +188,36 @@ func decodeInlineImage(raw string) (string, []byte, error) {
 	if err != nil || len(data) == 0 {
 		return "", nil, failure(400, "invalid_image", "input_image data URL contains empty or invalid image data")
 	}
+	if http.DetectContentType(data) != mediaType {
+		return "", nil, failure(400, "invalid_image", "input_image bytes do not match the declared image format")
+	}
 	return mediaType, data, nil
 }
 
+// Do not use the host MIME database: it may prefer .jpe or lack an extension.
+func imageExtension(mediaType string) string {
+	switch mediaType {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ""
+	}
+}
+
 func uploadImage(ctx context.Context, client *http.Client, headers http.Header, mediaType string, data []byte) (string, error) {
+	extension := imageExtension(mediaType)
+	if extension == "" {
+		return "", failure(400, "invalid_image", "input_image supports only JPEG, PNG, GIF and WebP")
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	filename := "image"
-	if extensions, _ := mime.ExtensionsByType(mediaType); len(extensions) > 0 {
-		filename += extensions[0]
-	}
+	filename := "image" + extension
 	partHeaders := make(textproto.MIMEHeader)
 	partHeaders.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": filename}))
 	partHeaders.Set("Content-Type", mediaType)

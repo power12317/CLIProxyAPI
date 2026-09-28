@@ -54,6 +54,15 @@ restarting generation. Cancellation before completion still closes the active
 connection, while cancelling an already completed request cannot close the
 retained session connection. No generation read/write deadlines are added.
 
+An initial HTTP-400 error event with code
+`websocket_connection_limit_reached` retires the expired connection and resends
+the full request once on a new WebSocket, even when `request-retry` is zero.
+The request body, session, turn and selected credential stay unchanged; request
+and resume identities are renewed and the replay cursor starts over. This is a
+new `response.create`, not a resume of the rejected generation. Both attempts
+remain in request logs with resume capabilities redacted. Repeated expiry,
+unrelated 400 errors and errors after response events are not blindly replayed.
+
 Before a generation frame has been sent, five failed handshakes trigger SSE
 fallback for that request. The next request tries WebSocket again. Authentication,
 policy, validation, and rate-limit errors are returned directly; HTTP 404, 405,
@@ -75,6 +84,21 @@ their turn identity. Access logs show `POST/WS` for HTTP clients using an
 upstream WebSocket and `WS/WS` when both sides use WebSocket; HTTP fallback keeps
 the ordinary HTTP method label. This formatting does not change request methods,
 or the native Basispoints request and resume protocol fields.
+
+## Image attachments
+
+User-message data-URL images are decoded and uploaded to
+`/basispoints/api/attachments` as a multipart `file` before generation. The returned
+`openai_file_id` becomes the Responses `input_image.file_id`; image detail is kept.
+The whole request is checked before the first upload: JPEG, PNG, GIF and WebP are
+accepted only when the declared MIME type agrees with the file signature.
+JPEG/PNG MIME aliases are normalized. Upload filenames use fixed `.jpg`, `.png`,
+`.gif` and `.webp` suffixes rather than the host's MIME-extension database.
+
+Tool-result data-URL images receive the same validation but remain inline. Their
+bytes and detail are preserved, with only MIME aliases normalized. HTTPS image
+URLs and existing file IDs remain unchanged because their bytes are not available
+for local validation; opaque URLs are not rejected for lacking a suffix.
 
 ## Validation
 
