@@ -20,11 +20,28 @@ Its main asset is `x-square-DUrhLSGN.js`, SHA-256
 
 ## Transport selection
 
-Requests requiring native hosted tools are routed by `CodexAutoExecutor` before
-entering the Basispoints executor. They do not upload Basispoints attachments,
-send a Basispoints request, or dial its WebSocket. Native requests preserve the
-client tool declarations and do not close an already retained Basispoints socket.
-The existing native transport policy still determines HTTP versus WebSocket.
+Explicit native tool selections and native hosted-tool continuations are routed
+by CodexAutoExecutor before entering Basispoints. They do not upload Basispoints
+attachments, send a Basispoints request, or dial its WebSocket. The complete client
+request remains authoritative for the native channel's tool declarations and history.
+
+Optional hosted declarations under automatic tool selection no longer force a
+native route. Their capabilities remain described in the Basispoints prompt. If
+the model actually needs one, it requests the exact cpa.native/TYPE marker through
+run_officejs. The proxy forwards the original request once to native Codex, without
+dispatching any speculative client tools. Malformed tool output, transport errors
+and upstream rejections do not trigger this capability switch or a correction.
+
+For streaming requests with optional native capabilities, the candidate Basispoints
+response is buffered until the complete tool batch resolves the channel decision.
+This delays downstream text and tool events even when the result stays on Basispoints.
+If native Codex is needed, the first candidate response is withheld and only the
+native response is published. Both upstream generations retain their usage records.
+This is a capability switch, not a format-repair retry. Client-only streams retain
+incremental delivery. Cancellation does not start a native request.
+
+Native requests do not close an already retained Basispoints socket. The existing
+native transport policy still determines HTTP versus WebSocket.
 
 With Basispoints enabled, either `codex.force-websocket: true` or a downstream
 WebSocket request selects the native Basispoints WebSocket transport. Ordinary
@@ -134,6 +151,22 @@ Reference: `ranxi2001/sub2api` at
 `backend/internal/service/basispoints/function_code_transport.go` and
 `function_cmd_transport.go`. Only the raw source transport is adopted, not its
 tool-omission policy or corrective model requests.
+
+## Client-executed tool discovery
+
+A tool_search declaration with execution=client is a client capability. Its search
+arguments use the existing client transport and return as a tool_search_call with
+execution=client, an object-valued arguments field, and the original call_id.
+Streaming publishes output_item.added/done rather than function-argument deltas.
+
+The matching tool_search_output loads its returned tool definitions into the next
+request's catalog. Its complete result and call identity replay through the native
+function transport. Complete history also rebuilds after cache loss or account
+rotation. Descriptive annotation changes do not create a conflicting duplicate tool;
+the callable argument contract must still agree. Server-executed tool search remains
+a native capability.
+
+Protocol reference: https://developers.openai.com/api/docs/guides/tools-tool-search
 
 ## Validation
 

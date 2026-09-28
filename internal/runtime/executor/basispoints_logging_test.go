@@ -112,7 +112,7 @@ func TestBasispointsGinLogsUseCodexFieldsOnSuccessAndRejection(t *testing.T) {
 	}
 }
 
-func TestBasispointsHostedToolsUseNativeCodexWithoutRemovingDeclarations(t *testing.T) {
+func TestBasispointsExplicitHostedToolsUseNativeCodexWithoutRemovingDeclarations(t *testing.T) {
 	for _, kind := range []string{"web_search", "image_generation", "tool_search"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream=%v", kind, stream), func(t *testing.T) {
@@ -128,7 +128,7 @@ func TestBasispointsHostedToolsUseNativeCodexWithoutRemovingDeclarations(t *test
 					}
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n"))}, nil
 				})))
-				req := coreexecutor.Request{Model: "gpt-6-astra", Payload: []byte(fmt.Sprintf(`{"model":"gpt-6-astra","input":"hello","tools":[{"type":%q}]}`, kind))}
+				req := coreexecutor.Request{Model: "gpt-6-astra", Payload: []byte(fmt.Sprintf(`{"model":"gpt-6-astra","input":"hello","tool_choice":{"type":%q},"tools":[{"type":%q}]}`, kind, kind))}
 				opts := coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}
 				if stream {
 					result, err := executor.ExecuteStream(ctx, auth, req, opts)

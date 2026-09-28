@@ -127,7 +127,7 @@ func TestBasispointsNativeRouteBeforeNetworkAndRetainsSession(t *testing.T) {
 				if mode == "downstream_ws" {
 					requestCtx = core.WithDownstreamWebsocket(ctx)
 				}
-				invoke(requestCtx, map[string]any{"model": "gpt-6-astra", "tools": tools, "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="}}}}})
+				invoke(requestCtx, map[string]any{"model": "gpt-6-astra", "tool_choice": map[string]any{"type": "web_search"}, "tools": tools, "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="}}}}})
 				if bpsDials.Load() != 1 || bpsFrames.Load() != 1 {
 					t.Fatal("native route contacted Basispoints")
 				}
