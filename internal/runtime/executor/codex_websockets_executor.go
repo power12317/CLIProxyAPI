@@ -75,7 +75,15 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
 			helps.LogBasispointsNativeToolRoute(ctx, reason)
 		} else {
-			return e.basispointsExec.Execute(ctx, auth, req, opts)
+			result, err := e.basispointsExec.Execute(ctx, auth, req, opts)
+			if reason := basispoints.RequestedNativeTool(err); reason != "" {
+				if ctx.Err() != nil {
+					return cliproxyexecutor.Response{}, ctx.Err()
+				}
+				helps.LogBasispointsNativeToolRoute(ctx, reason)
+			} else {
+				return result, err
+			}
 		}
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
@@ -113,7 +121,18 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
 			helps.LogBasispointsNativeToolRoute(ctx, reason)
 		} else {
-			return e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
+			result, err := e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
+			if err == nil && basispoints.OptionalNativeTools(req.Payload) {
+				result, err = helps.BufferNativeToolDecision(ctx, result)
+			}
+			if reason := basispoints.RequestedNativeTool(err); reason != "" {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				helps.LogBasispointsNativeToolRoute(ctx, reason)
+			} else {
+				return result, err
+			}
 		}
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {

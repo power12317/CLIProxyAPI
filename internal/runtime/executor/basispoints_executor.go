@@ -242,6 +242,10 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 		return nil
 	})
 	if err != nil {
+		if basispoints.RequestedNativeTool(err) != "" {
+			e.publish(ctx, reporter, []byte(gjson.GetBytes(bridge.LastEvent, "response").Raw))
+			return result, err
+		}
 		e.observeError(ctx, err)
 		original := req.Payload
 		if len(opts.OriginalRequest) > 0 {
@@ -312,13 +316,17 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 			return nil
 		})
 		if errRead != nil {
-			e.observeError(ctx, errRead)
-			original := req.Payload
-			if len(opts.OriginalRequest) > 0 {
-				original = opts.OriginalRequest
+			if basispoints.RequestedNativeTool(errRead) != "" {
+				e.publish(ctx, reporter, []byte(gjson.GetBytes(bridge.LastEvent, "response").Raw))
+			} else {
+				e.observeError(ctx, errRead)
+				original := req.Payload
+				if len(opts.OriginalRequest) > 0 {
+					original = opts.OriginalRequest
+				}
+				helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", errRead, bridge.UpstreamURL)
+				reporter.PublishFailure(ctx, errRead)
 			}
-			helps.RecordBasispointsFailure(ctx, e.cfg, original, body, bridge.LastEvent, "response_conversion", errRead, bridge.UpstreamURL)
-			reporter.PublishFailure(ctx, errRead)
 			select {
 			case out <- coreexecutor.StreamChunk{Err: errRead}:
 			case <-ctx.Done():
@@ -332,7 +340,7 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 
 func (e *BasispointsExecutor) read(ctx context.Context, response *http.Response, bridge *basispoints.Bridge, emit func([]byte) error) (err error) {
 	defer func() {
-		if err != nil && response.StatusCode == http.StatusSwitchingProtocols {
+		if err != nil && response.StatusCode == http.StatusSwitchingProtocols && basispoints.RequestedNativeTool(err) == "" {
 			err = &coreexecutor.CodexReplayUnsafeError{Cause: err}
 		}
 	}()

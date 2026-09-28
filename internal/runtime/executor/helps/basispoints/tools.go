@@ -34,6 +34,8 @@ func toolInstructions(catalog []tool) string {
 			if isClientExecTool(spec) {
 				out.WriteString("This custom tool runs JavaScript that calls client tools. For a shell command, use raw code such as: const result = await tools.exec_command({\"cmd\":\"pwd\"}); text(result); Put that JavaScript directly in code with the raw transport summary above. The cmd/workdir object belongs to tools.exec_command; it is not the input of this custom tool.\n")
 			}
+		} else if spec.Type == "tool_search" {
+			out.WriteString("This is client-executed tool discovery. Use the ordinary FUNCTION envelope with name tool_search and the declared search arguments. The client performs the lookup and returns tool_search_output; its loaded tools become available on the next request.\n")
 		} else if field := rawFunctionField(spec); field != "" {
 			fmt.Fprintf(&out, "Use FUNCTION_%s transport: set summary to exactly %s%s/%s and put the exact %s argument directly in code. Put all other supplied arguments in one JSON object in extended_summary, or {} when there are none. Do not include %s in that object. This replaces the ordinary FUNCTION envelope for this tool; do not JSON-wrap, fence or re-escape the source text.\n", strings.ToUpper(field), rawFunctionPrefix, field, toolKey(spec), field, field)
 		}
@@ -56,6 +58,9 @@ func envelopeField(envelope object, primary, alias string) (any, error) {
 
 func (b *Bridge) transportEnvelope(arguments object) (object, error) {
 	for depth := 0; depth < 3; depth++ {
+		if err := b.nativeSelection(arguments); err != nil {
+			return nil, err
+		}
 		if envelope, marked, err := b.rawFunctionEnvelope(arguments); marked {
 			return envelope, err
 		}
@@ -99,6 +104,9 @@ func (b *Bridge) transportEnvelope(arguments object) (object, error) {
 
 func (b *Bridge) convertTool(native object) (object, error) {
 	name := stringValue(native["name"])
+	if native["type"] == "tool_search_call" && native["execution"] == "client" {
+		name = "tool_search"
+	}
 	wrapped := nativeName(name)
 	var envelope object
 	var err error
@@ -106,6 +114,9 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		arguments, errParse := toolObject(native["arguments"], "outer_arguments")
 		if errParse != nil {
 			return nil, errParse
+		}
+		if strings.HasPrefix(stringValue(arguments["summary"]), nativeRoutePrefix) && stringValue(native["call_id"]) == "" {
+			return nil, failure(502, "invalid_tool_envelope", "native capability call is missing call_id")
 		}
 		envelope, err = b.transportEnvelope(arguments)
 		if err != nil {
@@ -147,6 +158,18 @@ func (b *Bridge) convertTool(native object) (object, error) {
 			return nil, errInput
 		}
 		result["type"], result["input"] = "custom_tool_call", input
+	} else if spec.Type == "tool_search" {
+		args, errArgs := envelopeField(envelope, "arguments", "args")
+		if errArgs != nil {
+			return nil, errArgs
+		}
+		arguments, errParse := toolObject(args, "tool_search_arguments")
+		if errParse != nil {
+			return nil, errParse
+		}
+		result["type"], result["execution"], result["arguments"] = "tool_search_call", "client", arguments
+		delete(result, "name")
+		delete(result, "namespace")
 	} else {
 		args, errArgs := envelopeField(envelope, "arguments", "args")
 		if errArgs != nil {
@@ -197,6 +220,9 @@ func (b *Bridge) lookupTool(key string) (tool, bool) {
 
 func (b *Bridge) rebuildToolCall(call object) (object, error) {
 	id, name := stringValue(call["call_id"]), stringValue(call["name"])
+	if call["type"] == "tool_search_call" && call["execution"] == "client" {
+		name = "tool_search"
+	}
 	if id == "" || name == "" {
 		return nil, failure(400, "tool_replay_missing", "tool history requires a complete call_id and name")
 	}

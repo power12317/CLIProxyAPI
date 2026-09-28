@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -98,11 +97,12 @@ func (c *Cache) get(key string) object {
 
 // Bridge is request-scoped; the cache is shared across requests and configuration reloads.
 type Bridge struct {
-	cache   *Cache
-	scope   string
-	tools   map[string]tool
-	choice  string
-	emitted map[string]object
+	cache       *Cache
+	scope       string
+	tools       map[string]tool
+	nativeTools map[string][]object
+	choice      string
+	emitted     map[string]object
 	// ObserveEvent receives untouched upstream events for the existing CPA logs.
 	ObserveEvent func([]byte)
 	// LastEvent retains the complete event that failed conversion for error logs.
@@ -160,7 +160,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	if value := stringValue(body["previous_response_id"]); value != "" {
 		return nil, nil, failure(400, "full_history_required", "Basispoints requires full input history instead of previous_response_id")
 	}
-	bridge := &Bridge{cache: cache, tools: make(map[string]tool), emitted: make(map[string]object)}
+	bridge := &Bridge{cache: cache, tools: make(map[string]tool), nativeTools: make(map[string][]object), emitted: make(map[string]object)}
 	var catalog []tool
 	var collect func([]any, string) error
 	collect = func(entries []any, namespace string) error {
@@ -180,7 +180,12 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 				}
 				continue
 			}
-			if kind != "function" && kind != "custom" {
+			if kind == "tool_search" && item["execution"] == "client" {
+				name = "tool_search"
+			} else if nativeToolKind(kind) {
+				bridge.nativeTools[kind] = append(bridge.nativeTools[kind], clone(item))
+				continue
+			} else if kind != "function" && kind != "custom" {
 				return failure(400, "unsupported_tool", "Basispoints relay supports function and custom client tools")
 			}
 			key := name
@@ -199,7 +204,9 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			}
 			entry := tool{Name: name, Namespace: namespace, Type: kind, Description: stringValue(item["description"]), Parameters: parameters, Format: item["format"], Strict: item["strict"]}
 			if previous, exists := bridge.tools[key]; exists {
-				if digest(previous) != digest(entry) {
+				contract := previous
+				contract.Description = entry.Description
+				if digest(contract) != digest(entry) {
 					return failure(400, "invalid_tool", "conflicting client tool declaration: "+key)
 				}
 				continue
@@ -215,7 +222,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	}
 	if items, ok := body["input"].([]any); ok {
 		for _, value := range items {
-			if item, ok := value.(object); ok && item["type"] == "additional_tools" {
+			if item, ok := value.(object); ok && (item["type"] == "additional_tools" || item["type"] == "tool_search_output" && item["execution"] == "client") {
 				additional, _ := item["tools"].([]any)
 				if err = collect(additional, ""); err != nil {
 					return nil, nil, err
@@ -228,11 +235,14 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		bridge.choice = choice
 	case object:
 		bridge.choice = stringValue(choice["name"])
+		if choice["type"] == "tool_search" {
+			bridge.choice = "tool_search"
+		}
 		if ns := stringValue(choice["namespace"]); ns != "" {
 			bridge.choice = ns + "." + bridge.choice
 		}
 	}
-	if bridge.choice == "required" && len(catalog) == 0 {
+	if bridge.choice == "required" && len(catalog) == 0 && len(bridge.nativeTools) == 0 {
 		return nil, nil, failure(400, "invalid_tool_choice", "tool_choice requires a client tool")
 	}
 	if bridge.choice != "" && bridge.choice != "auto" && bridge.choice != "none" && bridge.choice != "required" {
@@ -306,7 +316,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			continue
 		}
 		callID := stringValue(item["call_id"])
-		if kind == "function_call" || kind == "custom_tool_call" {
+		if kind == "function_call" || kind == "custom_tool_call" || kind == "tool_search_call" && item["execution"] == "client" {
 			resultBatch = false
 			native := cache.get(bridge.scope + "/" + callID)
 			if native == nil {
@@ -320,6 +330,14 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			}
 			item = native
 			seenCalls[callID] = true
+		}
+		if kind == "tool_search_output" && item["execution"] == "client" {
+			output, errOutput := json.Marshal(item)
+			if errOutput != nil {
+				return nil, nil, errOutput
+			}
+			item = object{"type": "function_call_output", "call_id": callID, "output": string(output)}
+			kind = "function_call_output"
 		}
 		if kind == "function_call_output" || kind == "custom_tool_call_output" {
 			native := cache.get(bridge.scope + "/" + callID)
@@ -354,11 +372,12 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	if instructions := stringValue(body["instructions"]); instructions != "" {
 		prologue = append(prologue, message("developer", instructions))
 	}
-	instructions := "This is an external Responses client. Do not execute Office or workbook operations. Only tools in the client catalog are available."
-	if len(catalog) > 0 && bridge.choice != "none" {
+	instructions := "This is an external Responses client. Do not execute Office or workbook operations. Use only the client tools and native capabilities described below."
+	if (len(catalog) > 0 || bridge.nativeToolsAvailable()) && bridge.choice != "none" {
 		instructions += toolInstructions(catalog)
+		instructions += bridge.nativeToolInstructions()
 		if bridge.choice == "required" {
-			instructions += " You must invoke a client tool."
+			instructions += " You must invoke an available tool."
 		} else if bridge.choice != "" && bridge.choice != "auto" {
 			instructions += " Invoke only this tool: " + bridge.choice
 		}
@@ -408,6 +427,11 @@ func (b *Bridge) convertItem(item object) (object, error) {
 
 func (b *Bridge) convertResponse(response object) error {
 	items, _ := response["output"].([]any)
+	if response["status"] == nil || response["status"] == "completed" {
+		if err := b.nativeIntent(items); err != nil {
+			return err
+		}
+	}
 	for i, value := range items {
 		item, ok := value.(object)
 		if !ok {
@@ -465,5 +489,5 @@ func eventType(event object, name string) object {
 }
 
 func isTool(item object) bool {
-	return strings.HasSuffix(stringValue(item["type"]), "_call") && (item["type"] == "function_call" || item["type"] == "custom_tool_call")
+	return item["type"] == "function_call" || item["type"] == "custom_tool_call" || item["type"] == "tool_search_call" && item["execution"] == "client"
 }

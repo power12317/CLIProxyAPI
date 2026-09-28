@@ -47,6 +47,18 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 		if converted["type"] == "custom_tool_call" {
 			field, event = "input", "response.custom_tool_call_input"
 		}
+		if converted["type"] == "tool_search_call" {
+			added := clone(converted)
+			added["arguments"], added["status"] = object{}, "in_progress"
+			if err = send(object{"type": "response.output_item.added", "output_index": index, "item": added}); err != nil {
+				return err
+			}
+			if err = send(object{"type": "response.output_item.done", "output_index": index, "item": converted}); err != nil {
+				return err
+			}
+			b.emitted[id] = converted
+			return nil
+		}
 		added := clone(converted)
 		added[field] = ""
 		added["status"] = "in_progress"
@@ -103,6 +115,11 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 				return failure(502, "invalid_stream", "terminal event has no response object")
 			}
 			items, _ := response["output"].([]any)
+			if kind == "response.completed" || kind == "response.done" {
+				if err := b.nativeIntent(items); err != nil {
+					return err
+				}
+			}
 			// The complete terminal item is authoritative; output_item.done can
 			// contain an unfinished run_officejs envelope. Text still streams live.
 			for _, value := range items {
