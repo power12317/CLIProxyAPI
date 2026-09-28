@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  CONTAINER_IMAGE: ghcr.io/power12317/cliproxyapi
+  CONTAINER_IMAGE: ghcr.io/power12317/cliproxyapi-codex-runtime
 
 jobs:
   build:

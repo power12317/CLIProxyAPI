@@ -1,7 +1,7 @@
 # Apply after the existing CPA Compose file using the matching branch images.
 services:
   cli-proxy-api:
-    image: ${CPA_RUNTIME_IMAGE:-ghcr.io/power12317/cliproxyapi:codex-runtime}
+    image: ${CPA_RUNTIME_IMAGE:-ghcr.io/power12317/cliproxyapi-codex-runtime:codex-runtime}
     pull_policy: always
 
   codex-master:

@@ -119,7 +119,7 @@ tap preserves original SSE comment, event-name and ID lines in the logs, includi
 UTF-8 characters split across network chunks. Parsed inference events continue
 through the original Codex response processing and are not logged twice.
 
-The CPA branch automatically publishes `ghcr.io/power12317/cliproxyapi:codex-runtime`
+The CPA branch automatically publishes `ghcr.io/power12317/cliproxyapi-codex-runtime:codex-runtime`
 and `:codex-runtime-<full commit>` for Linux amd64/arm64. The other projects publish
 their own branch images. See README_CN.md for deployment references and each
 repository's Actions run for the exact commit being published.
