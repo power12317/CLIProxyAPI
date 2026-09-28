@@ -20,6 +20,12 @@ Its main asset is `x-square-DUrhLSGN.js`, SHA-256
 
 ## Transport selection
 
+Requests requiring native hosted tools are routed by `CodexAutoExecutor` before
+entering the Basispoints executor. They do not upload Basispoints attachments,
+send a Basispoints request, or dial its WebSocket. Native requests preserve the
+client tool declarations and do not close an already retained Basispoints socket.
+The existing native transport policy still determines HTTP versus WebSocket.
+
 With Basispoints enabled, either `codex.force-websocket: true` or a downstream
 WebSocket request selects the native Basispoints WebSocket transport. Ordinary
 HTTP clients continue to use SSE upstream. Streaming and aggregated responses
@@ -99,6 +105,35 @@ Tool-result data-URL images receive the same validation but remain inline. Their
 bytes and detail are preserved, with only MIME aliases normalized. HTTPS image
 URLs and existing file IDs remain unchanged because their bytes are not available
 for local validation; opaque URLs are not rejected for lacking a suffix.
+
+## Client function source transport
+
+The bridge uses the existing `run_officejs` envelope for client tools. In addition
+to CUSTOM raw input, eligible FUNCTION tools use an explicit source marker:
+
+- `cpa.function_code/<exact-catalog-name>` for an object schema declaring a string
+  `code` property.
+- `cpa.function_cmd/<exact-catalog-name>` for `exec_command` functions declaring
+  a string `cmd` property, unless the function qualifies for FUNCTION_CODE.
+
+The original source is placed directly in `code`. `extended_summary` contains
+one JSON object with every other supplied argument, or `{}`. The bridge combines
+these fields and serializes the client arguments with Go's JSON encoder. It does
+not evaluate, trim, infer a target from, or rewrite source text. Exact duplicate
+source fields are accepted; conflicting duplicates remain protocol errors.
+
+SSE, WebSocket and aggregated responses use the same converter. Cached native
+items replay unchanged; complete uncached plaintext history uses the raw
+transport when its current catalog supports it. Older JSON envelopes and
+unavailable historical tools retain their existing compatibility path. Direct
+encrypted calls retain their existing metadata and history handling. No model
+correction, regeneration request or automatic tool retry is added.
+
+Reference: `ranxi2001/sub2api` at
+`2a0d3fc4d669aeaa7d5dc2b91dbf58fd044b852a`,
+`backend/internal/service/basispoints/function_code_transport.go` and
+`function_cmd_transport.go`. Only the raw source transport is adopted, not its
+tool-omission policy or corrective model requests.
 
 ## Validation
 

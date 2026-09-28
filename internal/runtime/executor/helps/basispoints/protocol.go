@@ -310,7 +310,7 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 			resultBatch = false
 			native := cache.get(bridge.scope + "/" + callID)
 			if native == nil {
-				native, err = rebuildToolCall(item)
+				native, err = bridge.rebuildToolCall(item)
 				if err != nil {
 					return nil, nil, err
 				}
