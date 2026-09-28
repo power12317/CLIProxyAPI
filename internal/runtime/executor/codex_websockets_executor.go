@@ -45,6 +45,15 @@ type CodexAutoExecutor struct {
 	pool            *cliproxyexecutor.ExecutionSessionPool
 }
 
+// Large histories are sent as one upstream WebSocket message. Keep requests at
+// or above Basispoints' 16 MiB limit on the POST/SSE transport to avoid
+// upstream 1009 closes.
+const codexWebsocketRequestSizeLimit = 16 << 20
+
+func codexWebsocketRequestTooLarge(payload []byte) bool {
+	return len(payload) >= codexWebsocketRequestSizeLimit
+}
+
 func NewCodexAutoExecutor(cfg *config.Config) *CodexAutoExecutor {
 	return &CodexAutoExecutor{
 		httpExec:        NewCodexExecutor(cfg),
@@ -80,6 +89,11 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return cliproxyexecutor.Response{}, fmt.Errorf("codex auto executor: executor is nil")
+	}
+	if codexWebsocketRequestTooLarge(req.Payload) {
+		helps.LogWithRequestID(ctx).Infof("codex websockets: upstream request is too large for websocket bytes=%d limit=%d; using POST", len(req.Payload), codexWebsocketRequestSizeLimit)
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		return e.httpExec.Execute(ctx, auth, req, opts)
 	}
 	if e.forceWebsocket(auth) && opts.Alt != "responses/compact" {
 		ctx, opts, release := e.prepareForcedWebsocket(ctx, req, opts)
@@ -118,6 +132,11 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return nil, fmt.Errorf("codex auto executor: executor is nil")
+	}
+	if codexWebsocketRequestTooLarge(req.Payload) {
+		helps.LogWithRequestID(ctx).Infof("codex websockets: upstream request is too large for websocket bytes=%d limit=%d; using POST/SSE", len(req.Payload), codexWebsocketRequestSizeLimit)
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		return e.httpExec.ExecuteStream(ctx, auth, req, opts)
 	}
 	if e.forceWebsocket(auth) && opts.Alt != "responses/compact" {
 		ctx, opts, release := e.prepareForcedWebsocket(ctx, req, opts)

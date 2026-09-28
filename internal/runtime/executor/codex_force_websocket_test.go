@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,58 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+func TestCodexWebsocketRequestTooLargeUsesBoundaryLimit(t *testing.T) {
+	below := bytes.Repeat([]byte("x"), codexWebsocketRequestSizeLimit-1)
+	if codexWebsocketRequestTooLarge(below) {
+		t.Fatal("request below the websocket size limit was rejected")
+	}
+	atLimit := bytes.Repeat([]byte("x"), codexWebsocketRequestSizeLimit)
+	if !codexWebsocketRequestTooLarge(atLimit) {
+		t.Fatal("request at the websocket size limit was not routed to POST/SSE")
+	}
+}
+
+func TestForceWebsocketLargeRequestUsesPOSTSSE(t *testing.T) {
+	var httpRequests, websocketProxyRequests atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		websocketProxyRequests.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	executor := NewCodexAutoExecutor(forceWebsocketTestConfig())
+	wsConfig := forceWebsocketTestConfig()
+	wsConfig.ProxyURL = proxy.URL
+	executor.wsExec = NewCodexWebsocketsExecutor(wsConfig)
+
+	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
+		httpRequests.Add(1)
+		if r.Method != http.MethodPost {
+			t.Errorf("HTTP fallback method = %s, want POST", r.Method)
+		}
+		body := `data: {"type":"response.completed","response":{"id":"large-request","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}` + "\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})))
+	auth := &cliproxyauth.Auth{ID: "large-request", Provider: "codex", Attributes: map[string]string{"api_key": "test"}}
+	payload := append([]byte(`{"model":"gpt-5.4","input":[{"role":"user","content":"`), bytes.Repeat([]byte("x"), codexWebsocketRequestSizeLimit)...)
+	payload = append(payload, []byte(`"}],"stream":true}`)...)
+	result, err := executor.ExecuteStream(ctx, auth, cliproxyexecutor.Request{Model: "gpt-5.4", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatal(chunk.Err)
+		}
+	}
+	if got := httpRequests.Load(); got != 1 {
+		t.Fatalf("HTTP fallback requests = %d, want 1", got)
+	}
+	if got := websocketProxyRequests.Load(); got != 0 {
+		t.Fatalf("websocket proxy requests = %d, want 0", got)
+	}
+}
 
 type forceWebsocketRoundTripper func(*http.Request) (*http.Response, error)
 
