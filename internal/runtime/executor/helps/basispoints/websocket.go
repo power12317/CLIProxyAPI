@@ -174,21 +174,69 @@ func (r *websocketReader) finish() {
 	r.request.session.activity.Release()
 }
 
+func (r *websocketReader) resetGeneration() error {
+	frame, err := decode(r.request.Frame)
+	if err != nil {
+		return err
+	}
+	r.request.requestID = uuid.NewString()
+	r.request.resume = "resume_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	frame["basispoints_request_id"] = r.request.requestID
+	frame["basispoints_resume_token"] = r.request.resume
+	r.request.Frame, err = json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	r.resume, r.cursor, r.attempts = r.request.resume, -1, 0
+	r.terminal, r.responseObserved = false, false
+	r.buffer.Reset()
+	return nil
+}
+
+// Retry resends a terminally rejected generation on its existing connection.
+// The activity gate stays held across attempts; no dial or session lookup occurs.
+func (r *websocketReader) Retry() error {
+	r.mu.Lock()
+	if err := r.ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	if r.closed || r.conn.closed.Load() {
+		r.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if !r.terminal || !r.exchange.terminal.Load() {
+		r.mu.Unlock()
+		return fmt.Errorf("basispoints: cannot retry an active websocket response")
+	}
+	if err := r.resetGeneration(); err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	r.conn.detach(r.exchange)
+	exchange, err := r.conn.attach()
+	if err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	r.exchange = exchange
+	conn := r.conn
+	r.mu.Unlock()
+	if r.request.ObserveRequest != nil {
+		r.request.ObserveRequest(r.request.LogFrame())
+	}
+	if err = conn.write(r.request.Frame); err != nil {
+		conn.close(err)
+		return err
+	}
+	return nil
+}
+
 func (r *websocketReader) reconnect(resend bool) error {
 	if resend {
-		frame, err := decode(r.request.Frame)
-		if err != nil {
+		if err := r.resetGeneration(); err != nil {
 			return err
 		}
-		r.request.requestID = uuid.NewString()
-		r.request.resume = "resume_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-		frame["basispoints_request_id"] = r.request.requestID
-		frame["basispoints_resume_token"] = r.request.resume
-		r.request.Frame, err = json.Marshal(frame)
-		if err != nil {
-			return err
-		}
-		r.resume, r.cursor, r.attempts = r.request.resume, -1, 0
 	}
 	for r.attempts < 3 {
 		if err := r.ctx.Err(); err != nil {

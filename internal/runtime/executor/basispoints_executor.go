@@ -235,7 +235,7 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 		}
 	}()
 	var completed []byte
-	err = e.read(ctx, response, bridge, func(event []byte) error {
+	err = e.read(ctx, auth, response, bridge, false, false, func(event []byte) error {
 		if payload := basispoints.CompletedResponse(event); len(payload) > 0 {
 			completed = payload
 		}
@@ -296,7 +296,7 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 		var completed []byte
 		var param any
 		format := coreexecutor.ResponseFormatOrSource(opts)
-		errRead := e.read(ctx, response, bridge, func(event []byte) error {
+		errRead := e.read(ctx, auth, response, bridge, true, basispoints.OptionalNativeTools(req.Payload), func(event []byte) error {
 			if payload := basispoints.CompletedResponse(event); len(payload) > 0 {
 				completed = payload
 			}
@@ -338,12 +338,15 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 	return &coreexecutor.StreamResult{Headers: basispoints.ResponseHeaders(response.Header, true), Chunks: out}, nil
 }
 
-func (e *BasispointsExecutor) read(ctx context.Context, response *http.Response, bridge *basispoints.Bridge, emit func([]byte) error) (err error) {
+func (e *BasispointsExecutor) read(ctx context.Context, auth *coreauth.Auth, response *http.Response, bridge *basispoints.Bridge, stream, bufferOutput bool, emit func([]byte) error) (err error) {
 	defer func() {
 		if err != nil && response.StatusCode == http.StatusSwitchingProtocols && basispoints.RequestedNativeTool(err) == "" {
 			err = &coreexecutor.CodexReplayUnsafeError{Cause: err}
 		}
 	}()
+	if response.StatusCode == http.StatusSwitchingProtocols {
+		return e.readWebsocket(ctx, auth, response, bridge, stream, bufferOutput, emit)
+	}
 	if strings.Contains(response.Header.Get("Content-Type"), "application/json") {
 		raw, err := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 		if err != nil {

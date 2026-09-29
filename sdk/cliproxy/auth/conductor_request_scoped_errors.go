@@ -253,3 +253,16 @@ func applyRequestScopedActionToResult(action string, okAction bool, result *Resu
 func isRequestScopedStop(action string, okAction bool) bool {
 	return okAction && (action == RequestScopedActionStop || action == RequestScopedActionStopAndCooldown)
 }
+
+// IsRequestRetryable exposes the existing request-retry error policy to providers
+// that can retry a completed upstream attempt without releasing their transport.
+// Retry budgets, cooldown waits and already-started output remain caller-owned.
+func IsRequestRetryable(auth *Auth, err error, cfg *internalconfig.Config) bool {
+	if isRequestInvalidError(err) || isRequestStopError(err) {
+		return false
+	}
+	if action, matched := matchRequestScopedErrorAction(auth, err, cfg); isRequestScopedStop(action, matched) {
+		return false
+	}
+	return isRequestRetryRoundError(err)
+}

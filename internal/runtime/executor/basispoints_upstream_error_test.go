@@ -24,7 +24,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func basispointsFailureTransport(t *testing.T, exec *BasispointsExecutor, transport string, priorText bool, retryMS string) (context.Context, *atomic.Int32) {
+func basispointsFailureTransport(t *testing.T, exec *BasispointsExecutor, transport string, priorText bool, retryMS string, failureStatus ...int) (context.Context, *atomic.Int32) {
 	t.Helper()
 	marshal := func(value any) []byte {
 		raw, err := json.Marshal(value)
@@ -35,6 +35,10 @@ func basispointsFailureTransport(t *testing.T, exec *BasispointsExecutor, transp
 	}
 	item := map[string]any{"type": "function_call", "id": "partial-item", "call_id": "partial-call", "name": "run_officejs", "status": "in_progress", "arguments": "{"}
 	response := map[string]any{"id": "failed-response", "status": "failed", "error": map[string]any{"code": "rate_limit_exceeded", "message": "Rate limit reached on tokens per min (TPM).", "headers": map[string]any{"retry-after": "1", "retry-after-ms": retryMS}}, "output": []any{item}}
+	if len(failureStatus) > 0 {
+		detail := response["error"].(map[string]any)
+		detail["status_code"], detail["code"], detail["message"] = failureStatus[0], "upstream_failure", "upstream rejected this attempt"
+	}
 	terminal := marshal(map[string]any{"type": "response.failed", "response": response, "basispoints_replay_cursor": 2})
 	frames := [][]byte{}
 	if priorText {
@@ -184,7 +188,7 @@ func TestBasispointsRequestRetryThree(t *testing.T) {
 				}
 				assertBasispointsRateLimit(t, err, 0)
 				wantCalls := int32(1)
-				if transport == "sse" && !priorText {
+				if !priorText {
 					wantCalls = 4
 				}
 				if calls.Load() != wantCalls {
