@@ -114,6 +114,11 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 			if !ok {
 				return failure(502, "invalid_stream", "terminal event has no response object")
 			}
+			// An upstream failure takes precedence over unfinished tool output.
+			// Do not emit or convert partial calls from a failed response.
+			if response["error"] != nil || event["error"] != nil {
+				return StreamError(raw)
+			}
 			items, _ := response["output"].([]any)
 			if kind == "response.completed" || kind == "response.done" {
 				if err := b.nativeIntent(items); err != nil {

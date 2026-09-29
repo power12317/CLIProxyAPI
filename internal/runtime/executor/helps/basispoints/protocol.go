@@ -22,18 +22,6 @@ const maxItemBytes = 8 << 20
 
 type object = map[string]any
 
-// Error preserves upstream status and JSON while identifying request-only failures.
-type Error struct {
-	Status int
-	Body   string
-}
-
-func (e *Error) Error() string   { return e.Body }
-func (e *Error) StatusCode() int { return e.Status }
-func (e *Error) IsRequestScoped() bool {
-	return e.Status == 400 || e.Status == 403 || e.Status == 404 || e.Status == 422 || e.Status == 502
-}
-
 func failure(status int, code, message string) error {
 	body, _ := json.Marshal(object{"error": object{"type": "basispoints_error", "code": code, "message": message}})
 	return &Error{Status: status, Body: string(body)}
@@ -452,6 +440,9 @@ func (b *Bridge) Response(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, failure(502, "invalid_response", "Basispoints returned invalid JSON")
 	}
+	if response["error"] != nil {
+		return nil, StreamError(raw)
+	}
 	if err = b.convertResponse(response); err != nil {
 		return nil, err
 	}
@@ -460,18 +451,6 @@ func (b *Bridge) Response(raw []byte) ([]byte, error) {
 
 // Scope joins non-secret caller and credential identities without delimiter collisions.
 func Scope(parts ...string) string { return digest(parts) }
-
-// StreamError converts an upstream error event without replacing its error payload.
-func StreamError(raw []byte) error {
-	status := 502
-	value, _ := decode(raw)
-	if code, ok := value["status"].(json.Number); ok {
-		if n, err := code.Int64(); err == nil && n >= 400 && n <= 599 {
-			status = int(n)
-		}
-	}
-	return &Error{Status: status, Body: string(raw)}
-}
 
 func eventBytes(event object, sequence int) ([]byte, error) {
 	event["sequence_number"] = sequence
