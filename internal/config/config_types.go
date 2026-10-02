@@ -186,6 +186,8 @@ type AntigravityConnectionPoolConfig struct {
 type CodexConfig struct {
 	// Basispoints switches all Codex model requests to the Basispoints interface.
 	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`
+	// Prism configures the optional Prism browser adapter for Codex OAuth accounts.
+	Prism CodexPrismConfig `yaml:"prism" json:"prism"`
 	// ForceWebsocket prefers ChatGPT Codex WebSockets independently of the downstream transport.
 	ForceWebsocket  bool `yaml:"force-websocket" json:"force-websocket"`
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
@@ -240,6 +242,16 @@ type CodexConfig struct {
 // CodexBasispointsConfig controls the alternative Responses protocol adapter.
 type CodexBasispointsConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
+}
+
+// CodexPrismConfig controls the P0/P1 Prism browser bridge.
+// The bridge is deliberately disabled by default and applies to eligible Codex
+// OAuth accounts when enabled. An account may explicitly opt out through its
+// openai_prism_browser metadata field.
+type CodexPrismConfig struct {
+	Enabled            bool   `yaml:"enabled" json:"enabled"`
+	AdapterURL         string `yaml:"adapter-url" json:"adapter-url"`
+	ClientToolsEnabled bool   `yaml:"client-tools-enabled" json:"client-tools-enabled"`
 }
 
 // CodexTurnStateTicketConfig controls Codex turn-state retention and timed refresh.

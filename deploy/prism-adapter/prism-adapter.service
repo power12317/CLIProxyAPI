@@ -1,0 +1,22 @@
+[Unit]
+Description=CLIProxyAPI Prism browser adapter
+After=network-online.target
+
+[Service]
+Type=simple
+User=cliproxy
+Group=cliproxy
+WorkingDirectory=/opt/cliproxy/prism-adapter
+EnvironmentFile=/etc/cliproxy/prism-adapter.env
+ExecStart=/opt/cliproxy/prism-adapter/venv/bin/python /opt/cliproxy/prism-adapter/server.py
+Restart=on-failure
+NoNewPrivileges=no
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/cliproxy-prism
+MemoryMax=900M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

@@ -33,6 +33,39 @@ func TestSyncAuthFilePriorityAttributeTracksFileSource(t *testing.T) {
 	}
 }
 
+func TestPatchAuthFileFields_PrismBrowserOnlyCodexOAuth(t *testing.T) {
+	manager := coreauth.NewManager(&memoryAuthStore{}, nil, nil)
+	codexAuth := &coreauth.Auth{
+		ID: "codex.json", FileName: "codex.json", Provider: "codex",
+		Attributes: map[string]string{"path": filepath.Join(t.TempDir(), "codex.json")},
+		Metadata:   map[string]any{"auth_kind": coreauth.AuthKindOAuth, "type": "codex"},
+	}
+	if _, errRegister := manager.Register(context.Background(), codexAuth); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, manager)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/auth-files/fields", strings.NewReader(`{"name":"codex.json","openai_prism_browser":true}`))
+	h.PatchAuthFileFields(ctx)
+	updatedCodex, _ := manager.GetByID("codex.json")
+	if rec.Code != http.StatusOK || updatedCodex.Metadata[coreauth.AttributePrismBrowser] != true {
+		t.Fatalf("status=%d body=%s metadata=%#v", rec.Code, rec.Body.String(), updatedCodex.Metadata)
+	}
+
+	apiKey := &coreauth.Auth{ID: "api.json", FileName: "api.json", Provider: "codex", Attributes: map[string]string{"path": filepath.Join(t.TempDir(), "api.json")}, Metadata: map[string]any{"auth_kind": coreauth.AuthKindAPIKey, "type": "codex"}}
+	if _, errRegister := manager.Register(context.Background(), apiKey); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	rec = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/auth-files/fields", strings.NewReader(`{"name":"api.json","openai_prism_browser":true}`))
+	h.PatchAuthFileFields(ctx)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("api key status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPatchAuthFileFields_MergeHeadersAndDeleteEmptyValues(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 

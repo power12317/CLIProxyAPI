@@ -41,6 +41,7 @@ type CodexAutoExecutor struct {
 	httpExec        *CodexExecutor
 	wsExec          *CodexWebsocketsExecutor
 	basispointsExec *BasispointsExecutor
+	prismExec       *PrismExecutor
 	poolOnce        sync.Once
 	pool            *cliproxyexecutor.ExecutionSessionPool
 }
@@ -59,6 +60,7 @@ func NewCodexAutoExecutor(cfg *config.Config) *CodexAutoExecutor {
 		httpExec:        NewCodexExecutor(cfg),
 		wsExec:          NewCodexWebsocketsExecutor(cfg),
 		basispointsExec: NewBasispointsExecutor(cfg),
+		prismExec:       NewPrismExecutor(cfg),
 	}
 }
 
@@ -85,6 +87,10 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 			helps.LogBasispointsNativeToolRoute(ctx, "openai_image_request")
 		}
 		return e.httpExec.Execute(ctx, auth, req, opts)
+	}
+	if e != nil && e.prismExec != nil && e.prismExec.enabled(auth) {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		return e.prismExec.Execute(ctx, auth, req, opts)
 	}
 	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
@@ -143,6 +149,10 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			helps.LogBasispointsNativeToolRoute(ctx, "openai_image_request")
 		}
 		return e.httpExec.ExecuteStream(ctx, auth, req, opts)
+	}
+	if e != nil && e.prismExec != nil && e.prismExec.enabled(auth) {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		return e.prismExec.ExecuteStream(ctx, auth, req, opts)
 	}
 	if e != nil && e.basispointsExec.enabled() {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)

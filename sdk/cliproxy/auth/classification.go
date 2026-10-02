@@ -1,6 +1,9 @@
 package auth
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const (
 	AuthKindAPIKey = "apikey"
@@ -23,7 +26,55 @@ const (
 	AttributeSource               = "source"
 	AttributeSourceBackend        = "source_backend"
 	AttributeWeight               = "weight"
+	// AttributePrismBrowser selects the local Prism browser adapter for Codex OAuth.
+	AttributePrismBrowser = "openai_prism_browser"
 )
+
+// UsesPrismBrowser reports whether this auth has an explicit account-level
+// opt-in marker. The global Prism switch is evaluated by the executor.
+func (a *Auth) UsesPrismBrowser() bool {
+	if a == nil || !strings.EqualFold(strings.TrimSpace(a.Provider), "codex") || a.AuthKind() != AuthKindOAuth {
+		return false
+	}
+	if IsPluginVirtualAuth(a) || strings.EqualFold(strings.TrimSpace(authAttribute(a, AttributeRuntimeOnly)), "true") {
+		return false
+	}
+	if a.Metadata != nil {
+		if enabled, ok := a.Metadata[AttributePrismBrowser].(bool); ok {
+			return enabled
+		}
+		if enabled, ok := a.Metadata[AttributePrismBrowser].(string); ok {
+			parsed, errParse := strconv.ParseBool(strings.TrimSpace(enabled))
+			return errParse == nil && parsed
+		}
+	}
+	return false
+}
+
+// PrismBrowserExplicitlyDisabled reports an account-level opt-out. The global
+// Prism switch remains the primary P1 control; this preserves compatibility
+// with management clients that do not expose per-account settings.
+func (a *Auth) PrismBrowserExplicitlyDisabled() bool {
+	if a == nil || !strings.EqualFold(strings.TrimSpace(a.Provider), "codex") || a.AuthKind() != AuthKindOAuth {
+		return false
+	}
+	if a.Metadata == nil {
+		return false
+	}
+	value, exists := a.Metadata[AttributePrismBrowser]
+	if !exists {
+		return false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return !typed
+	case string:
+		parsed, errParse := strconv.ParseBool(strings.TrimSpace(typed))
+		return errParse == nil && !parsed
+	default:
+		return false
+	}
+}
 
 // AuthKind returns the credential kind using explicit metadata first and legacy
 // field-shape fallbacks second.

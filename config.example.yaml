@@ -278,6 +278,13 @@ codex:
   # Astra max uses wire xhigh plus input configuration_update reasoning.effort=max.
   basispoints:
     enabled: false
+  # Optional Prism browser bridge. Disabled by default; when enabled it applies
+  # to Codex OAuth accounts. An account may explicitly opt out with
+  # openai_prism_browser: false in its auth metadata.
+  prism:
+    enabled: false
+    adapter-url: "http://127.0.0.1:8319/v1"
+    client-tools-enabled: false
   # Prefer WebSockets for ChatGPT Codex generation, regardless of client transport.
   # Five failed handshake attempts fall back to HTTP for this request only.
   force-websocket: false

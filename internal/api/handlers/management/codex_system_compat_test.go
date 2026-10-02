@@ -1,6 +1,7 @@
 package management
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -42,7 +43,15 @@ func TestGetCodexCapabilities(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if body := rec.Body.String(); body != `{"system_scoped_oauth":true}` {
-		t.Fatalf("body = %q", body)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["system_scoped_oauth"] != true {
+		t.Fatalf("system_scoped_oauth = %#v", body["system_scoped_oauth"])
+	}
+	prism, ok := body["prism"].(map[string]any)
+	if !ok || prism["supported"] != true {
+		t.Fatalf("prism capabilities = %#v", body["prism"])
 	}
 }
