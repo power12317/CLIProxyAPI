@@ -84,18 +84,11 @@ func cloneCodexAuthAttributes(attributes map[string]string) map[string]string {
 // Older CPA versions do not have this endpoint; clients must treat a 404 as legacy mode.
 func (h *Handler) GetCodexCapabilities(c *gin.Context) {
 	prismEnabled := h != nil && h.cfg != nil && h.cfg.Codex.Prism.Enabled
-	adapterConfigured := prismEnabled && strings.TrimSpace(h.cfg.Codex.Prism.AdapterURL) != "" && strings.TrimSpace(os.Getenv("PRISM_ADAPTER_API_KEY")) != ""
 	c.JSON(http.StatusOK, gin.H{
 		"system_scoped_oauth": true,
 		"prism": gin.H{
-			"supported":          true,
-			"enabled":            prismEnabled,
-			"adapter_configured": adapterConfigured,
-			// P0/P1 deliberately keeps the client-tool bridge disabled. The config
-			// field is reserved for the later tool-capable phase and must not make
-			// the capability endpoint claim support that is not implemented yet.
-			"client_tools_enabled": false,
-			"models":               []string{"gpt-5.6-sol"},
+			"supported": true,
+			"enabled":   prismEnabled,
 		},
 	})
 }
@@ -431,9 +424,6 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 				"auth_kind":           coreauth.AuthKindOAuth,
 				"codex_client_system": clientSystem,
 			},
-		}
-		if targetAuth != nil && targetAuth.UsesPrismBrowser() {
-			record.Metadata[coreauth.AttributePrismBrowser] = true
 		}
 		if errGuard := guardOAuthSessionPendingForSave(state, "codex"); errGuard != nil {
 			return

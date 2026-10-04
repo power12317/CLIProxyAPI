@@ -244,14 +244,10 @@ type CodexBasispointsConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
-// CodexPrismConfig controls the P0/P1 Prism browser bridge.
-// The bridge is deliberately disabled by default and applies to eligible Codex
-// OAuth accounts when enabled. An account may explicitly opt out through its
-// openai_prism_browser metadata field.
+// CodexPrismConfig controls the sub2api-compatible Prism browser bridge.
+// The bridge is disabled by default and applies to eligible Codex OAuth accounts.
 type CodexPrismConfig struct {
-	Enabled            bool   `yaml:"enabled" json:"enabled"`
-	AdapterURL         string `yaml:"adapter-url" json:"adapter-url"`
-	ClientToolsEnabled bool   `yaml:"client-tools-enabled" json:"client-tools-enabled"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // CodexTurnStateTicketConfig controls Codex turn-state retention and timed refresh.

@@ -599,6 +599,18 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 	})
 }
 
+// PublishUnavailable counts a completed request without manufacturing token usage.
+func (r *UsageReporter) PublishUnavailable(ctx context.Context, err error) {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		record := r.buildRecord(usage.Detail{}, err != nil, failFromErrors(err))
+		record.UsageUnavailable = true
+		r.publishAttemptRecord(ctx, record)
+	})
+}
+
 // publishAttemptRecord emits the record for one upstream attempt and the
 // observability warnings that belong to the attempt rather than to a single event.
 func (r *UsageReporter) publishAttemptRecord(ctx context.Context, record usage.Record) {

@@ -792,3 +792,20 @@ func TestUsageQueuePlugin_SchemeB_StrictLegacyRequestIDPreservation(t *testing.T
 	// trace_id reflects the record.TraceID
 	requireStringField(t, payload, "trace_id", "custom-trace-id")
 }
+
+func TestUsageQueueUnavailableKeepsRequestAndNullAccounting(t *testing.T) {
+	withEnabledQueue(t, func() {
+		(&usageQueuePlugin{}).HandleUsage(context.Background(), coreusage.Record{Provider: "codex", ExecutorType: "PrismExecutor", Model: "gpt-6.1-sol", UsageUnavailable: true, Latency: 2 * time.Second})
+		items := PopOldest(1)
+		if len(items) != 1 {
+			t.Fatal("missing request record")
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(items[0], &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["usage_unavailable"] != true || payload["tokens"] != nil || payload["token_breakdown"] != nil || payload["latency_ms"] != float64(2000) {
+			t.Fatalf("unavailable usage became measured usage: %v", payload)
+		}
+	})
+}

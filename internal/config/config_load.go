@@ -74,7 +74,6 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.TransientErrorCooldownSeconds = 0
 	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.WebsocketAuth = true
-	cfg.Codex.Prism.AdapterURL = "http://127.0.0.1:8319/v1"
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.Discovery.Enabled = false

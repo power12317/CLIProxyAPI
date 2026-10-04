@@ -145,6 +145,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		IsCompaction:         clientRequestMetadata.IsCompaction,
 		requestDetail:        detail,
 		AccountingVersion:    coreusage.TokenAccountingSchemaVersion,
+		UsageUnavailable:     record.UsageUnavailable,
 		TokenBreakdown:       usageDetail.TokenBreakdown,
 		Provider:             provider,
 		ExecutorType:         executorType,
@@ -175,11 +176,12 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 }
 
 type queuedUsageDetail struct {
-	ExecutionID  string `json:"execution_id,omitempty"`
-	TraceID      string `json:"trace_id,omitempty"`
-	NodeKind     string `json:"node_kind,omitempty"`
-	IsFork       bool   `json:"is_fork,omitempty"`
-	IsCompaction bool   `json:"is_compaction,omitempty"`
+	UsageUnavailable bool   `json:"usage_unavailable,omitempty"`
+	ExecutionID      string `json:"execution_id,omitempty"`
+	TraceID          string `json:"trace_id,omitempty"`
+	NodeKind         string `json:"node_kind,omitempty"`
+	IsFork           bool   `json:"is_fork,omitempty"`
+	IsCompaction     bool   `json:"is_compaction,omitempty"`
 	requestDetail
 	AccountingVersion    int                      `json:"accounting_version"`
 	TokenBreakdown       coreusage.TokenBreakdown `json:"token_breakdown"`
@@ -204,6 +206,19 @@ type queuedUsageDetail struct {
 	TurnStateLen         string                   `json:"turn_state_len,omitempty"`
 	RequestTurnStateLen  int                      `json:"request_turn_state_len,omitempty"`
 	ResponseTurnStateLen int                      `json:"response_turn_state_len,omitempty"`
+}
+
+// MarshalJSON retains request metrics but represents unavailable accounting as null.
+func (d queuedUsageDetail) MarshalJSON() ([]byte, error) {
+	type plain queuedUsageDetail
+	if !d.UsageUnavailable {
+		return json.Marshal(plain(d))
+	}
+	return json.Marshal(struct {
+		plain
+		Tokens         any `json:"tokens"`
+		TokenBreakdown any `json:"token_breakdown"`
+	}{plain: plain(d)})
 }
 
 type requestDetail struct {

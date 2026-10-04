@@ -1,0 +1,25 @@
+{
+  "repository": "https://github.com/ranxi2001/sub2api",
+  "commit": "0ae36e501952000c5c910a2e616c6e0861f66a49",
+  "sha256": {
+    "prism-adapter/browser_gate.py": "b75e8ec78a82897b5b27c614ba9362f6c726aca0de0d77c7fd753643d8c2c786",
+    "prism-adapter/model_selection.py": "f352f8beb1e0e0d5a2671629cfe108ad347a1e9904f660f55f261d70e5a36ea4",
+    "prism-adapter/multiplex_browser.py": "8d75197fc53b71dc29e53ca84d38424e8007ca710dacee52e86cf233333a66f7",
+    "prism-adapter/multiplex_runtime.py": "399b5d4b75ce87e632371abb7406a2bbae3b7a4f3472f0a12537883d61aebef1",
+    "prism-adapter/requirements.txt": "a72251b8b8377da90cbf56162b01fe7943157fb2f0c2d7d9b41b4e96e038c584",
+    "prism-adapter/response_events.py": "02c9301bc7bf1a11e1cd1511b172f090cd0562c207a8c4eb64a204cb81af8078",
+    "prism-adapter/server.py": "0d39170adc8feb6f2f2d125494630ca324ab333a7339792c75ed3116968a7cf6",
+    "prism-adapter/smoke_browser.py": "b82cf7c184a50c77afcf31d0f845e3426267689e89fb470acb7efd27eb6f1f7c",
+    "prism-adapter/smoke_client_tools.py": "83798f03dd53969785b9fc8a5526ca8b6696814eaef487f601e2a37b45ba7d10",
+    "prism-adapter/smoke_model_fixture.py": "54acc380186eb94b1ef21765e2001fe2ded46cccb0a82694bca3ed9f86dbed56",
+    "prism-adapter/smoke_multiplex.py": "b7784242914f32e0ebde402e01d01b8c78082f8f381f12a3c3ddba06f528fb90",
+    "prism-adapter/test_model_selection.py": "5de6a5eb47e59129158d799bd7129881e31d61d076701c05dad019ceaf077426",
+    "prism-adapter/test_multiplex.py": "fcb3a34cb8c198c329fca5f0981412624e618ffd692497683217c4e90775f2f1",
+    "prism-adapter/test_server.py": "828fe5edbd58a9bbb8c8568170ac295cae4536722f1ec59509344255bf3d9739",
+    "prism-adapter/test_session_cache.py": "5c16f2e94fda2ce8c45550f8d296682c7baa68b15a9cdee23e29427a4fa408ea",
+    "prism-adapter/test_tool_bridge.py": "68e98eae6d52780b70d59ad87cad626ecea4a75c73ccf96f5aeccd52bedb75be",
+    "prism-adapter/tool_bridge.py": "0c5a2303feafc3f8f4150846f435f5a4a5b1fb3bd24b223ee0338fd5f50f3517",
+    "prism-adapter/tool_state.py": "988cf88e655f0bb333fe77bbe08d54b91eeacd3bc0ed7f436e41c4eb18a1bad9",
+    "prism-adapter/tool_validation.py": "ba31caa232c7a75a8680ae3148363c61758e3ae0130b777705d484ea8b2d3d24"
+  }
+}

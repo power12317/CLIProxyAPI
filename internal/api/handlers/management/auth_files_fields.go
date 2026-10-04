@@ -355,23 +355,6 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		if targetAuth.Metadata == nil {
 			targetAuth.Metadata = make(map[string]any)
 		}
-		if fieldPath == coreauth.AttributePrismBrowser {
-			if !strings.EqualFold(strings.TrimSpace(targetAuth.Provider), "codex") || targetAuth.AuthKind() != coreauth.AuthKindOAuth || coreauth.IsPluginVirtualAuth(targetAuth) || strings.EqualFold(strings.TrimSpace(authAttribute(targetAuth, coreauth.AttributeRuntimeOnly)), "true") {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "openai_prism_browser is only available for Codex OAuth accounts"})
-				return
-			}
-			if value == nil {
-				delete(targetAuth.Metadata, coreauth.AttributePrismBrowser)
-			} else if enabled, okEnabled := value.(bool); okEnabled {
-				targetAuth.Metadata[coreauth.AttributePrismBrowser] = enabled
-			} else {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "openai_prism_browser must be a boolean or null"})
-				return
-			}
-			changed = true
-			continue
-		}
-
 		if fieldPath == coreauth.AttributeWeight {
 			if value == nil {
 				delete(targetAuth.Metadata, coreauth.AttributeWeight)

@@ -51,7 +51,7 @@ func TestGetCodexCapabilities(t *testing.T) {
 		t.Fatalf("system_scoped_oauth = %#v", body["system_scoped_oauth"])
 	}
 	prism, ok := body["prism"].(map[string]any)
-	if !ok || prism["supported"] != true {
+	if !ok || len(prism) != 2 || prism["supported"] != true || prism["enabled"] != false {
 		t.Fatalf("prism capabilities = %#v", body["prism"])
 	}
 }

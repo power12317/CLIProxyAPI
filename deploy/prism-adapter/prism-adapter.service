@@ -16,6 +16,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/cliproxy-prism
 MemoryMax=900M
+MemorySwapMax=0
 CPUQuota=100%
 
 [Install]

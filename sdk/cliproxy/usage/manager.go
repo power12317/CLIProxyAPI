@@ -73,6 +73,8 @@ type Record struct {
 	Failed      bool
 	Fail        Failure
 	Detail      Detail
+	// UsageUnavailable means token usage was not reported by the upstream.
+	UsageUnavailable bool
 	// ResponseHeaders stores a snapshot of upstream response headers for usage sinks.
 	ResponseHeaders http.Header
 }

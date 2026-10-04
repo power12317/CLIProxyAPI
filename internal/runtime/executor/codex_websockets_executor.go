@@ -88,7 +88,7 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		}
 		return e.httpExec.Execute(ctx, auth, req, opts)
 	}
-	if e != nil && e.prismExec != nil && e.prismExec.enabled(auth) {
+	if e != nil && e.prismExec != nil && e.prismExec.routes(auth, req.Model) {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		return e.prismExec.Execute(ctx, auth, req, opts)
 	}
@@ -150,7 +150,7 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		}
 		return e.httpExec.ExecuteStream(ctx, auth, req, opts)
 	}
-	if e != nil && e.prismExec != nil && e.prismExec.enabled(auth) {
+	if e != nil && e.prismExec != nil && e.prismExec.routes(auth, req.Model) {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
 		return e.prismExec.ExecuteStream(ctx, auth, req, opts)
 	}

@@ -669,9 +669,6 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 		"source":         "memory",
 		"size":           int64(0),
 	}
-	if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.AuthKind() == coreauth.AuthKindOAuth {
-		entry[coreauth.AttributePrismBrowser] = auth.UsesPrismBrowser()
-	}
 	entry["success"] = auth.Success
 	entry["failed"] = auth.Failed
 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
