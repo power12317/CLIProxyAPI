@@ -83,7 +83,14 @@ func cloneCodexAuthAttributes(attributes map[string]string) map[string]string {
 // GetCodexCapabilities exposes optional Codex OAuth features to newer management panels.
 // Older CPA versions do not have this endpoint; clients must treat a 404 as legacy mode.
 func (h *Handler) GetCodexCapabilities(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"system_scoped_oauth": true})
+	prismEnabled := h != nil && h.cfg != nil && h.cfg.Codex.Prism.Enabled
+	c.JSON(http.StatusOK, gin.H{
+		"system_scoped_oauth": true,
+		"prism": gin.H{
+			"supported": true,
+			"enabled":   prismEnabled,
+		},
+	})
 }
 
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {

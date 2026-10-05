@@ -355,7 +355,6 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		if targetAuth.Metadata == nil {
 			targetAuth.Metadata = make(map[string]any)
 		}
-
 		if fieldPath == coreauth.AttributeWeight {
 			if value == nil {
 				delete(targetAuth.Metadata, coreauth.AttributeWeight)

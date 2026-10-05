@@ -183,6 +183,17 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 		forceReplaceAuths: true,
 		auths:             auths,
 	})
+	prismEnabled := cfg.Codex.Prism.Enabled
+	if s.appliedPrismEnabled == nil || *s.appliedPrismEnabled != prismEnabled {
+		for _, auth := range auths {
+			if auth != nil && strings.EqualFold(auth.Provider, "codex") {
+				s.completeModelRegistrationForAuthWithCache(registrationCtx, auth, nil)
+			}
+		}
+		if ctx.Err() == nil {
+			s.appliedPrismEnabled = &prismEnabled
+		}
+	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false
 	}

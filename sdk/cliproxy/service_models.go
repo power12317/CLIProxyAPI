@@ -149,6 +149,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		default:
 			models = registry.GetCodexProModels()
 		}
+		models = withPrismModels(s.cfg, a, models)
 		models = applyExcludedModels(models, excluded)
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		models = registry.GetKimiModels()

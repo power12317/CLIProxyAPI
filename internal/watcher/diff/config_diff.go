@@ -146,6 +146,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Codex.Basispoints.Enabled != newCfg.Codex.Basispoints.Enabled {
 		changes = append(changes, fmt.Sprintf("codex.basispoints.enabled: %t -> %t", oldCfg.Codex.Basispoints.Enabled, newCfg.Codex.Basispoints.Enabled))
 	}
+	if oldCfg.Codex.Prism.Enabled != newCfg.Codex.Prism.Enabled {
+		changes = append(changes, fmt.Sprintf("codex.prism.enabled: %t -> %t", oldCfg.Codex.Prism.Enabled, newCfg.Codex.Prism.Enabled))
+	}
 	if oldCfg.Codex.DeviceConvergenceEnabled() != newCfg.Codex.DeviceConvergenceEnabled() {
 		changes = append(changes, fmt.Sprintf("codex.device-convergence: %t -> %t", oldCfg.Codex.DeviceConvergenceEnabled(), newCfg.Codex.DeviceConvergenceEnabled()))
 	}

@@ -82,6 +82,7 @@ const (
 )
 
 type authSelectionEligibility struct {
+	prismTransportAllows      func(*Auth) bool
 	requiredKind              string
 	credentialPolicy          string
 	disallowFreeAuth          bool
@@ -116,6 +117,7 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 		}
 	}
 	if ctx != nil {
+		eligibility.prismTransportAllows, _ = ctx.Value(prismTransportPolicyKey{}).(func(*Auth) bool)
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
 	}
@@ -123,6 +125,9 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 }
 
 func (e authSelectionEligibility) allows(auth *Auth) bool {
+	if e.prismTransportAllows != nil && !e.prismTransportAllows(auth) {
+		return false
+	}
 	if auth == nil {
 		return false
 	}

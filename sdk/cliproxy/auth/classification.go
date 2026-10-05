@@ -1,6 +1,8 @@
 package auth
 
-import "strings"
+import (
+	"strings"
+)
 
 const (
 	AuthKindAPIKey = "apikey"

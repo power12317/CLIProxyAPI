@@ -659,6 +659,7 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 		"name":           name,
 		"type":           strings.TrimSpace(auth.Provider),
 		"provider":       strings.TrimSpace(auth.Provider),
+		"auth_kind":      auth.AuthKind(),
 		"label":          auth.Label,
 		"status":         status,
 		"status_message": statusMessage,
