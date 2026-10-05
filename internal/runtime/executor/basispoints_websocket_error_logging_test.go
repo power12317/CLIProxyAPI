@@ -15,14 +15,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers/openai"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
@@ -118,7 +118,7 @@ func TestBasispointsWebsocketToolErrorsLogBeforeFinalize(t *testing.T) {
 				if errRead == nil && !bytes.Contains(event, []byte(errorCode)) {
 					t.Fatalf("wrong failure: %s", event)
 				}
-				files, errGlob := filepath.Glob(filepath.Join(dir, "*-"+requestID+".log"))
+				files, errGlob := filepath.Glob(filepath.Join(dir, "*-"+logging.ShortRequestID(requestID)+".log"))
 				if errGlob != nil || len(files) != 1 {
 					t.Errorf("error log unavailable before middleware finalization: files=%v err=%v", files, errGlob)
 					return

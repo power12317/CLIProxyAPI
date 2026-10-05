@@ -1,8 +1,10 @@
 package helps
 
 import (
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexwire"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+	"strings"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexwire"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -33,8 +35,7 @@ func PreserveCodexProtocolFields(original, translated []byte, nativeHeaders ...b
 	return NormalizeCodexServiceTier(translated)
 }
 
-// NormalizeCodexServiceTier also runs after payload overrides at the final
-// serialization boundary, covering HTTP, SSE, WebSocket and compact requests.
+// NormalizeCodexServiceTier normalizes client tiers before payload rules.
 func NormalizeCodexServiceTier(body []byte) []byte {
 	value := gjson.GetBytes(body, "service_tier")
 	if !value.Exists() {
@@ -57,4 +58,20 @@ func NormalizeCodexServiceTier(body []byte) []byte {
 		return body
 	}
 	return updated
+}
+
+// omitCodexDefaultServiceTier preserves native Codex omission semantics after
+// payload rules without changing explicit accelerated or custom tier values.
+func omitCodexDefaultServiceTier(body []byte) []byte {
+	value := gjson.GetBytes(body, "service_tier")
+	if value.Type != gjson.String {
+		return body
+	}
+	switch strings.ToLower(strings.TrimSpace(value.String())) {
+	case "default", "auto":
+		if updated, errDelete := sjson.DeleteBytes(body, "service_tier"); errDelete == nil {
+			return updated
+		}
+	}
+	return body
 }

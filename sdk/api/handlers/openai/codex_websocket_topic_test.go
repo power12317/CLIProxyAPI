@@ -11,12 +11,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	config "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	runtime "github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
-	auth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	config "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	runtime "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	auth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"github.com/tidwall/gjson"
 )
 

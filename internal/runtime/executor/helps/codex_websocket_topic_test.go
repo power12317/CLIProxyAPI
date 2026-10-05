@@ -6,8 +6,8 @@ import (
 	"testing"
 	"testing/synctest"
 
-	auth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	core "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	auth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
 func TestCodexWebsocketTopicIdentity(t *testing.T) {

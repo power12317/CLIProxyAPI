@@ -5,14 +5,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/wsrelay"
-	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/wsrelay"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -395,6 +395,7 @@ func (s *Service) prepareCoreAuthForModelRegistration(ctx context.Context, auth 
 		}
 		auth = current
 	}
+	s.cancelStaleAntigravityProbes(auth.ID)
 	return auth
 }
 
@@ -514,7 +515,7 @@ func (s *Service) completeModelRegistrationForAuthWithCache(ctx context.Context,
 	if ctx != nil && ctx.Err() != nil {
 		return
 	}
-	s.coreManager.ReconcileRegistryModelStates(ctx, auth.ID)
+	s.reconcileRegisteredModelStates(ctx, auth)
 
 	// Refresh the scheduler entry so that the auth's supportedModelSet is rebuilt
 	// from the now-populated global model registry. Without this, newly added auths
@@ -535,10 +536,14 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 	if existing, ok := s.coreManager.GetByID(id); ok && existing != nil {
 		provider = strings.TrimSpace(existing.Provider)
 	}
-	GlobalModelRegistry().UnregisterClient(id)
+	// Invalidate the auth before advancing the registry epoch. Otherwise a
+	// refresh can adopt the tombstone epoch while the auth still exists and
+	// republish its cached models after the registry has been cleared.
 	s.coreManager.Remove(ctx, id)
 	helps.InvalidateCodexCookieJar(id)
 	helps.InvalidateCodexTurnStates(id)
+	GlobalModelRegistry().UnregisterClient(id)
+	s.cancelStaleAntigravityProbes(id)
 	if strings.EqualFold(provider, "codex") {
 		executor.CloseCodexWebsocketSessionsForAuthID(id, "auth_removed")
 	}

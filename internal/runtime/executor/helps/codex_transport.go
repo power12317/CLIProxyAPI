@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
 // A warmup that cannot open WS must not become a billable HTTP generation.

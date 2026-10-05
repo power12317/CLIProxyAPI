@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,9 +33,13 @@ func logCodexTurnStateTicketProbe(auth *cliproxyauth.Auth, req *http.Request, mo
 	} else if errRequest != nil {
 		level = log.WarnLevel
 	}
+	requestID, errGenerate := logging.GenerateRequestID()
+	if errGenerate != nil {
+		log.WithError(errGenerate).Warn("codex ticket probe: generate request ID")
+	}
 	log.WithFields(log.Fields{
 		logging.CodexTicketProbeLogField: true,
-		"request_id":                     logging.GenerateRequestID(),
+		"request_id":                     requestID,
 		"auth_file":                      filepath.Base(authFile),
 		"session_id":                     logging.ShortCodexIdentifier(sessionID),
 		"turn_id":                        logging.ShortCodexIdentifier(turnID),

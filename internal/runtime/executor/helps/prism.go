@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	core "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	session "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	session "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
 	"github.com/tidwall/gjson"
 )
 

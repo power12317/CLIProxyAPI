@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/websocket"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/tidwall/gjson"
 )
 

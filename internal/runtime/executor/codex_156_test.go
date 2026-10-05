@@ -11,12 +11,12 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -247,7 +247,7 @@ func TestCodex156FinalCacheAffinitySurvivesCacheHelpers(t *testing.T) {
 	body, id, _ := helps.ApplyCodexOAuthFidelity(body, "account", "mac", false)
 	req := cliproxyexecutor.Request{Payload: original}
 	e := NewCodexExecutor(&config.Config{})
-	httpReq, httpBody, _, err := e.cacheHelper(context.Background(), sdktranslator.FormatOpenAIResponse, "https://chatgpt.com/backend-api/codex/responses", nil, req, original, body)
+	httpReq, httpBody, err := e.cacheHelper(context.Background(), sdktranslator.FormatOpenAIResponse, "https://chatgpt.com/backend-api/codex/responses", req, body)
 	if err != nil {
 		t.Fatal(err)
 	}

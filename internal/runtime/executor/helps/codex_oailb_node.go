@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 )
 
 // CodexOaiLBNode returns only the gateway DNS label, including for an expired

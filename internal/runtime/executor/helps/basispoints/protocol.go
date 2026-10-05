@@ -13,7 +13,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/codexwire"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexwire"
 )
 
 const ResponsesURL = "https://bps.openai.com/basispoints/api/responses"

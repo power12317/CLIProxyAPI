@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 )
 
 func TestAstraDefaultLowAcrossCatalogRefreshAndThinkingOverrides(t *testing.T) {
@@ -60,8 +60,8 @@ func TestAstraDefaultLowAcrossCatalogRefreshAndThinkingOverrides(t *testing.T) {
 					if got := stringModelValue(model, "default_reasoning_level"); got != expected {
 						t.Errorf("%s default=%q want %q", id, got, expected)
 					}
-					if id == "gpt-6-sol" && model["node_repl_auto_review_required"] != false {
-						t.Error("B4 changed")
+					if (id == "gpt-6-sol" || id == "gpt-6-astra") && model["node_repl_auto_review_required"] != true {
+						t.Errorf("%s must retain the official CPA Node REPL review requirement", id)
 					}
 				}
 			}

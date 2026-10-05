@@ -3,7 +3,7 @@ package helps
 import (
 	"sync"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps/basispoints"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 )
 
 // SharedBasispointsWebsocketSessions survives executor replacement on config reload.

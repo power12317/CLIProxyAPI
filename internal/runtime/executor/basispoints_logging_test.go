@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,12 +10,13 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/tidwall/gjson"
@@ -96,7 +96,7 @@ func TestBasispointsGinLogsUseCodexFieldsOnSuccessAndRejection(t *testing.T) {
 					}
 				}
 				id, _ := access.Data["request_id"].(string)
-				if decoded, err := hex.DecodeString(id); err != nil || len(decoded) != 4 {
+				if parsed, err := uuid.Parse(id); err != nil || parsed.Version() != 7 {
 					t.Fatalf("invalid request ID: %q", id)
 				}
 				wantLength, wantModel := "0/312", "gpt-6-astra/resolved-model"
@@ -104,6 +104,9 @@ func TestBasispointsGinLogsUseCodexFieldsOnSuccessAndRejection(t *testing.T) {
 					wantLength, wantModel = "0/780", "gpt-6-astra/"
 				}
 				formatted, _ := (&logging.LogFormatter{}).Format(access)
+				if !strings.Contains(string(formatted), logging.ShortRequestID(id)) || strings.Contains(string(formatted), id) {
+					t.Fatalf("log presentation must shorten the full request ID: %s", formatted)
+				}
 				if !strings.Contains(string(formatted), wantLength) || !strings.Contains(string(formatted), wantModel) || strings.Contains(string(formatted), "test-secret-token") {
 					t.Fatalf("Codex log fields not aligned: %s", formatted)
 				}

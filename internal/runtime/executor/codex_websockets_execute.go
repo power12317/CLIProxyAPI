@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -50,18 +50,17 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	originalPayload := originalPayloadSource
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
-	originalTranslated, body := translateCodexRequestPair(from, to, baseModel, originalPayload, req.Payload, false, opts.Headers, isCompat)
+	originalTranslated, body, updatesChanged := translateCodexRequestPairWithUpdateIntent(from, to, baseModel, originalPayload, req.Payload, false, opts.Headers, isCompat)
 
-	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier())
+	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
 	if err != nil {
 		return resp, err
 	}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = helps.NormalizeCodexServiceTier(body)
 	body = helps.ApplyCodexFastMode(body, e.cfg)
+	finalizePayload := helps.NewPayloadFinalizer(e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts)
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = helps.SetBoolIfDifferent(body, "stream", true)
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
@@ -79,7 +78,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	body = normalizeCodexWebsocketParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)
 	multiAgentV2Conflict := helps.HasCodexMultiAgentV2NamespaceConflict(body)
-	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, baseModel)
+	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, isCompat)
 	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
 	if errReplay != nil {
 		return resp, errReplay
@@ -96,8 +95,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, errPromptCache
 	}
 	clientBody := body
-	var identityState codexIdentityConfuseState
-	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
+	upstreamBody := body
 	var oauthIdentity helps.CodexOAuthIdentity
 	officialOAuthRequest := false
 	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(upstreamBody) {
@@ -117,12 +115,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	helps.RestoreCodexWebsocketIdentityHeaders(wsHeaders, wsClientHeaders, upstreamBody)
 	applyCodexConfiguredHeaderOverrides((&http.Request{Header: wsHeaders}).WithContext(ctx), auth, wsClientHeaders)
-	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
-	applyModelHeaderOverrides(wsHeaders, baseModel)
 	if !officialOAuthRequest {
 		ensureCodexResponsesLiteHeader(wsHeaders, upstreamBody)
 	}
-	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	turnState := helps.NewCodexTurnState(ctx, auth, wsURL, upstreamBody, wsHeaders, baseModel, opts.Headers)
 	turnState.ApplyWebsocketHeaders(wsHeaders)
 	upstreamBody = turnState.ApplyWebsocketBody(upstreamBody)
@@ -130,6 +125,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		return resp, errTicket
 	}
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
+	upstreamBody = finalizePayload(helps.SanitizeCodexInputItemIDs(upstreamBody))
+	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
+	applyModelHeaderOverrides(wsHeaders, baseModel)
 	turnState.ObserveRequest(wsHeaders, upstreamBody)
 
 	var authID, authLabel, authType, authValue string
@@ -169,7 +167,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			return resp, errState
 		}
 	}
-	wsReqBody := buildCodexWebsocketRequestBody(upstreamBody)
+	wsReqBody := frameCodexWebsocketRequestBody(upstreamBody)
 	sess.setLogSessionID(turnState.SessionID())
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
@@ -301,7 +299,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				}
 				readCh = sess.activate(conn)
 				restoreMultiAgentV2 = !multiAgentV2Conflict && (optimizeMultiAgentV2 || sess.isMultiAgentV2Optimized(conn))
-				wsReqBodyRetry := buildCodexWebsocketRequestBody(upstreamBody)
+				wsReqBodyRetry := frameCodexWebsocketRequestBody(upstreamBody)
 				helps.RecordAPIWebsocketRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 					URL:       wsURL,
 					Method:    "WEBSOCKET",
@@ -380,7 +378,6 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		observeCodexTokenEvent(reporter, payload)
 		turnState.ObserveEvent(payload)
 		helps.RecordCodexTurnStateTicketOnEvent(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, payload)
-		payload = applyCodexIdentityConfuseResponsePayload(payload, identityState)
 		helps.AppendCodexAPIWebsocketResponse(ctx, e.cfg, payload)
 		helps.EmitWebSocketResponseEvent(ctx, opts, auth, e.Identifier(), req.Model, payload)
 		payload = helps.RestoreCodexMultiAgentV2Response(payload, restoreMultiAgentV2)
@@ -436,8 +433,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				reporter.EnsurePublished(ctx)
 			}
 			var param any
-			clientPayload := applyCodexIdentityExposeResponsePayload(payload, identityState)
-			out := sdktranslator.TranslateNonStream(ctx, to, responseFormat, req.Model, originalPayload, clientBody, clientPayload, &param)
+			out := sdktranslator.TranslateNonStream(ctx, to, responseFormat, req.Model, originalPayload, body, payload, &param)
 			if responseFormat == sdktranslator.FormatOpenAIResponse {
 				out = helps.EnsureResponsesUsageDetails(out)
 			}

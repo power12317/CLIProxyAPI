@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 func TestCodexCredentialFileNameForSystemKeepsMacLegacyName(t *testing.T) {
@@ -49,6 +49,9 @@ func TestGetCodexCapabilities(t *testing.T) {
 	}
 	if body["system_scoped_oauth"] != true {
 		t.Fatalf("system_scoped_oauth = %#v", body["system_scoped_oauth"])
+	}
+	if _, exists := body["identity_confuse"]; exists {
+		t.Fatal("deprecated identity confusion capability must be absent")
 	}
 	prism, ok := body["prism"].(map[string]any)
 	if !ok || len(prism) != 2 || prism["supported"] != true || prism["enabled"] != false {

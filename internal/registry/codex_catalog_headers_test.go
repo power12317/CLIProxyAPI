@@ -24,12 +24,11 @@ func TestCodexCatalogHeaderNormalizationOnLoadAndRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldStore, oldURLs := getModels(), modelsURLs
+	oldStore := getModels()
 	t.Cleanup(func() {
 		modelsCatalogStore.mu.Lock()
 		modelsCatalogStore.data = oldStore
 		modelsCatalogStore.mu.Unlock()
-		modelsURLs = oldURLs
 	})
 	check := func(t *testing.T, catalog *staticModelsJSON) {
 		t.Helper()
@@ -59,11 +58,14 @@ func TestCodexCatalogHeaderNormalizationOnLoadAndRefresh(t *testing.T) {
 	t.Run("remote", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(raw) }))
 		defer server.Close()
-		modelsURLs = []string{server.URL}
-		catalog, source := fetchModelsFromRemote(context.Background())
-		if catalog == nil || source != server.URL {
-			t.Fatal("remote catalog was not loaded")
+		fetch := catalogFetcher(embeddedModelsJSON, []string{server.URL}, validateCatalogBytes)
+		data, errFetch := fetch(context.Background(), "")
+		if errFetch != nil {
+			t.Fatalf("remote catalog was not loaded: %v", errFetch)
 		}
-		check(t, catalog)
+		if _, errPublish := publishCatalogBytes(data); errPublish != nil {
+			t.Fatalf("remote catalog was not published: %v", errPublish)
+		}
+		check(t, getModels())
 	})
 }

@@ -14,17 +14,17 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/antigravity"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/kimi"
-	metaauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/meta"
-	xaiauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/xai"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/antigravity"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/kimi"
+	metaauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/meta"
+	xaiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/xai"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -389,17 +389,26 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 		// Extract additional info for filename generation
 		claims, _ := codex.ParseJWTToken(bundle.TokenData.IDToken)
 		planType := ""
+		if bundle != nil && strings.TrimSpace(bundle.TokenData.PlanType) != "" {
+			planType = strings.TrimSpace(bundle.TokenData.PlanType)
+		}
 		hashAccountID := ""
 		if claims != nil {
-			planType = strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType)
+			if pt := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); pt != "" {
+				planType = pt
+			}
 			if accountID := claims.GetAccountID(); accountID != "" {
 				digest := sha256.Sum256([]byte(accountID))
 				hashAccountID = hex.EncodeToString(digest[:])[:8]
 			}
 		}
+		if planType == "" {
+			planType = codex.DefaultPlanType
+		}
 
 		// Create token storage and persist
 		tokenStorage := openaiAuth.CreateTokenStorage(bundle)
+		tokenStorage.PlanType = planType
 		fileName := codexCredentialFileNameForSystem(codex.CredentialFileName(tokenStorage.Email, planType, hashAccountID, true), clientSystem)
 		recordID := fileName
 		if targetAuthID != "" {
@@ -410,6 +419,10 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 				fileName = targetAuthID
 			}
 		}
+		if targetAttributes == nil {
+			targetAttributes = make(map[string]string)
+		}
+		targetAttributes["plan_type"] = planType
 		record := &coreauth.Auth{
 			ID:         recordID,
 			Provider:   "codex",
@@ -423,6 +436,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 				"account_id":          tokenStorage.AccountID,
 				"auth_kind":           coreauth.AuthKindOAuth,
 				"codex_client_system": clientSystem,
+				"plan_type":           planType,
 			},
 		}
 		if errGuard := guardOAuthSessionPendingForSave(state, "codex"); errGuard != nil {
