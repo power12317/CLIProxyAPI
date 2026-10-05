@@ -4,6 +4,10 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 This fork is maintained at [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI). It includes Codex OAuth request reconstruction, separate macOS/Windows credentials, credential-scoped cookies, and turn-state caching. See [fork changes and Docker deployment](docs/fork-deployment.md). The fork image is `ghcr.io/power12317/cliproxyapi:latest`; Compose builds this checkout by default.
 
+On Linux, both Compose files mount the Docker host's `/etc/localtime` read-only and set `TZ=:/etc/localtime`, so CPA uses that host's timezone. Keep both settings when adapting Compose: setting `TZ` also overrides older images that hardcode `Asia/Shanghai`. Recreate the container after changing its configuration. Without the mount, the image uses its own timezone file. Docker Desktop and remote Docker daemons resolve bind mounts on their Docker host, which may differ from the machine running Compose.
+
+Compose passes `LANG`, `LANGUAGE`, and `LC_ALL` from its environment (`LANG` defaults to `C.UTF-8`). Docker does not inherit these automatically. Locale variables do not translate CPA log messages or install additional system locales, and language settings do not select a timezone.
+
 If you want to use CLIProxyAPI on your desktop, we recommend our [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop client. It provides a graphical configuration UI, automatic updates, system tray integration, and one-click start/stop for the CLIProxyAPI service.
 
 CLIProxyAPI is a proxy server that provides OpenAI/Gemini/Claude/Codex/Grok compatible API interfaces for CLI.
