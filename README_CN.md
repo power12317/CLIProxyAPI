@@ -4,10 +4,6 @@
 
 本 fork 的仓库地址为 [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI)，包含 Codex OAuth 请求还原、macOS/Windows 独立凭据、凭据级 Cookie Jar 和 turn-state 缓存。完整改动与 Docker 启动方式见 [fork 部署说明](docs/fork-deployment.md)。镜像地址为 `ghcr.io/power12317/cliproxyapi:latest`，Compose 默认从当前源码构建。
 
-在 Linux 上，两份 Compose 配置均只读挂载 Docker 宿主机的 `/etc/localtime`，并设置 `TZ=:/etc/localtime`，让 CPA 使用宿主机时区。调整 Compose 时请保留这两项；其中 `TZ` 还会覆盖旧镜像内写死的 `Asia/Shanghai`。修改配置后需重新创建容器。未挂载时，镜像使用自身的时区文件。Docker Desktop 或远程 Docker 服务的挂载源位于 Docker 宿主机，它可能与运行 Compose 命令的机器不同。
-
-Compose 从启动环境传入 `LANG`、`LANGUAGE` 和 `LC_ALL`（`LANG` 默认使用 `C.UTF-8`）。Docker 不会自动继承这些设置。语言环境变量不会翻译 CPA 日志或安装额外的系统 locale，也不用于选择时区。
-
 如果您想在您的桌面使用 CLIProxyAPI，我们推荐您使用我们的 [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) 桌面客户端，该客户端提供了图形化的配置界面、自动更新、系统托盘集成、一键启动/关闭 CLIProxyAPI 服务等功能。
 
 CLIProxyAPI 是一个为 CLI 提供 OpenAI/Gemini/Claude/Codex/Grok 兼容 API 接口的代理服务器。

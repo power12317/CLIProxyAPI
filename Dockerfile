@@ -34,7 +34,8 @@ WORKDIR /CLIProxyAPI
 
 EXPOSE 8317
 
-# Read the runtime timezone file, which Compose mounts from the deployment host.
-ENV TZ=:/etc/localtime
+ENV TZ=Asia/Singapore
+
+RUN cp /usr/share/zoneinfo/${TZ} /etc/localtime && echo "${TZ}" > /etc/timezone
 
 CMD ["./CLIProxyAPI"]
