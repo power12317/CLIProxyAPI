@@ -178,7 +178,7 @@ x-basispoints-auth-mode: chatgpt
 
 2026-09-25 回归修复：CPAMP 原分支基于旧功能分支，缺少 fork `main` 的原生门票探测设置、凭证门票状态及其他更新。修复版本合入 CPAMP `main` 的 `3453e7ab`，相对该提交只增加两个传输开关及配套支持，不删除主线功能。同时移除 CPA 中 Basispoints 自动关闭 `turn-state-ticket` 的联动：探测由自己的开关决定，配置和票据状态继续保留。回归测试覆盖配置往返、管理 API 和实际探测器；发布使用新的 `basispoints/v2026.09.25-3` tag。原有模型名称、实际推理强度和后缀解析器保持不变。
 
-2026-10-06 起，Basispoints 已合入 `main`，分支镜像工作流已移除。CPA 使用 `ghcr.io/power12317/cliproxyapi:latest`，沿用推送 `v*` Git tag 时构建并发布对应版本和 `latest` 的流程。CPAMP 使用 `ghcr.io/power12317/cpa-manager-plus:latest`，从 `main` 发布 `main` 和 `latest` 标签。两者均支持 `linux/amd64` 和 `linux/arm64`。
+2026-10-06 起，Basispoints 已合入 `main`，分支镜像工作流已移除。CPA 使用 `ghcr.io/power12317/cliproxyapi:latest`，沿用推送 `v*` Git tag 时构建并发布对应版本和 `latest` 的流程。CPAMP 使用 `ghcr.io/power12317/cpa-manager-plus:latest`，沿用推送 `main` 分支后发布 `latest` 和 SHA 标签的流程。两者均支持 `linux/amd64` 和 `linux/arm64`。
 
 - [cpa-plugin-oai-basispoints](https://github.com/JaxsonWang/cpa-plugin-oai-basispoints/tree/708082da2f851569984de395d25405e61c2bbc34)，研究提交 `708082da2f851569984de395d25405e61c2bbc34`。参考认证头、请求体和工具往返转换；不照搬其别名、虚拟认证副本、档位映射及全量 SSE 缓冲。
 - [ghcp_proxy](https://github.com/Nonary/ghcp_proxy/tree/950e1eb96bca3a630a5c078541832e12e473a50d)，研究提交 `950e1eb96bca3a630a5c078541832e12e473a50d`。重点参考 `excel_upstream.py` 与 `proxy.py` 的工具 item、会话和流式处理；不照搬模型表和档位限制。
