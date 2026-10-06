@@ -4,6 +4,18 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 This fork is maintained at [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI). It includes Codex OAuth request reconstruction, separate macOS/Windows credentials, credential-scoped cookies, and turn-state caching. See [fork changes and Docker deployment](docs/fork-deployment.md). The fork image is `ghcr.io/power12317/cliproxyapi:latest`; Compose builds this checkout by default.
 
+Pushes to `main` publish only `cliproxyapi:main` and `cliproxyapi:latest` under
+`ghcr.io/power12317`, for Linux amd64 and arm64. The
+[Codex Server Compose example](docker-compose.codex.example.yml) adds only
+[Codex Server](https://github.com/power12317/codex-server), using
+`ghcr.io/power12317/codex-server:latest` and `./codex-data:/var/lib/codex` inside
+the CPA deployment directory. No Codex Server checkout is required. The service
+and container are named `codex-server`; its image override is `CODEX_SERVER_IMAGE`.
+When upgrading the old `codex-master` service, use
+`docker compose -f docker-compose.codex.example.yml up -d --remove-orphans` to
+remove the old container while retaining its bind-mounted data. CPAMP remains a
+separate project with its own `docker-compose.yml`.
+
 If you want to use CLIProxyAPI on your desktop, we recommend our [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop client. It provides a graphical configuration UI, automatic updates, system tray integration, and one-click start/stop for the CLIProxyAPI service.
 
 CLIProxyAPI is a proxy server that provides OpenAI/Gemini/Claude/Codex/Grok compatible API interfaces for CLI.

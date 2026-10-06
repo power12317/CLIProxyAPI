@@ -28,10 +28,10 @@ services:
       - ${CLI_PROXY_PLUGIN_PATH:-./plugins}:/CLIProxyAPI/plugins
     restart: unless-stopped
 
-  codex-master:
-    image: ${CODEX_RUNTIME_IMAGE:-ghcr.io/power12317/codex-cpa-runtime:latest}
+  codex-server:
+    image: ${CODEX_SERVER_IMAGE:-ghcr.io/power12317/codex-server:latest}
     pull_policy: always
-    container_name: codex-master
+    container_name: codex-server
     # The master listens on loopback inside CPA's network namespace.
     network_mode: "service:cli-proxy-api"
     user: "0:0"

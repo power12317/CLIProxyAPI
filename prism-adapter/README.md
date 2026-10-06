@@ -101,10 +101,10 @@ state directories, and environment secrets must stay outside this repository.
 The feature remains off until enabled through CPA configuration. No deployment
 is performed by building this branch.
 
-Prism branch tags use `prism/vYYYY.MM.DD-N` and publish the gateway image to
-`ghcr.io/power12317/cliproxyapi-prism:vYYYY.MM.DD-N` for Linux amd64 and arm64.
-This image has its own repository and version tags. The standalone adapter still
-runs separately using the installation steps above and a shared loopback network.
+Prism is included in `main`. The gateway image is
+`ghcr.io/power12317/cliproxyapi:latest` (also tagged `main`) for Linux amd64 and
+arm64. Branch-specific image publication has been removed. The standalone adapter
+still runs separately using the installation steps above and a shared loopback network.
 
 ## Verification
 
