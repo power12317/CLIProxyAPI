@@ -36,7 +36,7 @@ func (l *CodexRuntimeLog) Record(entry bridge.UpstreamLog) {
 			reporter.accessTokenHash = entry.AccessTokenSHA256
 			reporter.authMu.Unlock()
 		}
-		info := UpstreamRequestLog{URL: entry.URL, Method: entry.Method, Headers: entry.Headers, Body: []byte(entry.Body), Provider: "codex"}
+		info := UpstreamRequestLog{URL: entry.URL, Method: entry.Method, Headers: entry.Headers, Body: []byte(entry.Body), Provider: "codex", OaiLBNode: entry.OaiLBNode}
 		if l.auth != nil {
 			info.AuthID, info.AuthLabel = l.auth.ID, l.auth.Label
 			info.AuthType, info.AuthValue = l.auth.AccountInfo()

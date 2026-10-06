@@ -52,7 +52,9 @@ func TestCodexRuntimeUpstreamLogsForSuccessAndStream(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			w, a := runtimeTestMaster(t, "logs", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
-				runtimeLogNotification(c, req, runtimeLogRequest())
+				request := runtimeLogRequest()
+				request.OaiLBNode = "gateway-request"
+				runtimeLogNotification(c, req, request)
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200, Headers: http.Header{
 					"x-request-id": {"actual-request-id"}, "x-codex-turn-state": {"response-state"}, "x-codex-primary-used-percent": {"17"},
 				}, OaiLBNode: "gateway-a"})
@@ -79,13 +81,16 @@ func TestCodexRuntimeUpstreamLogsForSuccessAndStream(t *testing.T) {
 			}
 			requestLog := runtimeLogText(t, c, "API_REQUEST")
 			responseLog := runtimeLogText(t, c, "API_RESPONSE")
-			for _, want := range []string{"=== API REQUEST 1 ===", "HTTP Method: POST", "https://chatgpt.com/backend-api/codex/responses", "actual worker body", "provider=codex"} {
+			for _, want := range []string{"=== API REQUEST 1 ===", "HTTP Method: POST", "https://chatgpt.com/backend-api/codex/responses", "actual worker body", "provider=codex", "oailb_node: gateway-request"} {
 				if !strings.Contains(requestLog, want) {
 					t.Errorf("request log missing %q: %s", want, requestLog)
 				}
 			}
 			if strings.Contains(requestLog, "runtime-secret") {
 				t.Error("request logs bypassed existing token masking")
+			}
+			if got := logging.CodexOaiLBNode(c); got != "gateway-a" {
+				t.Fatalf("access-log node = %q, want response node gateway-a", got)
 			}
 			for _, want := range []string{"Status: 200", "actual-request-id", "response-state", "future_extension", "response.completed", "oailb_node: gateway-a", "auth_file: \"shared-account.json\""} {
 				if !strings.Contains(responseLog, want) {
@@ -179,13 +184,16 @@ func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 	for _, mode := range []string{"failed-event", "disconnect", "transport-error"} {
 		t.Run(mode, func(t *testing.T) {
 			w, a := runtimeTestMaster(t, mode, func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
-				runtimeLogNotification(c, req, runtimeLogRequest())
+				request := runtimeLogRequest()
+				request.OaiLBNode = "gateway-request"
+				runtimeLogNotification(c, req, request)
 				if mode == "transport-error" {
 					runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "error", Message: "upstream connection reset"})
 					_ = c.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "upstream connection reset"}})
 					return
 				}
-				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200})
+				// The worker reports the request node when this response has no routing cookie.
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200, OaiLBNode: request.OaiLBNode})
 				runtimeTestAccept(c, m, req)
 				if mode == "failed-event" {
 					runtimeTestFinish(c, req, `{"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"out of capacity"}}}`)
@@ -208,6 +216,12 @@ func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 			}
 			if !strings.Contains(responseLog, "Error:") || !strings.Contains(responseLog, want) {
 				t.Fatalf("failure log missing: %s", responseLog)
+			}
+			if requestLog := runtimeLogText(t, c, "API_REQUEST"); !strings.Contains(requestLog, "oailb_node: gateway-request") {
+				t.Fatalf("request node lost on %s: %s", mode, requestLog)
+			}
+			if got := logging.CodexOaiLBNode(c); got != "gateway-request" {
+				t.Fatalf("access-log node lost on %s: %q", mode, got)
 			}
 		})
 	}

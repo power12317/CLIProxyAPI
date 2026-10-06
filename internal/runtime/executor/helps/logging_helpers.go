@@ -40,6 +40,7 @@ type UpstreamRequestLog struct {
 	AuthLabel string
 	AuthType  string
 	AuthValue string
+	OaiLBNode string
 }
 
 type upstreamAttempt struct {
@@ -182,6 +183,9 @@ func newAPIRequestLogBuilder(index int, info UpstreamRequestLog, timestamp time.
 	}
 	if auth := formatAuthInfo(info); auth != "" {
 		builder.WriteString(fmt.Sprintf("Auth: %s\n", auth))
+	}
+	if info.OaiLBNode != "" {
+		builder.WriteString(fmt.Sprintf("oailb_node: %s\n", info.OaiLBNode))
 	}
 	builder.WriteString("\nHeaders:\n")
 	writeHeaders(builder, info.Headers)
