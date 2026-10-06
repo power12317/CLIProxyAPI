@@ -29,7 +29,7 @@ services:
     restart: unless-stopped
 
   codex-master:
-    image: ${CODEX_RUNTIME_IMAGE:-ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth}
+    image: ${CODEX_RUNTIME_IMAGE:-ghcr.io/power12317/codex-cpa-runtime:latest}
     pull_policy: always
     container_name: codex-master
     # The master listens on loopback inside CPA's network namespace.
