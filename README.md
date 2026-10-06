@@ -6,13 +6,13 @@ This fork is maintained at [power12317/CLIProxyAPI](https://github.com/power1231
 
 Pushing a `v*` Git tag publishes the corresponding version and `latest` under
 `ghcr.io/power12317/cliproxyapi`, for Linux amd64 and arm64. The
-[Codex Server Compose example](docker-compose.codex.example.yml) adds only
+[Codex Server Compose](docker-compose.codex.yml) adds only
 [Codex Server](https://github.com/power12317/codex-server), using
 `ghcr.io/power12317/codex-server:latest` and `./codex-data:/var/lib/codex` inside
 the CPA deployment directory. No Codex Server checkout is required. The service
 and container are named `codex-server`; its image override is `CODEX_SERVER_IMAGE`.
 When upgrading the old `codex-master` service, use
-`docker compose -f docker-compose.codex.example.yml up -d --remove-orphans` to
+`docker compose -f docker-compose.codex.yml up -d --remove-orphans` to
 remove the old container while retaining its bind-mounted data. CPAMP remains a
 separate project with its own `docker-compose.yml`.
 

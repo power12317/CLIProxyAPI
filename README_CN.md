@@ -4,7 +4,7 @@
 
 本 fork 的仓库地址为 [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI)，包含 Codex OAuth 请求还原、macOS/Windows 独立凭据、凭据级 Cookie Jar 和 turn-state 缓存。完整改动与 Docker 启动方式见 [fork 部署说明](docs/fork-deployment.md)。镜像地址为 `ghcr.io/power12317/cliproxyapi:latest`，Compose 默认从当前源码构建。
 
-推送 `v*` Git tag 后，发布 `ghcr.io/power12317/cliproxyapi` 的对应版本和 `latest` 镜像，支持 Linux amd64 和 arm64。[Codex Server Compose 示例](docker-compose.codex.example.yml) 只增加 [Codex Server](https://github.com/power12317/codex-server)，使用 `ghcr.io/power12317/codex-server:latest`，数据绑定到 CPA 部署目录下的 `./codex-data:/var/lib/codex`，无需拉取 Codex Server 源码。服务和容器名为 `codex-server`，镜像覆盖变量为 `CODEX_SERVER_IMAGE`。从原 `codex-master` 服务升级时，使用 `docker compose -f docker-compose.codex.example.yml up -d --remove-orphans` 移除旧容器，保留绑定目录中的数据。CPAMP 是独立项目，继续使用自己的 `docker-compose.yml`。
+推送 `v*` Git tag 后，发布 `ghcr.io/power12317/cliproxyapi` 的对应版本和 `latest` 镜像，支持 Linux amd64 和 arm64。[Codex Server Compose](docker-compose.codex.yml) 只增加 [Codex Server](https://github.com/power12317/codex-server)，使用 `ghcr.io/power12317/codex-server:latest`，数据绑定到 CPA 部署目录下的 `./codex-data:/var/lib/codex`，无需拉取 Codex Server 源码。服务和容器名为 `codex-server`，镜像覆盖变量为 `CODEX_SERVER_IMAGE`。从原 `codex-master` 服务升级时，使用 `docker compose -f docker-compose.codex.yml up -d --remove-orphans` 移除旧容器，保留绑定目录中的数据。CPAMP 是独立项目，继续使用自己的 `docker-compose.yml`。
 
 如果您想在您的桌面使用 CLIProxyAPI，我们推荐您使用我们的 [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) 桌面客户端，该客户端提供了图形化的配置界面、自动更新、系统托盘集成、一键启动/关闭 CLIProxyAPI 服务等功能。
 
