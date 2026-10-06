@@ -102,8 +102,9 @@ The feature remains off until enabled through CPA configuration. No deployment
 is performed by building this branch.
 
 Prism is included in `main`. The gateway image is
-`ghcr.io/power12317/cliproxyapi:latest` (also tagged `main`) for Linux amd64 and
-arm64. Branch-specific image publication has been removed. The standalone adapter
+`ghcr.io/power12317/cliproxyapi:latest` for Linux amd64 and arm64. Pushing a `v*`
+Git tag publishes its version and `latest`. Branch-specific image publication
+has been removed. The standalone adapter
 still runs separately using the installation steps above and a shared loopback network.
 
 ## Verification

@@ -4,8 +4,8 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 This fork is maintained at [power12317/CLIProxyAPI](https://github.com/power12317/CLIProxyAPI). It includes Codex OAuth request reconstruction, separate macOS/Windows credentials, credential-scoped cookies, and turn-state caching. See [fork changes and Docker deployment](docs/fork-deployment.md). The fork image is `ghcr.io/power12317/cliproxyapi:latest`; Compose builds this checkout by default.
 
-Pushes to `main` publish only `cliproxyapi:main` and `cliproxyapi:latest` under
-`ghcr.io/power12317`, for Linux amd64 and arm64. The
+Pushing a `v*` Git tag publishes the corresponding version and `latest` under
+`ghcr.io/power12317/cliproxyapi`, for Linux amd64 and arm64. The
 [Codex Server Compose example](docker-compose.codex.example.yml) adds only
 [Codex Server](https://github.com/power12317/codex-server), using
 `ghcr.io/power12317/codex-server:latest` and `./codex-data:/var/lib/codex` inside
