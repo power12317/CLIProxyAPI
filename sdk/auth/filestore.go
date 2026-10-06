@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -110,7 +111,24 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 		SetMetadata(map[string]any)
 	}
 
+	shared := false
+	if current, errRead := codexshared.Read(path); errRead == nil {
+		if _, ok := codexshared.Get(current); ok {
+			if auth.Storage != nil && cliproxyauth.HasAuthCreationIntent(ctx) {
+				// Explicit reauthorization must persist the newly exchanged tokens.
+				cliproxyauth.MergeExistingAuthMetadata(auth, current)
+			} else {
+				shared = true
+				auth.Metadata = codexshared.MergeMetadata(current, auth.Metadata)
+			}
+		}
+	}
 	switch {
+	case shared:
+		auth.Metadata["disabled"] = auth.Disabled
+		if err := codexshared.Write(path, auth.Metadata); err != nil {
+			return "", err
+		}
 	case auth.Storage != nil:
 		if auth.Metadata == nil {
 			auth.Metadata = make(map[string]any)

@@ -68,3 +68,6 @@ docker-compose.override.yml
 
 # Local LLM Wiki vault
 .llm-wiki
+
+# Server-specific deployment configuration stays local.
+docker-compose.server.yaml

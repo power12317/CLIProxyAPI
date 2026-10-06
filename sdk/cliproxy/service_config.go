@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher/synthesizer"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -115,6 +116,10 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected config update with invalid credential weights")
 		return configCommit{}
 	}
+	if errValidate := newCfg.ValidateCodexRuntime(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid Codex runtime configuration")
+		return configCommit{}
+	}
 
 	if errValidate := newCfg.Models.Validate(); errValidate != nil {
 		log.WithError(errValidate).Warn("rejected invalid model catalog sources")
@@ -159,6 +164,9 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 
 	if !s.applyManagerConfig(ctx, commit) {
 		return false
+	}
+	if errRuntime := codexruntime.ApplyConfig(ctx, cfg); errRuntime != nil {
+		log.WithError(errRuntime).Warn("could not apply shared Codex credential state")
 	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false

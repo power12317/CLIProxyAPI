@@ -497,7 +497,7 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if errWeight := ValidateAuthWeight(auth); errWeight != nil {
 		return fmt.Errorf("persist auth: %w", errWeight)
 	}
-	if IsConfigAPIKeyAuth(auth) {
+	if IsConfigAPIKeyAuth(auth) || IsCodexRuntimeOwnedAuth(auth) {
 		return nil
 	}
 	if auth.Attributes != nil {

@@ -122,7 +122,7 @@ func codexTurnStateTicketForAuth(auth *cliproxyauth.Auth, model string) *CodexTu
 }
 
 func isCodexTurnStateTicketAccount(auth *cliproxyauth.Auth) bool {
-	return auth != nil && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.AuthKind() == cliproxyauth.AuthKindOAuth
+	return auth != nil && !cliproxyauth.IsCodexRuntimeOwnedAuth(auth) && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.AuthKind() == cliproxyauth.AuthKindOAuth
 }
 
 // CodexTurnStateTicketStatuses creates the redacted per-model state shown by

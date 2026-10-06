@@ -44,6 +44,8 @@ func (s *Service) ensureAuthUpdateQueue(ctx context.Context) {
 	}
 	queueCtx, cancel := context.WithCancel(ctx)
 	s.authQueueStop = cancel
+	s.codexRuntimeReload = make(chan struct{}, 1)
+	go s.consumeCodexRuntimeReloads(queueCtx)
 	go s.consumeAuthUpdates(queueCtx)
 }
 
@@ -168,11 +170,15 @@ func (s *Service) handleAuthUpdates(ctx context.Context, updates []watcher.AuthU
 	registrationCtx := coreauth.WithDeferredAPIKeyModelAliasRebuild(ctx)
 	tasks := make([]modelRegistrationTask, 0, len(updates))
 	needsAliasRebuild := false
+	needsCodexRuntimeReload := false
 	for _, update := range updates {
 		switch update.Action {
 		case watcher.AuthUpdateActionAdd, watcher.AuthUpdateActionModify:
 			if update.Auth == nil || update.Auth.ID == "" {
 				continue
+			}
+			if isCodexFileAuth(update.Auth) {
+				needsCodexRuntimeReload = true
 			}
 			auth := s.prepareCoreAuthForModelRegistration(registrationCtx, update.Auth)
 			if auth == nil {
@@ -207,11 +213,15 @@ func (s *Service) handleAuthUpdates(ctx context.Context, updates []watcher.AuthU
 			if id == "" {
 				continue
 			}
-			if existing, ok := s.coreManager.GetByID(id); ok && existing != nil && update.Auth != nil {
+			existing, ok := s.coreManager.GetByID(id)
+			if ok && existing != nil && update.Auth != nil {
 				if isStaleCoreAuth(existing, update.Auth) {
 					log.Debugf("skipping stale auth delete for %s: incoming gen=%d, existing gen=%d", id, update.Auth.Generation, existing.Generation)
 					continue
 				}
+			}
+			if isCodexFileAuth(existing) || isCodexFileAuth(update.Auth) {
+				needsCodexRuntimeReload = true
 			}
 			s.applyCoreAuthRemoval(registrationCtx, id)
 			needsAliasRebuild = true
@@ -225,6 +235,9 @@ func (s *Service) handleAuthUpdates(ctx context.Context, updates []watcher.AuthU
 	}
 	locked = false
 	s.authUpdateMu.Unlock()
+	if needsCodexRuntimeReload {
+		s.scheduleCodexRuntimeReload()
+	}
 	s.runModelRegistrationTasks(registrationCtx, tasks)
 	finishAuthRegistrations(s, startedRegs)
 	registrationsFinished = true
@@ -377,7 +390,7 @@ func (s *Service) prepareCoreAuthForModelRegistration(ctx context.Context, auth 
 		op = "update"
 		_, err = s.coreManager.Update(ctx, auth)
 		if err == nil && strings.EqualFold(auth.Provider, "codex") {
-			if helps.CodexOwnerFingerprint(existing) != helps.CodexOwnerFingerprint(auth) {
+			if helps.CodexOwnerFingerprint(existing) != helps.CodexOwnerFingerprint(auth) || coreauth.IsCodexRuntimeOwnedAuth(existing) != coreauth.IsCodexRuntimeOwnedAuth(auth) {
 				helps.InvalidateCodexCookieJar(auth.ID)
 				helps.InvalidateCodexTurnStates(auth.ID)
 				executor.CloseCodexWebsocketSessionsForAuthID(auth.ID, "auth_owner_changed")

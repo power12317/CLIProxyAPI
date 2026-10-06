@@ -27,6 +27,8 @@ type PayloadRule = internalconfig.PayloadRule
 type PayloadFilterRule = internalconfig.PayloadFilterRule
 type PayloadModelRule = internalconfig.PayloadModelRule
 type CodexConfig = internalconfig.CodexConfig
+type CodexRuntimeConfig = internalconfig.CodexRuntimeConfig
+type CodexModel = internalconfig.CodexModel
 type CodexTurnStateTicketConfig = internalconfig.CodexTurnStateTicketConfig
 
 type GeminiKey = internalconfig.GeminiKey

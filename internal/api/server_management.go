@@ -117,6 +117,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/ws-auth", s.mgmt.PutWebsocketAuth)
 		mgmt.PATCH("/ws-auth", s.mgmt.PutWebsocketAuth)
 		mgmt.GET("/codex/force-websocket", s.mgmt.GetCodexForceWebsocket)
+		mgmt.GET("/codex-runtime", s.mgmt.GetCodexRuntime)
+		mgmt.PUT("/codex-runtime", s.mgmt.PutCodexRuntime)
+		mgmt.PATCH("/codex-runtime", s.mgmt.PutCodexRuntime)
+		mgmt.POST("/codex-runtime/credentials", s.mgmt.SetCodexRuntimeCredential)
 		mgmt.PUT("/codex/force-websocket", s.mgmt.PutCodexForceWebsocket)
 		mgmt.PATCH("/codex/force-websocket", s.mgmt.PutCodexForceWebsocket)
 

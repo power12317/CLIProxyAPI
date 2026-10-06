@@ -495,6 +495,9 @@ func (h *Handler) buildAuthFromFileData(path string, data []byte) (*coreauth.Aut
 	}
 	coreauth.NormalizeCredentialMetadata(metadata)
 	provider, _ := metadata["type"].(string)
+	if strings.EqualFold(strings.TrimSpace(provider), coreauth.CodexRuntimeProvider) {
+		return nil, fmt.Errorf("Codex runtime references cannot be uploaded as auth files; configure codex.runtime.workers")
+	}
 	if provider == "" {
 		provider = "unknown"
 	}

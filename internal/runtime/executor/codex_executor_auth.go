@@ -7,8 +7,10 @@ import (
 	"time"
 
 	codexauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
@@ -21,6 +23,13 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	}
 	if auth == nil {
 		return nil, statusErr{code: 500, msg: "codex executor: auth is nil"}
+	}
+	auth, sharedPath, err := bridge.LoadSharedAuth(e.cfg, auth)
+	if err != nil {
+		return nil, err
+	}
+	if cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+		return nil, runtimeError(409, "OAuth refresh is currently managed by Codex")
 	}
 	var refreshToken string
 	if auth.Metadata != nil {
@@ -78,6 +87,13 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		svc.UpdateTokenStorage(&clonedStorage, td)
 		clonedStorage.PlanType = planType
 		auth.Storage = &clonedStorage
+	}
+	if sharedPath != "" {
+		metadata, err := codexshared.SaveTokens(sharedPath, auth.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		auth.Metadata = metadata
 	}
 	return auth, nil
 }

@@ -70,7 +70,7 @@ var codexCookieJars sync.Map // map[string]http.CookieJar, keyed by auth.ID
 
 // CodexAuthUsesOAuthCookieJar reports whether an auth can use the ChatGPT OAuth jar.
 func CodexAuthUsesOAuthCookieJar(auth *cliproxyauth.Auth) bool {
-	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+	if auth == nil || cliproxyauth.IsCodexRuntimeOwnedAuth(auth) || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return false
 	}
 	if auth.AuthKind() == cliproxyauth.AuthKindAPIKey {

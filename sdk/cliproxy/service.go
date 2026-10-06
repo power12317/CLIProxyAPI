@@ -85,6 +85,8 @@ type Service struct {
 
 	// authUpdates channel for authentication updates.
 	authUpdates chan watcher.AuthUpdate
+	// codexRuntimeReload coalesces filesystem changes without blocking auth registration.
+	codexRuntimeReload chan struct{}
 
 	// authQueueStop cancels the auth update queue processing.
 	authQueueStop context.CancelFunc

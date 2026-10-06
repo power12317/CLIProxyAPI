@@ -115,7 +115,7 @@ func (m *Manager) queueRefreshUnschedule(authID string) {
 }
 
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
-	if a == nil {
+	if a == nil || IsCodexRuntimeOwnedAuth(a) {
 		return false
 	}
 	if hasUnauthorizedAuthFailure(a) || hasDisabledInvalidGrantFailure(a) {
@@ -400,6 +400,9 @@ func authRefreshToken(auth *Auth) string {
 }
 
 func authHasRefreshCredential(auth *Auth) bool {
+	if IsCodexRuntimeOwnedAuth(auth) {
+		return false
+	}
 	if authMetadataString(auth, "refresh_token") != "" {
 		return true
 	}
@@ -613,6 +616,9 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 		exec, _ = m.executorLocked(executorKeyFromAuth(auth))
 	}
 	m.mu.RUnlock()
+	if IsCodexRuntimeOwnedAuth(auth) {
+		return nil, errors.New("credential refresh is owned by the Codex runtime")
+	}
 	if auth == nil || exec == nil {
 		return nil, errors.New("auth or executor not found")
 	}
@@ -852,7 +858,7 @@ func (m *Manager) ForceRefreshAll(ctx context.Context) []ForceRefreshResult {
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.auths))
 	for id, auth := range m.auths {
-		if auth != nil && !auth.Disabled && (authHasRefreshCredential(auth) || auth.Runtime != nil) {
+		if auth != nil && !auth.Disabled && !IsCodexRuntimeOwnedAuth(auth) && (authHasRefreshCredential(auth) || auth.Runtime != nil) {
 			ids = append(ids, id)
 		}
 	}
