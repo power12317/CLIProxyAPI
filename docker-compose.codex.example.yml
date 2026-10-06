@@ -1,0 +1,45 @@
+services:
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-ghcr.io/power12317/cliproxyapi:latest}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: cli-proxy-api
+    # env_file:
+    #   - .env
+    environment:
+      DEPLOY: ${DEPLOY:-}
+    ports:
+      - "8317:8317"
+      - "8085:8085"
+      - "1455:1455"
+      - "54545:54545"
+      - "51121:51121"
+      - "11451:11451"
+    volumes:
+      - ${CLI_PROXY_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml
+      - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
+      - ${CLI_PROXY_PLUGIN_PATH:-./plugins}:/CLIProxyAPI/plugins
+    restart: unless-stopped
+
+  codex-master:
+    image: ${CODEX_RUNTIME_IMAGE:-ghcr.io/power12317/codex-cpa-runtime:cpa-managed-auth}
+    pull_policy: always
+    container_name: codex-master
+    # The master listens on loopback inside CPA's network namespace.
+    network_mode: "service:cli-proxy-api"
+    user: "0:0"
+    depends_on:
+      cli-proxy-api:
+        condition: service_started
+        restart: true
+    volumes:
+      - ${CLI_PROXY_AUTH_PATH:-./auths}:/cpa-auth
+      - ./codex-data:/var/lib/codex
+    restart: unless-stopped
