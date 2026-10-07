@@ -95,7 +95,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
-	reporter.SetTranslatedReasoningEffort(body, to.String())
 	reporter.SetCodexFastMode(e.cfg)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -121,6 +120,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		replaceCodexRequestBody(httpReq, upstreamBody)
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
+	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
 	applyCodexRoutingHint(ctx, httpReq.Header, auth, baseModel, turnStateBody, opts.Headers)

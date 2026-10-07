@@ -173,7 +173,7 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 			continue
 		}
 		upstreamLog.Event(event)
-		reporter.ObserveCodexResponseModel(event)
+		reporter.ObserveResponseModel(event)
 		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
 			return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
 		}

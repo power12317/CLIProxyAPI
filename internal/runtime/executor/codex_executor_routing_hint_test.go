@@ -17,12 +17,13 @@ import (
 )
 
 type capturedCodexRequest struct {
-	encoding    string
-	path        string
-	model       gjson.Result
-	routingHint string
-	hasHint     bool
-	serviceTier gjson.Result
+	encoding        string
+	path            string
+	model           gjson.Result
+	routingHint     string
+	hasHint         bool
+	serviceTier     gjson.Result
+	reasoningEffort string
 }
 
 func newCodexRoutingHintServer(t *testing.T, captured *capturedCodexRequest) *httptest.Server {
@@ -56,6 +57,7 @@ func newCodexRoutingHintServer(t *testing.T, captured *capturedCodexRequest) *ht
 		_, captured.hasHint = r.Header[http.CanonicalHeaderKey(codexRoutingHintHeader)]
 		captured.routingHint = r.Header.Get(codexRoutingHintHeader)
 		captured.serviceTier = gjson.GetBytes(body, "service_tier")
+		captured.reasoningEffort = gjson.GetBytes(body, "reasoning.effort").String()
 		if r.URL.Path == "/responses/compact" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"cmp_1","object":"response.compaction","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))

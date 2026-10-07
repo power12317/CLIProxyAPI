@@ -87,7 +87,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
-	reporter.SetTranslatedReasoningEffort(body, to.String())
 	reporter.SetCodexFastMode(e.cfg)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -113,6 +112,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		replaceCodexRequestBody(httpReq, upstreamBody)
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
+	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
 	applyCodexRoutingHint(ctx, httpReq.Header, auth, baseModel, turnStateBody, opts.Headers)
@@ -197,7 +197,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 		eventData := bytes.TrimSpace(line[5:])
 		eventData = helps.RestoreCodexMultiAgentV2Response(eventData, optimizeMultiAgentV2)
-		reporter.ObserveCodexResponseModel(eventData)
+		reporter.ObserveResponseModel(eventData)
 		eventType := gjson.GetBytes(eventData, "type").String()
 
 		if helps.HasMeaningfulCodexOutputDelta(eventData) {
@@ -311,7 +311,6 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
 	body = helps.NormalizeCodexToolSchemas(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, isCompat)
-	reporter.SetTranslatedReasoningEffort(body, to.String())
 	reporter.SetCodexFastMode(e.cfg)
 
 	var compactIdentity helps.CodexOAuthIdentity
@@ -329,6 +328,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
 	turnStateBody = upstreamBody
 	replaceCodexRequestBody(httpReq, upstreamBody)
+	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
 	applyCodexRoutingHint(ctx, httpReq.Header, auth, baseModel, turnStateBody, opts.Headers)

@@ -33,7 +33,7 @@ func TestCodexTurnStateLogUpdatesPreserveResponseModelAndResetAttempts(t *testin
 		state.ObserveRequest(http.Header{codexTurnStateHeader: {"request-state"}}, nil)
 		reporter := newCodexTestReporter(ctx, requested, auth)
 		if served != "" {
-			reporter.ObserveCodexResponseModel([]byte(fmt.Sprintf(`{"type":"response.completed","response":{"model":%q}}`, served)))
+			reporter.ObserveResponseModel([]byte(fmt.Sprintf(`{"type":"response.completed","response":{"model":%q}}`, served)))
 		}
 		reporter.EnsurePublished(ctx)
 		state.ObserveEvent([]byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"response-state"}}`))
