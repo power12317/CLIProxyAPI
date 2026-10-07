@@ -42,4 +42,5 @@ services:
     volumes:
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/cpa-auth
       - ./codex-data:/var/lib/codex
+      - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
