@@ -111,7 +111,7 @@ func equalRuntimeJSON(t *testing.T, a, b []byte) {
 	}
 }
 
-func TestCodexRuntimeNativeRequestAndResponseFidelity(t *testing.T) {
+func TestCodexRuntimeCPARequestAndResponseFidelity(t *testing.T) {
 	captured := make(chan bridge.Request, 1)
 	w, a := runtimeTestMaster(t, "native", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
 		captured <- r
@@ -126,11 +126,14 @@ func TestCodexRuntimeNativeRequestAndResponseFidelity(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := <-captured
-	for _, field := range []string{"input", "instructions", "tools", "tool_choice", "parallel_tool_calls", "client_metadata", "future_field"} {
+	for _, field := range []string{"input", "instructions", "tool_choice", "future_field"} {
 		equalRuntimeJSON(t, []byte(gjson.GetBytes(body, field).Raw), []byte(gjson.GetBytes(r.Request, field).Raw))
 	}
-	if r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || r.SessionID != gjson.GetBytes(r.Request, "prompt_cache_key").String() || !gjson.GetBytes(r.Request, "stream").Bool() {
+	if r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || gjson.GetBytes(r.Request, "prompt_cache_key").String() != "untrusted-session" || !gjson.GetBytes(r.Request, "stream").Bool() {
 		t.Fatal("incorrect identity/normalization", r)
+	}
+	if gjson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || gjson.GetBytes(r.Request, "tools.1.type").String() != "image_generation" || !gjson.GetBytes(r.Request, "parallel_tool_calls").Bool() || gjson.GetBytes(r.Request, "client_metadata.extension").String() != "client-value" {
+		t.Fatalf("normal CPA tool preparation or caller metadata was lost: %s", r.Request)
 	}
 	encoded, _ := json.Marshal(r)
 	if bytes.Contains(encoded, []byte("synthetic-bearer")) || bytes.Contains(encoded, []byte("synthetic-cookie")) || bytes.Contains(encoded, []byte("caller-a")) {
@@ -223,22 +226,26 @@ func TestCodexRuntimeCrossProtocolToolCalls(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeRejectUnsupportedBeforeInference(t *testing.T) {
-	w, a := runtimeTestMaster(t, "unsupported", func(*websocket.Conn, runtimeTestRPC, bridge.Request) {
-		t.Error("unsupported request reached inference")
+func TestCodexRuntimeUsesCPACleanupBeforeInference(t *testing.T) {
+	w, a := runtimeTestMaster(t, "cleanup", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+		for _, field := range []string{"previous_response_id", "generate", "prompt_cache_retention", "safety_identifier"} {
+			if gjson.GetBytes(req.Request, field).Exists() {
+				t.Errorf("CPA cleanup did not remove %s", field)
+			}
+		}
+		runtimeTestAccept(c, m, req)
+		runtimeTestFinish(c, req, runtimeTerminal)
 	})
 	e := runtimeTestExecutor(w)
-	for _, body := range []string{`{"previous_response_id":"old"}`, `{"generate":false}`} {
-		if _, err := e.Execute(context.Background(), a, coreexecutor.Request{Model: "runtime-model", Payload: []byte(body)}, runtimeTestOptions()); err == nil {
-			t.Fatal("unsupported request accepted")
-		}
+	body := []byte(`{"input":[],"previous_response_id":"old","generate":false,"prompt_cache_retention":"24h","safety_identifier":"source"}`)
+	if _, err := e.Execute(context.Background(), a, coreexecutor.Request{Model: "runtime-model", Payload: body}, runtimeTestOptions()); err != nil {
+		t.Fatal(err)
 	}
 	opts := runtimeTestOptions()
 	opts.Alt = "responses/compact"
 	if _, err := e.Execute(context.Background(), a, coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{}`)}, opts); err == nil {
 		t.Fatal("unsupported compact accepted")
 	}
-
 }
 
 func TestCodexRuntimeAmbiguousFailureDoesNotReplay(t *testing.T) {

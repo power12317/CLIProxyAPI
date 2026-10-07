@@ -92,7 +92,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	var oauthIdentity helps.CodexOAuthIdentity
 	officialOAuthRequest := false
 	var fixedInstallationID string
-	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
+	if (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
 	reporter.SetTranslatedReasoningEffort(body, to.String())
@@ -143,6 +143,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	turnState.ApplyHeaders(httpReq.Header)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return nil, errTicket
+	}
+	if e.runtime != nil {
+		return e.runtime.executeStreamViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, replayScope)
 	}
 	turnState.ObserveRequest(httpReq.Header, nil)
 	var authID, authLabel, authType, authValue string

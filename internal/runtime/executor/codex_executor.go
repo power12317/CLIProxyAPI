@@ -5,7 +5,8 @@ import "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 // CodexExecutor is a stateless executor for Codex (OpenAI Responses API entrypoint).
 // If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
 type CodexExecutor struct {
-	cfg *config.Config
+	cfg     *config.Config
+	runtime *CodexRuntimeExecutor
 }
 
 func NewCodexExecutor(cfg *config.Config) *CodexExecutor { return &CodexExecutor{cfg: cfg} }

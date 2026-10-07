@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -18,7 +19,6 @@ import (
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // CodexRuntimeExecutor delegates through the master to the process for the selected CPA credential.
@@ -45,55 +45,57 @@ func (e *CodexRuntimeExecutor) CountTokens(context.Context, *coreauth.Auth, core
 	return coreexecutor.Response{}, runtimeError(400, "Token counting is not supported by the Codex runtime")
 }
 
-func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, upstreamLog *helps.CodexRuntimeLog) (*bridge.Client, []byte, error) {
+func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) error {
 	if e.cfg == nil || !bridge.Enabled(e.cfg) || e.cfg.Home.Enabled || !coreauth.IsCodexRuntimeOwnedAuth(auth) || auth.Disabled {
-		return nil, nil, runtimeError(503, "Codex runtime is not enabled for this credential")
+		return runtimeError(503, "Codex runtime is not enabled for this credential")
 	}
 	switch coreexecutor.ResponseFormatOrSource(opts) {
 	case sdktranslator.FormatCodex, sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions:
 	default:
-		return nil, nil, runtimeError(400, "Unsupported Codex runtime response protocol")
+		return runtimeError(400, "Unsupported Codex runtime response protocol")
 	}
-	model := thinking.ParseSuffix(req.Model).ModelName
 	if coreexecutor.RequiredUpstreamWebsocket(ctx) {
-		return nil, nil, runtimeError(400, "Persistent upstream WebSocket steering is not supported by the Codex runtime")
+		return runtimeError(400, "Persistent upstream WebSocket steering is not supported by the Codex runtime")
 	}
 	if opts.ProxyURL != "" {
-		return nil, nil, runtimeError(400, "Configure the Codex runtime network instead of per-request proxy overrides")
+		return runtimeError(400, "Configure the Codex runtime network instead of per-request proxy overrides")
 	}
-	operation := "responses"
 	if opts.Alt != "" {
 		if opts.Alt != "responses/compact" {
-			return nil, nil, runtimeError(400, "Codex runtime operation is unsupported")
+			return runtimeError(400, "Codex runtime operation is unsupported")
 		}
-		operation = opts.Alt
 	}
 	if isCodexOpenAIImageRequest(opts) {
-		return nil, nil, runtimeError(400, "Image endpoints require a dedicated Codex runtime capability")
+		return runtimeError(400, "Image endpoints require a dedicated Codex runtime capability")
 	}
 	if !json.Valid(req.Payload) || !gjson.ParseBytes(req.Payload).IsObject() {
-		return nil, nil, runtimeError(400, "Request must be a JSON object")
+		return runtimeError(400, "Request must be a JSON object")
 	}
-	body := bytes.Clone(req.Payload)
-	if opts.SourceFormat != sdktranslator.FormatCodex && opts.SourceFormat != sdktranslator.FormatOpenAIResponse {
-		switch opts.SourceFormat {
-		case sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions:
-			body = sdktranslator.TranslateRequest(opts.SourceFormat, sdktranslator.FormatCodex, model, body, true)
-		default:
-			return nil, nil, runtimeError(400, "Unsupported Codex runtime source protocol")
-		}
+	return nil
+}
+
+func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (coreexecutor.Response, error) {
+	if err := e.validate(ctx, auth, req, opts); err != nil {
+		return coreexecutor.Response{}, err
 	}
-	var err error
-	body, err = helps.ApplyRequestThinking(body, req, opts, opts.SourceFormat.String(), sdktranslator.FormatCodex.String(), "codex")
-	if err != nil {
-		return nil, nil, runtimeError(400, "Invalid Codex runtime reasoning configuration")
+	return (&CodexExecutor{cfg: e.cfg, runtime: e}).Execute(ctx, auth, req, opts)
+}
+
+func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	if opts.Alt == "responses/compact" {
+		return nil, runtimeError(400, "Compaction is not a streaming operation")
 	}
-	body, err = sjson.SetBytes(body, "model", model)
-	if err != nil {
-		return nil, nil, runtimeError(400, "Invalid Codex runtime request")
+	if err := e.validate(ctx, auth, req, opts); err != nil {
+		return nil, err
 	}
-	if operation == "responses" {
-		body, _ = sjson.SetBytes(body, "stream", true)
+	return (&CodexExecutor{cfg: e.cfg, runtime: e}).ExecuteStream(ctx, auth, req, opts)
+}
+
+// start passes the complete CPA request to the worker for native request construction.
+func (e *CodexRuntimeExecutor) start(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, body []byte, upstreamLog *helps.CodexRuntimeLog) (*bridge.Client, error) {
+	operation := "responses"
+	if opts.Alt != "" {
+		operation = opts.Alt
 	}
 	scope := helps.APIKeyFromContext(ctx)
 	if scope == "" {
@@ -104,7 +106,7 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 		session, _ = opts.Metadata[coreexecutor.ExecutionSessionMetadataKey].(string)
 	}
 	if session == "" {
-		session = gjson.GetBytes(body, "prompt_cache_key").String()
+		session = gjson.GetBytes(req.Payload, "prompt_cache_key").String()
 	}
 	if session == "" || scope == "" {
 		session = uuid.NewString()
@@ -112,40 +114,42 @@ func (e *CodexRuntimeExecutor) prepare(ctx context.Context, auth *coreauth.Auth,
 	identityJSON, _ := json.Marshal([]string{scope, auth.ID, session})
 	identity := sha256.Sum256(identityJSON)
 	session = hex.EncodeToString(identity[:])
-	body, _ = sjson.SetBytes(body, "prompt_cache_key", session)
 	client, err := bridge.Dial(ctx, e.cfg.Codex.Runtime.Endpoint())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	client.OnUpstream = upstreamLog.Record
 	upstreamLog.RawBody = true
 	requestID, err := uuid.NewV7()
 	if err != nil {
 		client.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	err = client.Start(bridge.Request{RequestID: requestID.String(), CredentialID: auth.ID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
 	if err != nil {
 		client.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	coreexecutor.ReportUpstreamWebsocket(ctx, false)
-	return client, body, nil
+	return client, nil
 }
 
-func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (resp coreexecutor.Response, err error) {
-	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
-	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
-	defer reporter.TrackFailure(ctx, &err)
+func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter, body []byte, optimizeMultiAgentV2 bool, replayScope codexReasoningReplayScope) (resp coreexecutor.Response, err error) {
 	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
 	upstreamLog := helps.NewCodexRuntimeLog(ctx, e.cfg, auth, thinking.ParseSuffix(req.Model).ModelName)
 	defer upstreamLog.Flush()
 	defer func() {
 		if err != nil {
+			var remote *bridge.Error
+			if errors.As(err, &remote) {
+				if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, remote.StatusCode(), remote.Body); errClearReplay != nil {
+					err = errClearReplay
+				}
+			}
 			upstreamLog.Error(err)
 		}
 	}()
-	client, body, err := e.prepare(ctx, auth, req, opts, upstreamLog)
+	client, err := e.start(ctx, auth, req, opts, body, upstreamLog)
 	if err != nil {
 		return resp, err
 	}
@@ -164,13 +168,13 @@ func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth,
 		if errNext != nil {
 			return resp, errNext
 		}
-		event := frame.Data
+		event := helps.RestoreCodexMultiAgentV2Response(frame.Data, optimizeMultiAgentV2)
 		if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 			continue
 		}
 		upstreamLog.Event(event)
 		reporter.ObserveCodexResponseModel(event)
-		if failure, failureBody, ok := codexTerminalFailureErr(event); ok {
+		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
 			return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
 		}
 		sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
@@ -183,6 +187,9 @@ func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth,
 			collectCodexOutputItemDone(event, outputItems, &outputFallback)
 		case "response.completed", "response.incomplete", "response.done":
 			terminal = patchCodexCompletedOutput(normalizeCodexWebsocketCompletion(event), outputItems, outputFallback)
+			if gjson.GetBytes(terminal, "type").String() == "response.completed" {
+				cacheCodexReasoningReplayFromCompleted(replayScope, terminal)
+			}
 		}
 	}
 	if len(terminal) == 0 {
@@ -212,17 +219,18 @@ func (e *CodexRuntimeExecutor) Execute(ctx context.Context, auth *coreauth.Auth,
 	return coreexecutor.Response{Payload: output, Headers: client.Headers}, nil
 }
 
-func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
-	if opts.Alt == "responses/compact" {
-		return nil, runtimeError(400, "Compaction is not a streaming operation")
-	}
-	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
-	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
+func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter, body []byte, optimizeMultiAgentV2 bool, replayScope codexReasoningReplayScope) (*coreexecutor.StreamResult, error) {
 	reporter.SetStream(true)
 	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
 	upstreamLog := helps.NewCodexRuntimeLog(ctx, e.cfg, auth, thinking.ParseSuffix(req.Model).ModelName)
-	client, body, err := e.prepare(ctx, auth, req, opts, upstreamLog)
+	client, err := e.start(ctx, auth, req, opts, body, upstreamLog)
 	if err != nil {
+		var remote *bridge.Error
+		if errors.As(err, &remote) {
+			if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, remote.StatusCode(), remote.Body); errClearReplay != nil {
+				err = errClearReplay
+			}
+		}
 		upstreamLog.Error(err)
 		reporter.PublishFailure(ctx, err)
 		return nil, err
@@ -255,6 +263,12 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 		var outputFallback [][]byte
 		sawOutputDelta, terminal := false, false
 		fail := func(err error) {
+			var remote *bridge.Error
+			if errors.As(err, &remote) {
+				if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, remote.StatusCode(), remote.Body); errClearReplay != nil {
+					err = errClearReplay
+				}
+			}
 			upstreamLog.Error(err)
 			reporter.PublishFailure(ctx, err)
 			send(coreexecutor.StreamChunk{Err: err})
@@ -274,7 +288,7 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 				fail(errNext)
 				return
 			}
-			event := frame.Data
+			event := helps.RestoreCodexMultiAgentV2Response(frame.Data, optimizeMultiAgentV2)
 			if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 				if (format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex) && len(frame.Wire) > 0 {
 					if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
@@ -285,7 +299,7 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 			}
 			upstreamLog.Event(event)
 			observeCodexTokenEvent(reporter, event)
-			if failure, failureBody, ok := codexTerminalFailureErr(event); ok {
+			if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
 				fail(&bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
 				return
 			}
@@ -301,6 +315,9 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 			case "response.completed", "response.incomplete", "response.done":
 				terminal = true
 				event = normalizeCodexWebsocketCompletion(event)
+				if gjson.GetBytes(event, "type").String() == "response.completed" {
+					cacheCodexReasoningReplayFromCompleted(replayScope, event)
+				}
 				if detail, ok := helps.ParseCodexUsage(event); ok {
 					reporter.Publish(ctx, detail)
 				}

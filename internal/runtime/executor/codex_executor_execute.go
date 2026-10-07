@@ -84,7 +84,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	var oauthIdentity helps.CodexOAuthIdentity
 	officialOAuthRequest := false
 	var fixedInstallationID string
-	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
+	if (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, oauthIdentity, officialOAuthRequest = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
 	reporter.SetTranslatedReasoningEffort(body, to.String())
@@ -135,6 +135,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	turnState.ApplyHeaders(httpReq.Header)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return resp, errTicket
+	}
+	if e.runtime != nil {
+		return e.runtime.executeViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, replayScope)
 	}
 	turnState.ObserveRequest(httpReq.Header, nil)
 	var authID, authLabel, authType, authValue string
@@ -313,7 +316,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 
 	var compactIdentity helps.CodexOAuthIdentity
 	compactOAuth := false
-	if helps.CodexAuthUsesOAuthCookieJar(auth) && helps.IsOfficialCodexRequest(body) {
+	if (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, compactIdentity, compactOAuth = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
@@ -340,6 +343,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	turnState.ApplyHeaders(httpReq.Header)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return resp, errTicket
+	}
+	if e.runtime != nil {
+		return e.runtime.executeViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, codexReasoningReplayScope{})
 	}
 	turnState.ObserveRequest(httpReq.Header, nil)
 	var authID, authLabel, authType, authValue string
