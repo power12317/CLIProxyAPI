@@ -21,6 +21,9 @@ persistent CODEX_HOME and reads/writes the shared original credential file.
 The default endpoint is `ws://127.0.0.1:38317/cpa/v1/ws`. No bridge key or
 Authorization header is required. `initialize` / `initialized` remain.
 
+The local bridge imposes no WebSocket frame or message size limit, including
+complete inference requests and full upstream diagnostic bodies.
+
 `cpa/capabilities/read {}` and `cpa/credential/reload {credentialId?: string}`
 return master capabilities:
 

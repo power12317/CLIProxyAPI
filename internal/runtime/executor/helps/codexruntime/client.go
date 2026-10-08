@@ -13,7 +13,6 @@ import (
 )
 
 const ProtocolVersion = 3
-const MaxMessageBytes = 32 << 20
 
 // Error is deliberately request-scoped: an ambiguous inference cannot be replayed.
 type Error struct {
@@ -123,7 +122,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		return nil, fail(503, "Codex runtime connection failed")
 	}
 	c := &Client{conn: conn, ctx: ctx}
-	conn.SetReadLimit(MaxMessageBytes)
+	// The local runtime bridge carries complete requests and upstream logs without a size limit.
 	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
 	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "3"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		c.Close()

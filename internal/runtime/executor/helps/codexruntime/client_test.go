@@ -186,6 +186,50 @@ func TestRawBodyFidelityAndOrderedLogsBeforeAcceptance(t *testing.T) {
 	}
 }
 
+func TestMasterPreservesLargeRequestsLogsAndBody(t *testing.T) {
+	input := strings.Repeat("x", (32<<20)+1)
+	body, errMarshal := json.Marshal(map[string]any{"model": "test", "input": input})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
+		var req Request
+		if errDecode := json.Unmarshal(m.Params, &req); errDecode != nil || !bytes.Equal(req.Request, body) {
+			t.Error("large request changed", errDecode)
+			return
+		}
+		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: req.RequestID, Kind: "request", Body: string(body)})
+		accept(conn, m)
+		sendBody(conn, []byte(input))
+		notify(conn, "cpa/inference/completed", map[string]string{"requestId": req.RequestID})
+	})
+	client := dialMaster(t, endpoint)
+	sawRequest := false
+	client.OnUpstream = func(entry UpstreamLog) {
+		if entry.Kind == "request" {
+			sawRequest = true
+			if entry.Body != string(body) {
+				t.Error("large upstream request log changed")
+			}
+		}
+	}
+	req := request()
+	req.Request = body
+	if errStart := client.Start(req); errStart != nil {
+		t.Fatal("large request or upstream log rejected", errStart)
+	}
+	if !sawRequest {
+		t.Fatal("large upstream request log missing")
+	}
+	frame, errNext := client.Next()
+	if errNext != nil || string(frame.Body) != input {
+		t.Fatal("large response body changed or rejected", errNext)
+	}
+	if _, errNext = client.Next(); errNext != io.EOF {
+		t.Fatal("large request completion missing", errNext)
+	}
+}
+
 func TestBodyIsNotParsedAsResponsesEvents(t *testing.T) {
 	payload := []byte("data: {\"type\":\"response.completed\"}\n\ndata: {\"type\":\"function_call\",\"arguments\":\"invalid {\"}\n\n")
 	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
