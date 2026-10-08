@@ -13,7 +13,7 @@ func IsCodexClientUserAgent(userAgent string) bool {
 }
 
 // CodexClientVersion is the shared fallback for Codex model and infrastructure requests.
-const CodexClientVersion = "0.156.1"
+const CodexClientVersion = "0.161.0"
 
 const CodexDefaultUserAgent = "codex-tui/" + CodexClientVersion + " (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; " + CodexClientVersion + ")"
 
