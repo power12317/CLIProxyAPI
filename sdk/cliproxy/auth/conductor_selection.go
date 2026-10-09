@@ -82,6 +82,7 @@ const (
 )
 
 type authSelectionEligibility struct {
+	runtimeContext            context.Context
 	prismTransportAllows      func(*Auth) bool
 	requiredKind              string
 	credentialPolicy          string
@@ -108,6 +109,7 @@ func credentialPolicyFromContext(ctx context.Context) string {
 
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
 	eligibility := authSelectionEligibility{disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata)}
+	eligibility.runtimeContext = ctx
 	if opts.Metadata != nil {
 		if value, ok := opts.Metadata[codexClientSystemMetadataKey].(string); ok {
 			eligibility.codexClientSystem = strings.TrimSpace(strings.ToLower(value))
@@ -125,6 +127,9 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 }
 
 func (e authSelectionEligibility) allows(auth *Auth) bool {
+	if cliproxyexecutor.CodexRuntimeRouteRequired(e.runtimeContext) && !IsCodexRuntimeOwnedAuth(auth) {
+		return false
+	}
 	if e.prismTransportAllows != nil && !e.prismTransportAllows(auth) {
 		return false
 	}

@@ -59,6 +59,7 @@ type UpstreamLog struct {
 }
 
 type Request struct {
+	ImageAPI     string          `json:"imageApi,omitempty"`
 	RequestID    string          `json:"requestId"`
 	CredentialID string          `json:"credentialId"`
 	Operation    string          `json:"operation"`
@@ -244,10 +245,10 @@ func (c *Client) Start(req Request) error {
 	if json.Unmarshal(req.Request, &body) != nil || body == nil {
 		return fail(400, "Codex runtime request must be a JSON object")
 	}
-	if v := body["previous_response_id"]; len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
+	if v := body["previous_response_id"]; req.Operation == "responses" && len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
 		return fail(400, "Codex runtime does not support previous_response_id")
 	}
-	if string(body["generate"]) == "false" {
+	if req.Operation == "responses" && string(body["generate"]) == "false" {
 		return fail(400, "Codex runtime does not support prewarm")
 	}
 	var result struct {

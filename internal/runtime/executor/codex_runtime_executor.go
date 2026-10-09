@@ -9,9 +9,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -50,7 +52,7 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 		return runtimeError(503, "Codex runtime is not enabled for this credential")
 	}
 	switch coreexecutor.ResponseFormatOrSource(opts) {
-	case sdktranslator.FormatCodex, sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions:
+	case sdktranslator.FormatCodex, sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions, codexOpenAIImageSourceFormat:
 	default:
 		return runtimeError(400, "Unsupported Codex runtime response protocol")
 	}
@@ -66,7 +68,8 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 		}
 	}
 	if isCodexOpenAIImageRequest(opts) {
-		return runtimeError(400, "Image endpoints require a dedicated Codex runtime capability")
+		// The image builder validates and translates JSON or multipart before IPC.
+		return nil
 	}
 	if !json.Valid(req.Payload) || !gjson.ParseBytes(req.Payload).IsObject() {
 		return runtimeError(400, "Request must be a JSON object")
@@ -93,9 +96,19 @@ func (e *CodexRuntimeExecutor) ExecuteStream(ctx context.Context, auth *coreauth
 
 // start passes the complete CPA request to the worker for native request construction.
 func (e *CodexRuntimeExecutor) start(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, body []byte, upstreamLog *helps.CodexRuntimeLog) (*bridge.Client, error) {
+	return e.startOperation(ctx, auth, req, opts, body, upstreamLog, "")
+}
+
+func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, body []byte, upstreamLog *helps.CodexRuntimeLog, imageAPI string) (*bridge.Client, error) {
 	operation := "responses"
 	if opts.Alt != "" {
 		operation = opts.Alt
+	}
+	if imageAPI != "" {
+		operation = "images/generations"
+		if strings.HasSuffix(helps.PayloadRequestPath(opts), codexImagesEditsPath) {
+			operation = "images/edits"
+		}
 	}
 	scope := helps.APIKeyFromContext(ctx)
 	if scope == "" {
@@ -120,12 +133,19 @@ func (e *CodexRuntimeExecutor) start(ctx context.Context, auth *coreauth.Auth, r
 	}
 	client.OnUpstream = upstreamLog.Record
 	upstreamLog.RawBody = true
-	requestID, err := uuid.NewV7()
-	if err != nil {
-		client.Close()
-		return nil, err
+	requestID := ""
+	if imageAPI != "" {
+		requestID = logging.GetRequestID(ctx)
 	}
-	err = client.Start(bridge.Request{RequestID: requestID.String(), CredentialID: auth.ID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body})
+	if requestID == "" {
+		id, errID := uuid.NewV7()
+		if errID != nil {
+			client.Close()
+			return nil, errID
+		}
+		requestID = id.String()
+	}
+	err = client.Start(bridge.Request{RequestID: requestID, CredentialID: auth.ID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body, ImageAPI: imageAPI})
 	if err != nil {
 		client.Close()
 		return nil, err

@@ -121,6 +121,9 @@ func (e *CodexExecutor) executeOpenAIImage(ctx context.Context, auth *cliproxyau
 	reporter.SetTranslatedReasoningEffort(body, "codex")
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, mainModel)
+	if e.runtime != nil {
+		return e.runtime.executeImageViaMaster(ctx, auth, req, opts, reporter, body, "responses", prepared)
+	}
 	recordCodexOpenAIImageRequest(ctx, e.cfg, e.Identifier(), auth, url, httpReq.Header.Clone(), body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -220,6 +223,9 @@ func (e *CodexExecutor) executeOpenAIImageStream(ctx context.Context, auth *clip
 	reporter.SetTranslatedReasoningEffort(body, "codex")
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, mainModel)
+	if e.runtime != nil {
+		return e.runtime.executeImageStreamViaMaster(ctx, auth, req, opts, reporter, body, "responses", prepared)
+	}
 	recordCodexOpenAIImageRequest(ctx, e.cfg, e.Identifier(), auth, url, httpReq.Header.Clone(), body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -357,6 +363,9 @@ func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *clip
 	if contentType != "" {
 		httpReq.Header.Set("Content-Type", contentType)
 	}
+	if e.runtime != nil {
+		return e.runtime.executeImageViaMaster(ctx, auth, req, opts, reporter, body, "images", codexOpenAIImagePreparedRequest{})
+	}
 	recordCodexOpenAIImageRequest(ctx, e.cfg, e.Identifier(), auth, url, httpReq.Header.Clone(), body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -423,6 +432,9 @@ func (e *CodexExecutor) executeDirectOpenAIImageStream(ctx context.Context, auth
 	applyModelHeaderOverrides(httpReq.Header, model)
 	if contentType != "" {
 		httpReq.Header.Set("Content-Type", contentType)
+	}
+	if e.runtime != nil {
+		return e.runtime.executeImageStreamViaMaster(ctx, auth, req, opts, reporter, body, "images", codexOpenAIImagePreparedRequest{})
 	}
 	recordCodexOpenAIImageRequest(ctx, e.cfg, e.Identifier(), auth, url, httpReq.Header.Clone(), body)
 
@@ -660,7 +672,7 @@ func codexOpenAIImageEditFormJSONPath(key string) string {
 }
 
 func codexDirectOpenAIImageModel(req cliproxyexecutor.Request) string {
-	for _, model := range []string{gjson.GetBytes(req.Payload, "model").String(), req.Model} {
+	for _, model := range []string{req.Model, gjson.GetBytes(req.Payload, "model").String()} {
 		baseModel := codexOpenAIImageBaseModel(model)
 		if codexIsDirectOpenAIImageModel(baseModel) {
 			return baseModel
