@@ -214,6 +214,9 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 }
 
 func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken string) (*CodexTokenData, error) {
+	if err := checkRefreshAllowed(ctx); err != nil {
+		return nil, err
+	}
 	data := url.Values{
 		"client_id":     {ClientID},
 		"grant_type":    {"refresh_token"},
@@ -311,9 +314,15 @@ func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStora
 // It attempts to refresh the tokens up to a specified maximum number of retries,
 // with an exponential backoff strategy to handle transient network errors.
 func (o *CodexAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken string, maxRetries int) (*CodexTokenData, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := checkRefreshAllowed(ctx); err != nil {
+			return nil, err
+		}
 		if attempt > 0 {
 			// Wait before retry
 			select {
@@ -328,12 +337,12 @@ func (o *CodexAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken str
 			return tokenData, nil
 		}
 		if isNonRetryableRefreshErr(err) {
-			log.Warnf("Token refresh attempt %d failed with non-retryable error: %v", attempt+1, err)
+			refreshLogger(ctx).Warnf("Token refresh attempt %d failed with non-retryable error: %v", attempt+1, err)
 			return nil, err
 		}
 
 		lastErr = err
-		log.Warnf("Token refresh attempt %d failed: %v", attempt+1, err)
+		refreshLogger(ctx).Warnf("Token refresh attempt %d failed: %v", attempt+1, err)
 	}
 
 	return nil, fmt.Errorf("token refresh failed after %d attempts: %w", maxRetries, lastErr)

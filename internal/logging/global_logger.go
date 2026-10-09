@@ -58,6 +58,7 @@ var logFieldOrder = []string{
 	"mode", "budget", "level", "original_mode", "original_value", "min", "max", "clamped_to", "error",
 	"credential", "auth_id", "auth_index", "connection", "proxy_scheme", "remote_transport",
 	"operation", "upstream_host", "reused", "was_idle", "idle_time",
+	"refresh_owner", "enabled", "updated_credentials",
 	"media_session_id", "call_id", "peer", "state", "reason",
 }
 

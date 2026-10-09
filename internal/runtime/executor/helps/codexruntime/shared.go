@@ -2,6 +2,7 @@ package codexruntime
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"maps"
@@ -15,27 +16,21 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 )
 
 var sharedRequests = struct {
 	sync.Mutex
 	next     uint64
 	requests map[string]map[uint64]context.CancelFunc
-	enabled  map[string]bool
 	configs  map[string]config.CodexRuntimeConfig
-}{requests: make(map[string]map[uint64]context.CancelFunc), enabled: make(map[string]bool), configs: make(map[string]config.CodexRuntimeConfig)}
+}{requests: make(map[string]map[uint64]context.CancelFunc), configs: make(map[string]config.CodexRuntimeConfig)}
 
 func Enabled(cfg *config.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	sharedRequests.Lock()
-	enabled, ok := sharedRequests.enabled[cfg.AuthDir]
-	sharedRequests.Unlock()
-	if cfg.AuthDir != "" && ok {
-		return enabled
-	}
-	return cfg.Codex.Runtime.Enabled
+	return codexshared.RuntimeEnabled(cfg.AuthDir, cfg.Codex.Runtime.Enabled)
 }
 
 func CancelCredential(path string) {
@@ -95,7 +90,7 @@ func ListCredentials(cfg *config.Config) ([]Credential, error) {
 		}
 		metadata, err := codexshared.Read(path)
 		if err != nil {
-			return nil
+			return fmt.Errorf("read credential %q: %w", filepath.Base(path), err)
 		}
 		provider, _ := metadata["type"].(string)
 		if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
@@ -119,6 +114,15 @@ func ListCredentials(cfg *config.Config) ([]Credential, error) {
 
 // LoadSharedAuth rereads shared tokens in either mode without changing the file identity.
 func LoadSharedAuth(cfg *config.Config, auth *coreauth.Auth) (*coreauth.Auth, string, error) {
+	return loadSharedAuth(cfg, auth, false)
+}
+
+// LoadRefreshAuth also rereads files whose worker flag is missing after handoff.
+func LoadRefreshAuth(cfg *config.Config, auth *coreauth.Auth) (*coreauth.Auth, string, error) {
+	return loadSharedAuth(cfg, auth, true)
+}
+
+func loadSharedAuth(cfg *config.Config, auth *coreauth.Auth, refresh bool) (*coreauth.Auth, string, error) {
 	if auth == nil {
 		return auth, "", nil
 	}
@@ -143,7 +147,7 @@ func LoadSharedAuth(cfg *config.Config, auth *coreauth.Auth) (*coreauth.Auth, st
 		}
 		return nil, "", fail(503, "Shared Codex credential could not be read")
 	}
-	if _, ok := codexshared.Get(metadata); !ok {
+	if _, ok := codexshared.Get(metadata); !ok && !refresh {
 		return auth, "", nil
 	}
 	copy := auth.Clone()
@@ -178,7 +182,22 @@ func ReleaseBody(body io.ReadCloser, release func()) io.ReadCloser {
 // ReconcileState updates effective file flags only when selection changes.
 func ReconcileState(cfg *config.Config) error {
 	_, err := reconcileState(cfg)
+	if err == nil {
+		commitRuntimeState(cfg)
+	}
 	return err
+}
+
+func commitRuntimeState(cfg *config.Config) {
+	if cfg == nil || cfg.AuthDir == "" {
+		return
+	}
+	current := cfg.Codex.Runtime
+	current.CredentialModes = maps.Clone(current.CredentialModes)
+	sharedRequests.Lock()
+	sharedRequests.configs[cfg.AuthDir] = current
+	sharedRequests.Unlock()
+	codexshared.SetRuntimeEnabled(cfg.AuthDir, current.Enabled)
 }
 
 func reconcileState(cfg *config.Config, credentialIDs ...string) (bool, error) {
@@ -190,15 +209,24 @@ func reconcileState(cfg *config.Config, credentialIDs ...string) (bool, error) {
 	current := cfg.Codex.Runtime
 	globalChanged := !known || previous.Enabled != current.Enabled
 	modeChanged := globalChanged || previous.Endpoint() != current.Endpoint() || !maps.Equal(previous.CredentialModes, current.CredentialModes)
-	sharedRequests.enabled[cfg.AuthDir] = current.Enabled
 	sharedRequests.Unlock()
+	if current.Enabled {
+		codexshared.SetRuntimeEnabled(cfg.AuthDir, true)
+	} else if known && previous.Enabled {
+		// Keep CPA refresh stopped until master reload has stopped its workers.
+		codexshared.SetRuntimeEnabled(cfg.AuthDir, true)
+	}
 	credentials, err := ListCredentials(cfg)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("list Codex credentials: %w", err)
 	}
 	changed := false
+	updated := 0
 	for _, credential := range credentials {
 		state, exists := codexshared.Get(credential.Metadata)
+		if !current.Enabled && state.Enabled {
+			codexshared.SetRuntimeEnabled(cfg.AuthDir, true)
+		}
 		selected, explicit := current.CredentialModes[credential.ID]
 		prior, wasExplicit := previous.CredentialModes[credential.ID]
 		selectionChanged := globalChanged || prior != selected || wasExplicit != explicit || slices.Contains(credentialIDs, credential.ID)
@@ -225,24 +253,38 @@ func reconcileState(cfg *config.Config, credentialIDs ...string) (bool, error) {
 		CancelCredential(credential.Path)
 		codexshared.Set(credential.Metadata, codexshared.State{Enabled: enabled})
 		if err := codexshared.Write(credential.Path, credential.Metadata); err != nil {
-			return changed, err
+			return changed, fmt.Errorf("write Codex mode for credential %q: %w", credential.ID, err)
 		}
 		changed = true
+		updated++
+		log.WithFields(log.Fields{"auth_id": credential.ID, "auth_file": credential.ID, "enabled": enabled, "operation": "codex_mode_sync"}).Info("updated Codex credential mode")
 	}
-	sharedRequests.Lock()
-	current.CredentialModes = maps.Clone(current.CredentialModes)
-	sharedRequests.configs[cfg.AuthDir] = current
-	sharedRequests.Unlock()
-	return changed || modeChanged && (current.Enabled || known && previous.Enabled), nil
+	if changed || modeChanged {
+		log.WithFields(log.Fields{"enabled": current.Enabled, "updated_credentials": updated, "operation": "codex_mode_sync"}).Info("synchronized Codex credential files")
+	}
+	return changed || modeChanged && (current.Enabled || known && previous.Enabled) || Enabled(cfg) != current.Enabled, nil
 }
 
 // ApplyConfig immediately asks the master to apply a changed selection.
 func ApplyConfig(ctx context.Context, cfg *config.Config, credentialIDs ...string) error {
 	changed, err := reconcileState(cfg, credentialIDs...)
-	if err != nil || !changed {
+	if err != nil {
 		return err
 	}
-	return ReloadCredentials(ctx, cfg)
+	if changed {
+		if err := ReloadCredentials(ctx, cfg); err != nil {
+			return fmt.Errorf("reload Codex master: %w", err)
+		}
+	}
+	commitRuntimeState(cfg)
+	if changed {
+		owner := "cpa"
+		if cfg.Codex.Runtime.Enabled {
+			owner = "codex"
+		}
+		log.WithFields(log.Fields{"enabled": cfg.Codex.Runtime.Enabled, "refresh_owner": owner, "operation": "codex_mode_apply"}).Info("applied Codex runtime mode")
+	}
+	return nil
 }
 
 // ReloadCredentials rescans file identities even when the mode flags have not changed.

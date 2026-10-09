@@ -79,7 +79,7 @@ func TestCodexRuntimeInvalidHotReloadDoesNotCommit(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeStopAppliesNativeConfigWhenMasterUnavailable(t *testing.T) {
+func TestCodexRuntimeStopReportsMasterFailureBeforeNativeConfig(t *testing.T) {
 	var requests atomic.Int32
 	master := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -101,10 +101,10 @@ func TestCodexRuntimeStopAppliesNativeConfigWhenMasterUnavailable(t *testing.T) 
 		clientsUpdated = applied == cfg
 		return clientsUpdated
 	}}
-	if !service.applyConfigUpdateWithAuthSynthesis(context.Background(), cfg, false) {
-		t.Fatal("master communication failure prevented native config application")
+	if service.applyConfigUpdateWithAuthSynthesis(context.Background(), cfg, false) {
+		t.Fatal("failed master handoff was reported as applied")
 	}
-	if !clientsUpdated || requests.Load() != 1 {
+	if clientsUpdated || requests.Load() != 1 {
 		t.Fatalf("reload result: clients updated=%t, master calls=%d", clientsUpdated, requests.Load())
 	}
 	metadata, err := codexshared.Read(path)

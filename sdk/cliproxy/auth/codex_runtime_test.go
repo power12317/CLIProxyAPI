@@ -7,12 +7,15 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
-func TestCodexRuntimeSharedCredentialRefreshFollowsEffectiveFlag(t *testing.T) {
+func TestCodexRuntimeSharedCredentialRefreshFollowsGlobalMode(t *testing.T) {
 	ctx := context.Background()
 	store := &countingStore{}
 	m := NewManager(store, nil, nil)
+	cfg := &config.Config{Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true}}}
+	m.SetConfig(cfg)
 	executor := &countingRefreshExecutor{id: "codex"}
 	m.RegisterExecutor(executor)
 	id := "Original CPA Credential.JSON"
@@ -37,7 +40,7 @@ func TestCodexRuntimeSharedCredentialRefreshFollowsEffectiveFlag(t *testing.T) {
 	if _, err := m.Update(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	if _, scheduled := nextRefreshCheckAt(time.Now(), a, time.Minute); scheduled || m.shouldRefresh(a, time.Now()) || authHasRefreshCredential(a) {
+	if _, scheduled := m.nextRefreshCheckAt(time.Now(), a, time.Minute); scheduled || m.shouldRefresh(a, time.Now()) {
 		t.Fatal("enabled shared credential entered CPA refresh scheduling")
 	}
 	if _, err := m.ForceRefreshAuth(ctx, a.ID); err == nil {
@@ -55,7 +58,9 @@ func TestCodexRuntimeSharedCredentialRefreshFollowsEffectiveFlag(t *testing.T) {
 		t.Fatal("CPA refreshed or persisted enabled shared credential tokens")
 	}
 
-	// The same original file becomes CPA-managed after the effective flag changes.
+	// The same original file becomes CPA-managed after the global mode changes.
+	cfg.Codex.Runtime.Enabled = false
+	m.SetConfig(cfg)
 	codexshared.Set(metadata, codexshared.State{Enabled: false})
 	if err := codexshared.Write(path, metadata); err != nil {
 		t.Fatal(err)
@@ -64,7 +69,7 @@ func TestCodexRuntimeSharedCredentialRefreshFollowsEffectiveFlag(t *testing.T) {
 	if _, err := m.Update(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	if _, scheduled := nextRefreshCheckAt(time.Now(), a, time.Minute); !scheduled || !m.shouldRefresh(a, time.Now()) || !authHasRefreshCredential(a) {
+	if _, scheduled := m.nextRefreshCheckAt(time.Now(), a, time.Minute); !scheduled || !m.shouldRefresh(a, time.Now()) || !authHasRefreshCredential(a) {
 		t.Fatal("disabled runtime credential did not return to CPA refresh scheduling")
 	}
 	m.refreshAuth(ctx, a.ID)

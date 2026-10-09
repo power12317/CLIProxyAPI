@@ -3,12 +3,54 @@ package codexruntime
 import (
 	"context"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
+
+func TestCodexModeOffWaitsForMasterAndRetriesFailedApply(t *testing.T) {
+	cfg := &config.Config{AuthDir: t.TempDir(), Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true}}}
+	path := CredentialPath(cfg, "original.json")
+	if err := codexshared.Write(path, map[string]any{"type": "codex", "access_token": "worker-access"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReconcileState(cfg); err != nil {
+		t.Fatal(err)
+	}
+	stale := cfg.CloneForRuntime()
+	var calls atomic.Int32
+	cfg.Codex.Runtime.URL = serveMaster(t, validCaps(), func(conn *websocket.Conn, msg message) {
+		if msg.Method != "cpa/credential/reload" || !Enabled(cfg) {
+			t.Error("CPA regained refresh ownership before master reload completed")
+		}
+		if calls.Add(1) == 1 {
+			_ = conn.WriteJSON(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "stop failed", "data": map[string]any{"httpStatus": 500}}})
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": map[string]any{}})
+	})
+	cfg.Codex.Runtime.Enabled = false
+	if err := ApplyConfig(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "reload Codex master") {
+		t.Fatal("failed reload did not identify the failing step", err)
+	}
+	if !Enabled(cfg) {
+		t.Fatal("failed handoff resumed CPA refresh")
+	}
+	if err := ApplyConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || Enabled(cfg) || Enabled(stale) {
+		t.Fatal("successful retry did not update the live refresh owner")
+	}
+	if err := ApplyConfig(context.Background(), cfg); err != nil || calls.Load() != 2 {
+		t.Fatal("unchanged applied mode reloaded master", err)
+	}
+}
 
 func TestCodexSharedModeAndOriginalFileIdentity(t *testing.T) {
 	dir := t.TempDir()

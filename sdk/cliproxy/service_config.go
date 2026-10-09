@@ -162,11 +162,12 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 		return false
 	}
 
-	if !s.applyManagerConfig(ctx, commit) {
-		return false
-	}
 	if errRuntime := codexruntime.ApplyConfig(ctx, cfg); errRuntime != nil {
 		log.WithError(errRuntime).Warn("could not apply shared Codex credential state")
+		return false
+	}
+	if !s.applyManagerConfig(ctx, commit) {
+		return false
 	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false

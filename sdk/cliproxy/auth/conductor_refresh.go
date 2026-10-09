@@ -115,7 +115,7 @@ func (m *Manager) queueRefreshUnschedule(authID string) {
 }
 
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
-	if a == nil || IsCodexRuntimeOwnedAuth(a) {
+	if a == nil || m.codexRefreshManaged(a) {
 		return false
 	}
 	if hasUnauthorizedAuthFailure(a) || hasDisabledInvalidGrantFailure(a) {
@@ -325,7 +325,7 @@ func lookupMetadataTime(meta map[string]any, keys ...string) (time.Time, bool) {
 func (m *Manager) markRefreshPending(loop *authAutoRefreshLoop, id string, registrationEpoch uint64, now time.Time) *authRefreshJob {
 	m.mu.Lock()
 	auth := m.auths[id]
-	if auth == nil || auth.RegistrationEpoch != registrationEpoch || hasUnauthorizedAuthFailure(auth) || hasDisabledInvalidGrantFailure(auth) {
+	if auth == nil || m.codexRefreshManaged(auth) || auth.RegistrationEpoch != registrationEpoch || hasUnauthorizedAuthFailure(auth) || hasDisabledInvalidGrantFailure(auth) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -356,7 +356,7 @@ func (m *Manager) beginRefreshJob(ctx context.Context, job *authRefreshJob) bool
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	auth := m.auths[job.id]
-	if ctx.Err() != nil || m.refreshJobs[job.id] != job || auth == nil || auth.RegistrationEpoch != job.registrationEpoch {
+	if ctx.Err() != nil || m.refreshJobs[job.id] != job || auth == nil || m.codexRefreshManaged(auth) || auth.RegistrationEpoch != job.registrationEpoch {
 		return false
 	}
 	job.running = true
@@ -400,9 +400,6 @@ func authRefreshToken(auth *Auth) string {
 }
 
 func authHasRefreshCredential(auth *Auth) bool {
-	if IsCodexRuntimeOwnedAuth(auth) {
-		return false
-	}
 	if authMetadataString(auth, "refresh_token") != "" {
 		return true
 	}
@@ -533,7 +530,7 @@ func (m *Manager) tryRefreshAfterUnauthorized(ctx context.Context, auth *Auth, e
 	if isRequestScopedError(execErr) {
 		return auth, false
 	}
-	if !isUnauthorizedError(execErr) || !authHasRefreshCredential(auth) {
+	if m.codexRefreshManaged(auth) || !isUnauthorizedError(execErr) || !authHasRefreshCredential(auth) {
 		return auth, false
 	}
 	if hasUnauthorizedAuthFailure(auth) {
@@ -628,6 +625,12 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 	if id == "" {
 		return nil, errors.New("auth id is empty")
 	}
+	m.mu.RLock()
+	managed := m.codexRefreshManaged(m.auths[id])
+	m.mu.RUnlock()
+	if managed {
+		return nil, errors.New("credential refresh is owned by the Codex runtime")
+	}
 	if failedAccessToken != "" {
 		m.markRejectedAccessToken(id, failedAccessToken)
 	}
@@ -650,7 +653,7 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 		exec, _ = m.executorLocked(executorKeyFromAuth(auth))
 	}
 	m.mu.RUnlock()
-	if IsCodexRuntimeOwnedAuth(auth) {
+	if m.codexRefreshManaged(auth) {
 		return nil, errors.New("credential refresh is owned by the Codex runtime")
 	}
 	if auth == nil || exec == nil {
@@ -675,6 +678,9 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 
 	base := auth.Clone()
 	updated, err := exec.Refresh(ctx, base.Clone())
+	if err != nil && m.codexRefreshManaged(auth) {
+		return nil, err
+	}
 	now := time.Now()
 	if err != nil && errors.Is(err, context.Canceled) {
 		log.Debugf("refresh canceled for %s, %s", auth.Provider, auth.ID)
@@ -905,7 +911,7 @@ func (m *Manager) ForceRefreshAll(ctx context.Context) []ForceRefreshResult {
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.auths))
 	for id, auth := range m.auths {
-		if auth != nil && !auth.Disabled && !IsCodexRuntimeOwnedAuth(auth) && (authHasRefreshCredential(auth) || auth.Runtime != nil) {
+		if auth != nil && !auth.Disabled && !m.codexRefreshManaged(auth) && (authHasRefreshCredential(auth) || auth.Runtime != nil) {
 			ids = append(ids, id)
 		}
 	}

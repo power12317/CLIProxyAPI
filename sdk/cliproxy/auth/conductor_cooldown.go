@@ -161,6 +161,18 @@ func (m *Manager) setConfigSnapshotLocked(cfg *internalconfig.Config) bool {
 		m.homeSessionAliases.clear()
 	}
 	m.runtimeConfig.Store(cfg)
+	if previousCfg == nil || previousCfg.Codex.Runtime.Enabled != cfg.Codex.Runtime.Enabled {
+		m.mu.RLock()
+		loop := m.refreshLoop
+		if loop != nil {
+			for id, auth := range m.auths {
+				if auth != nil && strings.EqualFold(auth.Provider, "codex") {
+					loop.queueReschedule(id)
+				}
+			}
+		}
+		m.mu.RUnlock()
+	}
 	if previousCfg != nil && ((previousCfg.Codex.ForceWebsocket && !cfg.Codex.ForceWebsocket) || previousCfg.Codex.Basispoints.Enabled != cfg.Codex.Basispoints.Enabled) {
 		m.drainCodexSessionPool()
 	}

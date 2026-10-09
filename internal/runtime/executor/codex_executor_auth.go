@@ -18,17 +18,20 @@ import (
 
 func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	log.Debugf("codex executor: refresh called")
+	if cliproxyauth.CodexRefreshManaged(e.cfg, auth) {
+		return nil, runtimeError(409, "OAuth refresh is currently managed by Codex")
+	}
 	if refreshed, handled, err := helps.RefreshAuthViaHome(ctx, e.cfg, auth); handled {
 		return refreshed, err
 	}
 	if auth == nil {
 		return nil, statusErr{code: 500, msg: "codex executor: auth is nil"}
 	}
-	auth, sharedPath, err := bridge.LoadSharedAuth(e.cfg, auth)
+	auth, sharedPath, err := bridge.LoadRefreshAuth(e.cfg, auth)
 	if err != nil {
 		return nil, err
 	}
-	if cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+	if cliproxyauth.CodexRefreshManaged(e.cfg, auth) {
 		return nil, runtimeError(409, "OAuth refresh is currently managed by Codex")
 	}
 	var refreshToken string
@@ -41,6 +44,9 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		return auth, nil
 	}
 	svc := codexauth.NewCodexAuthWithProxyURL(e.cfg, auth.ProxyURL)
+	ctx = codexauth.WithRefreshCredential(ctx, auth.ID, func() bool {
+		return !cliproxyauth.CodexRefreshManaged(e.cfg, auth)
+	})
 	td, err := svc.RefreshTokensWithRetry(ctx, refreshToken, 3)
 	if err != nil {
 		return nil, err

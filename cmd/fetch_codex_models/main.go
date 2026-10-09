@@ -128,6 +128,9 @@ func main() {
 
 	fmt.Printf("Using auth: id=%s label=%s\n", chosen.ID, chosen.Label)
 
+	ctx = codexauth.WithRefreshCredential(ctx, chosen.ID, func() bool {
+		return !coreauth.CodexRefreshManaged(cfg, chosen)
+	})
 	accessToken, refreshed, err := ensureAccessToken(ctx, fileStore, chosen)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to prepare codex access token: %v\n", err)
