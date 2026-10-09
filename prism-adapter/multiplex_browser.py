@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -340,6 +341,13 @@ class MultiplexBrowser:
         self.polling = 0
         self.preparing = 0
         self.memory_wait_seconds = 30
+        try:
+            memory_mib = int(os.environ.get('PRISM_ADAPTER_MEMORY_LIMIT_MIB', '750'))
+        except ValueError:
+            raise ValueError('PRISM_ADAPTER_MEMORY_LIMIT_MIB must be a positive integer') from None
+        if memory_mib <= 0:
+            raise ValueError('PRISM_ADAPTER_MEMORY_LIMIT_MIB must be a positive integer')
+        self.memory_limit_bytes = memory_mib * 1024 * 1024
         self.runtime_cooldowns = {}
 
     def observe(self, event, journal=None, **fields):
@@ -347,7 +355,8 @@ class MultiplexBrowser:
         record = {'event': event, 'active': self.admission.running,
                   'queued': self.admission.outstanding - self.admission.running,
                   'preparing': self.preparing, 'polling': self.polling,
-                  'memory_bytes': cgroup_memory_bytes()}
+                  'memory_bytes': cgroup_memory_bytes(),
+                  'memory_limit_bytes': self.memory_limit_bytes}
         if journal is not None:
             record['local_id'] = journal.local_id
         record.update(fields)
@@ -369,7 +378,7 @@ class MultiplexBrowser:
         waiting = False
         while True:
             memory = cgroup_memory_bytes()
-            if memory is None or memory < 750 * 1024 * 1024:
+            if memory is None or memory < self.memory_limit_bytes:
                 if waiting:
                     self.observe('prism_memory_ready', journal)
                 return
@@ -529,7 +538,7 @@ class MultiplexBrowser:
             now = time.monotonic()
             self.runtime_cooldowns = {key: expiry for key, expiry in self.runtime_cooldowns.items() if expiry > now}
             memory = cgroup_memory_bytes()
-            pressure = memory is not None and memory >= 750 * 1024 * 1024
+            pressure = memory is not None and memory >= self.memory_limit_bytes
             for key, actor in list(self.actors.items()):
                 if not actor.refs and (pressure or now - actor.used >= self.idle_seconds or now - actor.created >= 900):
                     self.actors.pop(key)

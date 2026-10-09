@@ -79,7 +79,7 @@ httpd.serve_forever()
 	}
 	history := []any{map[string]any{"role": "user", "content": "Use client tools then answer."}}
 	for turn := 0; turn < 3; turn++ {
-		payload, _ := json.Marshal(map[string]any{"model": "gpt-6.1-sol", "input": history, "tools": tools, "reasoning": map[string]any{"effort": "high", "summary": "auto"}, "include": []string{"reasoning.encrypted_content"}, "store": false})
+		payload, _ := json.Marshal(map[string]any{"model": "gpt-6.1-sol", "input": history, "tools": tools, "reasoning": map[string]any{"effort": "high", "summary": "detailed"}, "include": []string{"reasoning.encrypted_content"}, "store": false})
 		req.Payload = payload
 		result, err := executor.ExecuteStream(t.Context(), prismTestAuth(), req, opts)
 		if err != nil {

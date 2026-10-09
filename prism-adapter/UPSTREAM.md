@@ -4,6 +4,19 @@ The standalone adapter modules, browser fixtures, and regression tests are deriv
 from [ranxi2001/sub2api](https://github.com/ranxi2001/sub2api), pinned to production
 commit `0ae36e501952000c5c910a2e616c6e0861f66a49` (2026-10-04).
 
+The following changes were selectively synchronized from sub2api v2.10.1
+(`11be589504b482d77827ab383b4b53f777241238`) on 2026-10-09:
+
+- `8069e268c2240b479ce9eae15c09a3852d058937`: accept `reasoning.summary=detailed`.
+- `d82a5af205363da36a4445a5b53a6ae0d4d9ebad`: count the parsed text/history prompt
+  against an 86,000-byte UTF-8 budget. The obsolete character constant was removed.
+- `87628dd72198a1018b8c00a37102fb9f4c0d2dd7`: share a configurable memory threshold
+  between multiplex admission and idle context reclamation, defaulting to 750 MiB.
+
+Other v2.10.1 changes were not imported. Local regressions additionally cover
+exact Unicode byte boundaries, client-tool continuation with detailed summary,
+and memory-pressure behavior without interrupting active contexts.
+
 These files retain the upstream LGPL-3.0 license. See `COPYING.LESSER` and
 `COPYING` in this directory. The independently implemented CLIProxyAPI Go client
 communicates with this separately runnable process over its HTTP interface.
@@ -29,5 +42,6 @@ to the adapter process; the Go client does not add a network timeout. No new
 conservative concurrency limits, model reductions, or deferred tool phase are
 introduced by the CPA integration.
 
-Upstream source hashes are recorded in `upstream-manifest.json`. They describe
-original upstream files, before the local changes listed above.
+Upstream source hashes are recorded in `upstream-manifest.json`. The original
+hashes describe the initial imported files; selective update commits are recorded
+separately, before the local changes and regressions listed above.

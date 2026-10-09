@@ -1,7 +1,8 @@
 # CLIProxyAPI Prism transport
 
 This adapter implements the Prism behavior of sub2api production
-`0ae36e501952000c5c910a2e616c6e0861f66a49`. Source provenance and licensing are in
+`0ae36e501952000c5c910a2e616c6e0861f66a49`, with selected v2.10.1 compatibility and
+resource updates. Source provenance and licensing are in
 [UPSTREAM.md](UPSTREAM.md).
 
 ## Routing and capabilities
@@ -30,6 +31,13 @@ selection is refreshed on every request. Other models and native WebSocket,
 compact, image, background, and structured-output protocols are not implemented
 by the upstream Prism adapter. WebSocket selection excludes accounts whose mapped
 model uses Prism; other accounts remain available for WebSocket requests.
+
+Requests may use `reasoning.summary=detailed`; Prism does not manufacture a
+reasoning summary. Parsed text/history, including role labels and instructions,
+uses the upstream UTF-8 byte budget of 86,000 bytes (`PRISM_MAX_PROMPT_BYTES`).
+The client-tool catalog and framing retain their separate upstream size limit.
+CPA applies ordinary payload rules once after built-in model, reasoning and stream
+preparation, preserving configured overrides and removals through dispatch.
 
 The client-tool bridge follows upstream: enabled by default for **gpt-6.1-sol**,
 with function/custom tools, nested namespaces, additional_tools, tool_choice, and
@@ -67,8 +75,11 @@ remain internal to that process.
 
 Multiplex hands polling from the temporary editor to a stationary official page,
 preserves the official fetch/Sentinel flow and asset cache, and reclaims closed
-editor resources. Memory pressure waits up to 30 seconds at the upstream 750 MiB
-threshold; runtime-start throttling cools new starts for at least 60 seconds.
+editor resources. Memory pressure waits up to 30 seconds at the upstream default
+750 MiB threshold. Deployments can adjust `PRISM_ADAPTER_MEMORY_LIMIT_MIB`; this
+positive integer controls both new-page admission and idle-context reclamation
+and should remain below the process's hard memory limit. It does not change
+concurrency limits. Runtime-start throttling cools new starts for at least 60 seconds.
 Already submitted work continues. Explicit pre-execution sandbox
 reconnect follows the official page for up to three start attempts; unknown
 outcomes are never automatically resubmitted. Pending records are per conversation.

@@ -21,5 +21,19 @@
     "prism-adapter/tool_bridge.py": "0c5a2303feafc3f8f4150846f435f5a4a5b1fb3bd24b223ee0338fd5f50f3517",
     "prism-adapter/tool_state.py": "988cf88e655f0bb333fe77bbe08d54b91eeacd3bc0ed7f436e41c4eb18a1bad9",
     "prism-adapter/tool_validation.py": "ba31caa232c7a75a8680ae3148363c61758e3ae0130b777705d484ea8b2d3d24"
-  }
+  },
+  "selective_updates": [
+    {
+      "commit": "8069e268c2240b479ce9eae15c09a3852d058937",
+      "change": "Accept reasoning.summary=detailed"
+    },
+    {
+      "commit": "d82a5af205363da36a4445a5b53a6ae0d4d9ebad",
+      "change": "Use the 86000-byte UTF-8 prompt budget"
+    },
+    {
+      "commit": "87628dd72198a1018b8c00a37102fb9f4c0d2dd7",
+      "change": "Configure multiplex memory admission and idle reclamation threshold"
+    }
+  ]
 }

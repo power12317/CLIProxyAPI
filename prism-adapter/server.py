@@ -34,7 +34,7 @@ BASE = "https://prism.openai.com"
 START = "/api/llm/response_with_tools_start"
 STATUS = "/api/llm/response_with_tools_status"
 MAX_REQUEST_BYTES = 1 << 20
-MAX_PROMPT_CHARS = 32000
+MAX_PROMPT_BYTES = int(os.environ.get('PRISM_MAX_PROMPT_BYTES', '86000'))
 SESSION_ID = re.compile(r"^[0-9a-f]{64}$")
 MODEL = "gpt-5.6-sol"
 PROJECT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f-]{27,}$")
@@ -67,7 +67,7 @@ def parse_prompt(payload):
         raise AdapterError(422, "unsupported_request", "Only plain text output is supported")
     reasoning = payload.get("reasoning") or {}
     if (not isinstance(reasoning, dict) or not isinstance(reasoning.get("effort", "medium"), str)
-            or reasoning.get("effort", "medium") not in EFFORTS or reasoning.get("summary") not in (None, "none", "auto")):
+            or reasoning.get("effort", "medium") not in EFFORTS or reasoning.get("summary") not in (None, "none", "auto", "detailed")):
         raise AdapterError(422, "unsupported_reasoning", "Unsupported Prism reasoning effort")
     if not isinstance(payload.get("stream", False), bool):
         raise AdapterError(400, "invalid_request", "stream must be a boolean")
@@ -99,8 +99,8 @@ def parse_prompt(payload):
             raise AdapterError(400, "invalid_request", "message content must not be empty")
         parts.append("[" + role + "]\n" + text)
     prompt = "\n\n".join(parts)
-    if not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
-        raise AdapterError(400, "invalid_request", "text input is empty or too long")
+    if not prompt.strip() or len(prompt.encode('utf-8')) > MAX_PROMPT_BYTES:
+        raise AdapterError(400, "invalid_request", "text input is empty or exceeds the UTF-8 byte budget")
     return prompt, payload.get("stream", False)
 
 

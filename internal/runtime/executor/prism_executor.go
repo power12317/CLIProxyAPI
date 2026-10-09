@@ -64,7 +64,7 @@ func (e *PrismExecutor) CountTokens(ctx context.Context, auth *coreauth.Auth, re
 	return coreexecutor.Response{}, prismRequestError(http.StatusBadRequest, "unsupported_request", "Prism does not support token counting")
 }
 
-func (e *PrismExecutor) prepare(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) ([]byte, error) {
+func (e *PrismExecutor) prepare(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, stream bool) ([]byte, error) {
 	if !e.routes(auth, req.Model) {
 		return nil, prismRequestError(422, "unsupported_model", "Model is outside the Prism catalog")
 	}
@@ -90,7 +90,18 @@ func (e *PrismExecutor) prepare(ctx context.Context, auth *coreauth.Auth, req co
 	if err != nil {
 		return nil, err
 	}
-	return body, nil
+	body, err = sjson.SetBytes(body, "stream", stream)
+	if err != nil {
+		return nil, err
+	}
+	original := opts.OriginalRequest
+	if len(original) == 0 {
+		original = req.Payload
+	}
+	// User payload rules are the final semantic change before transport.
+	return helps.ApplyPayloadConfigWithRequestForExecutor(e.cfg, e.Identifier(), model,
+		sdktranslator.FormatCodex.String(), opts.SourceFormat.String(), "", body, original,
+		helps.PayloadRequestedModel(opts, req.Model), helps.PayloadRequestPath(opts), opts.Headers), nil
 }
 
 func (e *PrismExecutor) execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, stream bool) (response coreexecutor.Response, err error) {
@@ -99,19 +110,20 @@ func (e *PrismExecutor) execute(ctx context.Context, auth *coreauth.Auth, req co
 	reporter := helps.NewExecutorUsageReporter(ctx, e, model, auth)
 	reporter.SetStream(stream)
 	defer func() { reporter.PublishUnavailable(ctx, err) }()
-	payload, err := e.prepare(ctx, auth, req, opts)
+	payload, err := e.prepare(ctx, auth, req, opts, stream)
 	if err != nil {
 		return response, err
 	}
 	reporter.SetTranslatedReasoningEffort(payload, sdktranslator.FormatCodex.String())
-	body, headers, status, err := e.call(ctx, auth, req, opts, payload, stream)
+	body, headers, status, err := e.call(ctx, auth, req, opts, payload)
 	if err != nil {
 		return response, err
 	}
 	if status != http.StatusOK {
 		return response, helps.PrismAdapterError(status, body)
 	}
-	terminal, err := helps.PrismTerminal(body, model, stream, payload)
+	model = gjson.GetBytes(payload, "model").String()
+	terminal, err := helps.PrismTerminal(body, model, gjson.GetBytes(payload, "stream").Bool(), payload)
 	if err != nil {
 		return response, err
 	}
@@ -149,7 +161,7 @@ func (e *PrismExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, 
 	return &coreexecutor.StreamResult{Headers: response.Headers, Chunks: chunks}, nil
 }
 
-func (e *PrismExecutor) call(ctx context.Context, auth *coreauth.Auth, original coreexecutor.Request, opts coreexecutor.Options, payload []byte, stream bool) ([]byte, http.Header, int, error) {
+func (e *PrismExecutor) call(ctx context.Context, auth *coreauth.Auth, original coreexecutor.Request, opts coreexecutor.Options, payload []byte) ([]byte, http.Header, int, error) {
 	endpoint, err := helps.PrismEndpoint()
 	if err != nil {
 		return nil, nil, 0, err
@@ -163,13 +175,7 @@ func (e *PrismExecutor) call(ctx context.Context, auth *coreauth.Auth, original 
 	if token == "" || accountID == "" {
 		return nil, nil, 0, prismRequestError(http.StatusUnauthorized, "authentication_error", "Prism requires a Codex OAuth access token and account ID")
 	}
-	body := bytes.Clone(payload)
-	var errSet error
-	body, errSet = sjson.SetBytes(body, "stream", stream)
-	if errSet != nil {
-		return nil, nil, 0, errSet
-	}
-	req, errNew := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, errNew := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if errNew != nil {
 		return nil, nil, 0, errNew
 	}

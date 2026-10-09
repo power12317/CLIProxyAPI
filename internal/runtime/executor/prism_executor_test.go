@@ -168,3 +168,77 @@ func TestPrismClientToolEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestPrismPayloadRulesAreAppliedOnceAfterBuiltins(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, filterEffort := range []bool{false, true} {
+			name := "json"
+			if stream {
+				name = "sse"
+			}
+			if filterEffort {
+				name += "/filter"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Setenv("PRISM_ADAPTER_API_KEY", "bridge-key")
+				var calls atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if gjson.GetBytes(body, "input.#").Int() != 2 || gjson.GetBytes(body, "input.0.content").String() != "second" {
+						t.Errorf("filter was skipped or repeated: %s", body)
+					}
+					if gjson.GetBytes(body, "model").String() != "gpt-5.6-sol" || gjson.GetBytes(body, "reasoning.summary").String() != "detailed" || gjson.GetBytes(body, "instructions").String() != "configured" {
+						t.Errorf("override/default lost: %s", body)
+					}
+					effort := gjson.GetBytes(body, "reasoning.effort")
+					if (filterEffort && effort.Exists()) || (!filterEffort && effort.String() != "high") {
+						t.Errorf("built-in reasoning won over user rules: %s", body)
+					}
+					if gjson.GetBytes(body, "stream").Exists() {
+						t.Errorf("stream was restored after filtering: %s", body)
+					}
+					_, _ = w.Write(prismResponse("gpt-5.6-sol"))
+				}))
+				defer server.Close()
+				cfg := prismConfig(t, server.URL)
+				targets := []config.PayloadModelRule{{Name: "gpt-6.1-sol", Protocol: "codex", FromProtocol: "openai-response", Headers: map[string]string{"X-Rule": "enabled"}}}
+				filters := []string{"input.0", "stream"}
+				if filterEffort {
+					filters = append(filters, "reasoning.effort")
+				}
+				cfg.Payload = config.PayloadConfig{
+					Default: []config.PayloadRule{{Models: targets, Params: map[string]any{"instructions": "configured"}}},
+					Override: []config.PayloadRule{{Models: targets, Params: map[string]any{
+						"model": "gpt-5.6-sol", "reasoning.effort": "high", "reasoning.summary": "detailed",
+					}}},
+					Filter: []config.PayloadFilterRule{{Models: targets, Params: filters}},
+				}
+				req := core.Request{Model: "gpt-6.1-sol(xhigh)", Payload: []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"third"}]}`)}
+				opts := prismOptions()
+				opts.Headers.Set("X-Rule", "enabled")
+				exec := NewPrismExecutor(cfg)
+				if stream {
+					result, err := exec.ExecuteStream(t.Context(), prismTestAuth(), req, opts)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for chunk := range result.Chunks {
+						if chunk.Err != nil || !strings.Contains(string(chunk.Payload), "response.completed") {
+							t.Fatalf("invalid downstream SSE: %s %v", chunk.Payload, chunk.Err)
+						}
+					}
+				} else if _, err := exec.Execute(t.Context(), prismTestAuth(), req, opts); err != nil {
+					t.Fatal(err)
+				}
+				if calls.Load() != 1 {
+					t.Fatalf("adapter calls = %d", calls.Load())
+				}
+			})
+		}
+	}
+}

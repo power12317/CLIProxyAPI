@@ -365,6 +365,44 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads(blocked.path.read_text())['request_id'], 'unknown')
 
 class MemoryAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_memory_budget_default_and_invalid_deployment_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = adapter.State(directory)
+            with mock.patch.dict('os.environ', {}, clear=True):
+                engine = multiplex_browser.MultiplexBrowser(state, 'fixture', adapter)
+                self.assertEqual(engine.memory_limit_bytes, 750 * 1024 * 1024)
+            for value in ('0', '-1', 'invalid', '1.5', ''):
+                with self.subTest(value=value), mock.patch.dict('os.environ', {'PRISM_ADAPTER_MEMORY_LIMIT_MIB': value}):
+                    with self.assertRaisesRegex(ValueError, 'positive integer'):
+                        multiplex_browser.MultiplexBrowser(state, 'fixture', adapter)
+
+    async def test_configured_budget_controls_admission_and_idle_reclamation(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict('os.environ', {'PRISM_ADAPTER_MEMORY_LIMIT_MIB': '1280'}):
+            engine = multiplex_browser.MultiplexBrowser(adapter.State(directory), 'fixture', adapter)
+            idle = SimpleNamespace(refs=0, used=100, created=100, close=mock.AsyncMock())
+            active = SimpleNamespace(refs=1, used=0, created=0, close=mock.AsyncMock())
+            engine.actors = {'idle': idle, 'active': active}
+            engine.collect_closed_pages = mock.AsyncMock()
+            with mock.patch.object(multiplex_browser.time, 'monotonic', return_value=100), \
+                    mock.patch.object(multiplex_browser, 'cgroup_memory_bytes', return_value=800 * 1024 * 1024):
+                await engine.wait_for_memory(active, None)
+                await engine.prune()
+                idle.close.assert_not_awaited()
+                engine.collect_closed_pages.assert_not_awaited()
+            engine.memory_wait_seconds = 0
+            with mock.patch.object(multiplex_browser.time, 'monotonic', return_value=100), \
+                    mock.patch.object(multiplex_browser, 'cgroup_memory_bytes', return_value=1280 * 1024 * 1024), \
+                    self.assertLogs('prism.lifecycle') as captured:
+                with self.assertRaises(adapter.AdapterError) as raised:
+                    await engine.wait_for_memory(active, None)
+                self.assertEqual(raised.exception.code, 'resource_pressure')
+                await engine.prune()
+            idle.close.assert_awaited_once()
+            active.close.assert_not_awaited()
+            self.assertEqual(engine.actors, {'active': active})
+            for record in captured.records:
+                self.assertEqual(json.loads(record.getMessage())['memory_limit_bytes'], 1280 * 1024 * 1024)
+
     async def test_transient_pressure_collects_and_waits_without_submitting(self):
         with tempfile.TemporaryDirectory() as directory:
             engine = multiplex_browser.MultiplexBrowser(adapter.State(directory), 'fixture', adapter)

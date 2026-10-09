@@ -23,11 +23,13 @@ spec.loader.exec_module(adapter)
 class AdapterTests(unittest.TestCase):
     def test_codex_optional_reasoning_on_all_text_models(self):
         for model in adapter.MODELS:
-            payload = {'model': model, 'input': 'hi', 'include': ['reasoning.encrypted_content'],
-                       'reasoning': {'effort': 'high', 'summary': 'auto'}}
-            self.assertEqual(adapter.parse_prompt(payload), ('[user]\nhi', False))
+            for summary in ('none', 'auto', 'detailed'):
+                with self.subTest(model=model, summary=summary):
+                    payload = {'model': model, 'input': 'hi', 'include': ['reasoning.encrypted_content'],
+                               'reasoning': {'effort': 'high', 'summary': summary}}
+                    self.assertEqual(adapter.parse_prompt(payload), ('[user]\nhi', False))
         for fields in ({'include': ['web_search_call.action.sources']},
-                       {'reasoning': {'summary': 'detailed'}},
+                       {'reasoning': {'summary': 'unsupported-summary'}},
                        {'input': [{'type': 'reasoning', 'encrypted_content': 'fixture'}]}):
             with self.assertRaises(adapter.AdapterError):
                 adapter.parse_prompt({'model': adapter.MODEL, 'input': 'hi', **fields})
@@ -89,6 +91,28 @@ class AdapterTests(unittest.TestCase):
             request = {"model": "gpt-5.6-sol", "input": "hi", **change}
             with self.assertRaises(adapter.AdapterError):
                 adapter.parse_prompt(request)
+
+    def test_utf8_prompt_budget_includes_roles_instructions_and_history(self):
+        for text in ('a' * 32, '中文' * 16, '😀' * 16):
+            with self.subTest(text=text):
+                payload = {'model': adapter.MODEL, 'instructions': 'rules', 'input': [
+                    {'role': 'user', 'content': text}, {'role': 'assistant', 'content': 'answer'}]}
+                expected = '[instructions]\nrules\n\n[user]\n' + text + '\n\n[assistant]\nanswer'
+                size = len(expected.encode('utf-8'))
+                with mock.patch.object(adapter, 'MAX_PROMPT_BYTES', size):
+                    self.assertEqual(adapter.parse_prompt(payload), (expected, False))
+                with mock.patch.object(adapter, 'MAX_PROMPT_BYTES', size - 1):
+                    with self.assertRaises(adapter.AdapterError) as raised:
+                        adapter.parse_prompt(payload)
+                    self.assertEqual(raised.exception.code, 'invalid_request')
+
+    def test_default_byte_budget_accepts_long_ascii_but_counts_chinese_bytes(self):
+        with mock.patch.object(adapter, 'MAX_PROMPT_BYTES', 86000):
+            text = 'a' * (86000 - len('[user]\n'))
+            self.assertEqual(len(adapter.parse_prompt({'model': adapter.MODEL, 'input': text})[0]), 86000)
+            for text in (text + 'a', '中' * 30000):
+                with self.assertRaises(adapter.AdapterError):
+                    adapter.parse_prompt({'model': adapter.MODEL, 'input': text})
 
     def test_terminal_output_and_unknown_state(self):
         self.assertIsNone(adapter.terminal_text({"status": "running"}))
