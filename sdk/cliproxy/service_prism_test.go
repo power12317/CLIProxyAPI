@@ -19,7 +19,6 @@ import (
 )
 
 func TestPrismCatalogHotReloadAndExecution(t *testing.T) {
-	t.Setenv("PRISM_ADAPTER_API_KEY", "synthetic-bridge-key")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if got := gjson.GetBytes(body, "model").String(); got != "gpt-6.1-sol" {

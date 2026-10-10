@@ -96,12 +96,17 @@ venv/bin/pip install --only-binary=:all: -r requirements.txt
 venv/bin/python -m playwright install chromium
 ```
 
-Configure the same random bridge key in the CPA process and adapter process.
-See `../deploy/prism-adapter/prism-adapter.env.example` and the service unit.
-The gateway uses the adapter's loopback endpoint and default port 8319. If a
-deployment changes the adapter port, both processes must receive the same
-`PRISM_ADAPTER_PORT` environment value. Browser paths and the bridge key belong to
-deployment setup; the CPA YAML and management panel expose only the switch.
+CPA connects directly to the adapter over loopback HTTP, with no separate bridge
+key or `Authorization` header. It still forwards the selected account's OAuth
+token and account/session identities for Prism access and conversation state.
+Upgrade CPA and the adapter together when migrating from a version that required
+bridge authentication; an older adapter will still reject requests without it.
+
+See `../deploy/prism-adapter/prism-adapter.env.example` and the service unit for
+browser runtime setup. The adapter listens on `127.0.0.1`, port 8319 by default.
+If a deployment changes the adapter port, both processes must receive the same
+`PRISM_ADAPTER_PORT` environment value. Browser paths belong to deployment setup;
+the CPA YAML and management panel expose only the switch, disabled by default.
 Provision the state directory before starting the service. On Linux the Chromium
 sandbox helper may require its standard root-owned SUID setup. The service does
 not disable Chromium sandboxing. If CPA runs in a container, the adapter must

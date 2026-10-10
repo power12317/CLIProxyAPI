@@ -21,6 +21,30 @@ spec.loader.exec_module(adapter)
 
 
 class AdapterTests(unittest.TestCase):
+    def test_startup_needs_browser_environment_only_and_binds_loopback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chrome = Path(directory) / 'chromium'
+            chrome.touch()
+            environment = {
+                'PRISM_ADAPTER_CHROME': str(chrome),
+                'CHROME_DEVEL_SANDBOX': str(Path(directory) / 'chrome-sandbox'),
+                'PRISM_ADAPTER_STATE_DIR': str(Path(directory) / 'state'),
+            }
+            handler = type('StartupHandler', (adapter.Handler,), {})
+            with (
+                mock.patch.dict('os.environ', environment, clear=True),
+                mock.patch.object(adapter.os, 'geteuid', return_value=1000),
+                mock.patch.object(adapter, 'Handler', handler),
+                mock.patch.object(adapter, 'BrowserWorker') as worker,
+                mock.patch.object(adapter, 'ThreadingHTTPServer') as http_server,
+            ):
+                adapter.main()
+                http_server.assert_called_once_with(('127.0.0.1', 8319), handler)
+                http_server.return_value.serve_forever.assert_called_once_with()
+                http_server.return_value.server_close.assert_called_once_with()
+                worker.return_value.close.assert_called_once_with()
+                self.assertIsNotNone(handler.tool_state)
+
     def test_codex_optional_reasoning_on_all_text_models(self):
         for model in adapter.MODELS:
             for summary in ('none', 'auto', 'detailed'):
@@ -133,12 +157,15 @@ class AdapterTests(unittest.TestCase):
 
     def test_http_boundary_uses_real_terminal_without_usage(self):
         class FakeBrowser:
+            calls = 0
+
             def run(self, account_id, token, prompt, session_id=None, model=adapter.MODEL, effort="medium"):
+                self.calls += 1
                 self.assert_values = (account_id, token, prompt, session_id, model, effort)
                 return "prism-123", "21"
 
         fake = FakeBrowser()
-        handler = type("TestHandler", (adapter.Handler,), {"api_key": "test-key", "browser_turn": fake})
+        handler = type("TestHandler", (adapter.Handler,), {"browser_turn": fake})
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         server.daemon_threads = True
         worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -146,7 +173,7 @@ class AdapterTests(unittest.TestCase):
         try:
             url = f"http://127.0.0.1:{server.server_port}/v1/responses"
             data = json.dumps({"model": "gpt-6.1-sol", "reasoning":{"effort":"xhigh"}, "input": "candy"}).encode()
-            headers = {"Authorization": "Bearer test-key", "X-Prism-Account-ID": "300",
+            headers = {"X-Prism-Account-ID": "300",
                        "X-Prism-OAuth-Token": "oauth-token", "X-Prism-Session-ID": "a" * 64,
                        "Content-Type": "application/json"}
             with urlopen(Request(url, data=data, headers=headers), timeout=5) as response:
@@ -155,9 +182,14 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual((body["model"], body["reasoning"]["effort"]), ("gpt-6.1-sol", "xhigh"))
             self.assertEqual(body["output"][0]["content"][0]["text"], "21")
             self.assertIsNone(body["usage"])
-            with self.assertRaises(HTTPError) as denied:
-                urlopen(Request(url, data=data, headers={"Content-Type": "application/json"}), timeout=5)
-            self.assertEqual(denied.exception.code, 401)
+            for missing in ('X-Prism-Account-ID', 'X-Prism-OAuth-Token'):
+                with self.subTest(missing=missing), self.assertRaises(HTTPError) as denied:
+                    urlopen(Request(url, data=data, headers={key: value for key, value in headers.items()
+                                                           if key != missing}), timeout=5)
+                with denied.exception as response:
+                    self.assertEqual(response.code, 400)
+                    self.assertEqual(json.load(response)['error']['message'], 'account identity is required')
+            self.assertEqual(fake.calls, 1)
         finally:
             server.shutdown()
             server.server_close()

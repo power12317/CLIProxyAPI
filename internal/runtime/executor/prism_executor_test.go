@@ -43,11 +43,13 @@ func prismOptions() core.Options {
 }
 
 func TestPrismModelsEffortsAndBufferedEvents(t *testing.T) {
-	t.Setenv("PRISM_ADAPTER_API_KEY", "bridge-key")
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		body, _ := io.ReadAll(r.Body)
+		if _, present := r.Header["Authorization"]; present {
+			t.Error("loopback request must not carry bridge authorization")
+		}
 		if len(r.Header.Get("X-Prism-Account-ID")) != 64 || len(r.Header.Get("X-Prism-Caller-ID")) != 64 || len(r.Header.Get("X-Prism-Session-ID")) != 64 {
 			t.Error("private identities not forwarded")
 		}
@@ -69,14 +71,16 @@ func TestPrismModelsEffortsAndBufferedEvents(t *testing.T) {
 				payload, _ := json.Marshal(map[string]any{"model": model, "input": "hello", "reasoning": map[string]any{"effort": effort}})
 				exec := NewPrismExecutor(prismConfig(t, server.URL))
 				req := core.Request{Model: model, Payload: payload}
-				response, err := exec.Execute(t.Context(), prismTestAuth(), req, prismOptions())
+				opts := prismOptions()
+				opts.Headers.Set("Authorization", "Bearer synthetic-client-key")
+				response, err := exec.Execute(t.Context(), prismTestAuth(), req, opts)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if response.Headers.Get("X-Effort") != effort || response.Headers.Get("X-Prism-Usage") != "unavailable" {
 					t.Fatalf("headers %v", response.Headers)
 				}
-				stream, err := exec.ExecuteStream(t.Context(), prismTestAuth(), req, prismOptions())
+				stream, err := exec.ExecuteStream(t.Context(), prismTestAuth(), req, opts)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -94,7 +98,6 @@ func TestPrismModelsEffortsAndBufferedEvents(t *testing.T) {
 }
 
 func TestPrismModelAliasAndThinkingSuffix(t *testing.T) {
-	t.Setenv("PRISM_ADAPTER_API_KEY", "bridge-key")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if gjson.GetBytes(body, "model").String() != "gpt-6.1-sol" || gjson.GetBytes(body, "reasoning.effort").String() != "high" {
@@ -110,7 +113,15 @@ func TestPrismModelAliasAndThinkingSuffix(t *testing.T) {
 }
 
 func TestPrismSwitchAndNoNativeFallback(t *testing.T) {
-	cfg := prismConfig(t, "http://127.0.0.1:8319")
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"type":"prism_unavailable","message":"fixture adapter unavailable"}}`))
+	}))
+	defer server.Close()
+	cfg := prismConfig(t, server.URL)
 	exec := NewPrismExecutor(cfg)
 	auth := prismTestAuth()
 	for _, model := range registry.PrismModelIDs() {
@@ -129,14 +140,25 @@ func TestPrismSwitchAndNoNativeFallback(t *testing.T) {
 	}
 	cfg.Codex.Prism.Enabled = true
 	cfg.Codex.Basispoints.Enabled = true
-	t.Setenv("PRISM_ADAPTER_API_KEY", "")
-	_, err := NewCodexAutoExecutor(cfg).Execute(t.Context(), auth, core.Request{Model: "gpt-6.1-sol", Payload: []byte(`{"model":"gpt-6.1-sol","input":"hi"}`)}, prismOptions())
-	if err == nil || !strings.Contains(err.Error(), "Prism adapter key") {
-		t.Fatalf("native fallback: %v", err)
+	auto := NewCodexAutoExecutor(cfg)
+	req := core.Request{Model: "gpt-6.1-sol", Payload: []byte(`{"model":"gpt-6.1-sol","input":"hi"}`)}
+	for _, stream := range []bool{false, true} {
+		var err error
+		if stream {
+			_, err = auto.ExecuteStream(t.Context(), auth, req, prismOptions())
+		} else {
+			_, err = auto.Execute(t.Context(), auth, req, prismOptions())
+		}
+		if err == nil || !strings.Contains(err.Error(), "fixture adapter unavailable") {
+			t.Fatalf("stream=%t native fallback: %v", stream, err)
+		}
+		stop, ok := err.(interface{ IsRequestStop() bool })
+		if !ok || !stop.IsRequestStop() {
+			t.Fatal("request may be replayed")
+		}
 	}
-	stop, ok := err.(interface{ IsRequestStop() bool })
-	if !ok || !stop.IsRequestStop() {
-		t.Fatal("request may be replayed")
+	if calls.Load() != 2 {
+		t.Fatalf("adapter calls = %d, want one per request", calls.Load())
 	}
 }
 
@@ -151,7 +173,6 @@ func TestPrismRejectsWebsocketBeforeDispatch(t *testing.T) {
 }
 
 func TestPrismClientToolEvents(t *testing.T) {
-	t.Setenv("PRISM_ADAPTER_API_KEY", "bridge-key")
 	body := []byte(`{"id":"r","model":"gpt-6.1-sol","status":"completed","usage":null,"output":[{"type":"function_call","status":"completed","id":"i","call_id":"c","name":"lookup","namespace":"fs","arguments":"{\"path\":\"a\"}"}]}`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(helps.PrismEvents(body)) }))
 	defer server.Close()
@@ -180,7 +201,6 @@ func TestPrismPayloadRulesAreAppliedOnceAfterBuiltins(t *testing.T) {
 				name += "/filter"
 			}
 			t.Run(name, func(t *testing.T) {
-				t.Setenv("PRISM_ADAPTER_API_KEY", "bridge-key")
 				var calls atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					calls.Add(1)

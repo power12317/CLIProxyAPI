@@ -6,8 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -166,10 +164,6 @@ func (e *PrismExecutor) call(ctx context.Context, auth *coreauth.Auth, original 
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	key := strings.TrimSpace(os.Getenv("PRISM_ADAPTER_API_KEY"))
-	if key == "" {
-		return nil, nil, 0, prismRequestError(http.StatusBadGateway, "prism_unavailable", "Prism adapter key is not configured")
-	}
 	token, _ := codexCreds(auth)
 	accountID, callerID, sessionID := helps.PrismIdentity(auth, original, opts)
 	if token == "" || accountID == "" {
@@ -179,7 +173,6 @@ func (e *PrismExecutor) call(ctx context.Context, auth *coreauth.Auth, original 
 	if errNew != nil {
 		return nil, nil, 0, errNew
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Prism-Account-ID", accountID)
 	req.Header.Set("X-Prism-OAuth-Token", token)

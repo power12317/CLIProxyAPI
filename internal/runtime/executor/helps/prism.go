@@ -292,7 +292,7 @@ func PrismAdapterError(status int, body []byte) error {
 	if (status == 401 || status == 403 || status == 404 || status == 405) && code != "project_edit_access_required" {
 		status = 502
 		code = "prism_unavailable"
-		message = "Prism adapter rejected the gateway; check its key and endpoint"
+		message = "Prism adapter rejected the request; check its deployment and endpoint"
 	}
 	return NewPrismError(status, code, message)
 }

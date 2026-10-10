@@ -6,7 +6,6 @@ Prism's web UI owns session, sandbox, and start/status requests. This adapter
 observes their terminal result and never fabricates token deltas or usage.
 """
 
-import hmac
 import hashlib
 import json
 import os
@@ -632,7 +631,6 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     state = None
     browser_turn = None
-    api_key = None
     lock = threading.Lock()
     serialize_requests = True
     tool_state = None
@@ -663,10 +661,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/responses":
             self.send_json(404, {"error": {"type": "not_found"}})
-            return
-        bearer = self.headers.get("Authorization", "")
-        if not hmac.compare_digest(bearer, "Bearer " + self.api_key):
-            self.send_json(401, {"error": {"type": "unauthorized"}})
             return
         account_id = self.headers.get("X-Prism-Account-ID", "")
         token = self.headers.get("X-Prism-OAuth-Token", "")
@@ -787,11 +781,9 @@ def configure_client_tools(state):
 def main():
     if os.geteuid() == 0:
         raise SystemExit("Prism adapter must run as a non-root user")
-    key = os.environ.get("PRISM_ADAPTER_API_KEY", "")
     chrome = os.environ.get("PRISM_ADAPTER_CHROME", "")
-    if len(key) < 32 or not Path(chrome).is_file() or not os.environ.get("CHROME_DEVEL_SANDBOX"):
-        raise SystemExit("adapter key, Chromium binary, and Chromium sandbox are required")
-    Handler.api_key = key
+    if not Path(chrome).is_file() or not os.environ.get("CHROME_DEVEL_SANDBOX"):
+        raise SystemExit("Chromium binary and Chromium sandbox are required")
     Handler.state = State(os.environ.get("PRISM_ADAPTER_STATE_DIR", "/var/lib/cliproxy-prism"))
     Handler.tool_state = configure_client_tools(Handler.state)
     max_sessions = int(os.environ.get("PRISM_ADAPTER_MAX_SESSIONS", "1"))

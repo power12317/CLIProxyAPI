@@ -35,6 +35,7 @@ class Browser:
     def run(self, account, token, prompt, session=None, model=None, effort='medium', reuse_project=True):
         self.count+=1
         assert len(account)==64
+        assert token=='synthetic-oauth'
         marker=re.search(r'PRISM_CLIENT_TOOLS_V1:[0-9a-f]+',prompt)
         if marker is None: return str(self.count),'text result'
         assert not reuse_project
@@ -44,7 +45,6 @@ class Browser:
                {'kind':'final','text':'complete'})
         return str(self.count),marker.group(0)+'\n'+json.dumps(value)
 state=tempfile.TemporaryDirectory()
-server.Handler.api_key='bridge-key'
 server.Handler.tool_state=ToolState(state.name,server.AdapterError)
 server.Handler.browser_turn=Browser()
 httpd=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler)
@@ -66,7 +66,6 @@ httpd.serve_forever()
 		t.Fatal("adapter did not start")
 	}
 	endpoint := "http://127.0.0.1:" + strings.TrimSpace(scanner.Text())
-	t.Setenv("PRISM_ADAPTER_API_KEY", "bridge-key")
 	executor := NewPrismExecutor(prismConfig(t, endpoint))
 	opts := prismOptions()
 	req := core.Request{Model: "gpt-6.1-sol", Payload: []byte(`{"model":"gpt-6.1-sol","input":"hello"}`)}

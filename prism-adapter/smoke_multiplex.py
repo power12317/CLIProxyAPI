@@ -142,7 +142,7 @@ def main():
         worker = AsyncBrowserWorker(lambda:MultiplexBrowser(state, args.chrome, api,
             active=args.concurrency, per_account=args.concurrency, poll_seconds=0.1), api)
         handler = type('ConcurrentHandler', (api.Handler,), {
-            'api_key':'fixture-bridge', 'browser_turn':worker, 'serialize_requests':False})
+            'browser_turn':worker, 'serialize_requests':False})
         gateway = ThreadingHTTPServer(('127.0.0.1', 0), handler)
         gateway.daemon_threads = True
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
@@ -166,7 +166,7 @@ def main():
             def call(index):
                 model, effort = (args.model, args.effort) if args.model else (list(api.MODELS)[index % 4], list(api.EFFORTS)[(index // 4) % 4])
                 payload = json.dumps({'model':model,'reasoning':{'effort':effort},'input':f'fixture-{index}'}).encode()
-                headers = {'Authorization':'Bearer fixture-bridge', 'Content-Type':'application/json',
+                headers = {'Content-Type':'application/json',
                     'X-Prism-Account-ID':'300', 'X-Prism-OAuth-Token':'synthetic-fixture-token',
                     'X-Prism-Session-ID':__import__('hashlib').sha256(f'fixture-slot-{index % args.concurrency}'.encode()).hexdigest()}
                 with urlopen(Request(f'http://127.0.0.1:{gateway.server_port}/v1/responses', data=payload, headers=headers), timeout=150) as response:

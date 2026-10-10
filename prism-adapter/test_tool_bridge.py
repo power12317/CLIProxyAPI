@@ -220,13 +220,13 @@ class ToolHTTPTests(unittest.TestCase):
                 return 'fixture-'+str(inner.count),marker+'\n'+json.dumps(result)
         with tempfile.TemporaryDirectory() as directory:
             browser=Browser()
-            handler=type('ToolsHandler',(adapter.Handler,),{'api_key':'fixture-key','browser_turn':browser,
+            handler=type('ToolsHandler',(adapter.Handler,),{'browser_turn':browser,
                 'serialize_requests':False,'tool_state':ToolState(directory,adapter.AdapterError)})
             server=ThreadingHTTPServer(('127.0.0.1',0),handler)
             threading.Thread(target=server.serve_forever,daemon=True).start()
             try:
                 payload=request(stream=True, include=['reasoning.encrypted_content'], reasoning={'effort':'medium','summary':'detailed'})
-                headers={'Authorization':'Bearer fixture-key','X-Prism-Account-ID':'300',
+                headers={'X-Prism-Account-ID':'300',
                     'X-Prism-OAuth-Token':'synthetic','X-Prism-Session-ID':'a'*64,'X-Prism-Caller-ID':'b'*64,'Content-Type':'application/json'}
                 def send(headers_=headers):
                     req=Request(f'http://127.0.0.1:{server.server_port}/v1/responses',data=json.dumps(payload).encode(),headers=headers_)

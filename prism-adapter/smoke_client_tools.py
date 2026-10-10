@@ -57,7 +57,7 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         state = api.State(directory)
         worker = AsyncBrowserWorker(lambda:MultiplexBrowser(state,args.chrome,api,poll_seconds=0.05),api)
-        handler = type('ToolsSmokeHandler',(api.Handler,),{'api_key':'synthetic-key','browser_turn':worker,
+        handler = type('ToolsSmokeHandler',(api.Handler,),{'browser_turn':worker,
             'serialize_requests':False,'tool_state':ToolState(directory,api.AdapterError)})
         server = ThreadingHTTPServer(('127.0.0.1',0),handler)
         server.daemon_threads = True
@@ -67,7 +67,7 @@ def main():
                 {'type':'function','name':'lookup','parameters':{'type':'object','properties':{'key':{'type':'string'}},'required':['key'],'additionalProperties':False}},
                 {'type':'custom','name':'echo','format':{'type':'grammar','syntax':'regex','definition':'fixture-value'}}]}],
             'input':[{'role':'user','content':'Look up the fixture value, echo it, and report the confirmed result.'}]}
-        headers={'Authorization':'Bearer synthetic-key','X-Prism-OAuth-Token':'synthetic-token',
+        headers={'X-Prism-OAuth-Token':'synthetic-token',
             'X-Prism-Account-ID':'300','X-Prism-Caller-ID':'a'*64,'X-Prism-Session-ID':'b'*64,
             'Content-Type':'application/json'}
         try:
