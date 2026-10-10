@@ -182,18 +182,27 @@ func (e *PrismExecutor) call(ctx context.Context, auth *coreauth.Auth, original 
 	if sessionID != "" {
 		req.Header.Set("X-Prism-Session-ID", sessionID)
 	}
+	diagnostic := helps.NewPrismRequestLog(ctx, e.cfg, req, payload, auth.ID)
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, errDo := client.Do(req)
 	if errDo != nil {
+		diagnostic.Failure("transport", errDo)
 		return nil, nil, 0, prismRequestError(http.StatusBadGateway, "prism_unavailable", "Prism adapter request failed; request was not replayed")
 	}
 	defer func() { _ = resp.Body.Close() }()
+	diagnostic.ResponseHeaders(resp.StatusCode, resp.Header)
 	data, errRead := io.ReadAll(io.LimitReader(resp.Body, prismMaxResponseBytes+1))
-	if errRead != nil || len(data) > prismMaxResponseBytes {
+	if errRead != nil {
+		diagnostic.Failure("read_response", errRead)
 		return nil, nil, 0, prismRequestError(http.StatusBadGateway, "prism_unavailable", "Prism adapter response exceeded the limit")
 	}
+	if len(data) > prismMaxResponseBytes {
+		diagnostic.Failure("response_size", errors.New("response exceeded size limit"))
+		return nil, nil, 0, prismRequestError(http.StatusBadGateway, "prism_unavailable", "Prism adapter response exceeded the limit")
+	}
+	diagnostic.Response(resp.StatusCode, data, payload)
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		return nil, nil, 0, prismRequestError(http.StatusBadGateway, "prism_unavailable", "Prism adapter redirected unexpectedly")
 	}
