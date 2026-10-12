@@ -4,14 +4,49 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
+
+func TestCodexTurnStateLogUpdatesPreserveResponseModelAndResetAttempts(t *testing.T) {
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx := context.WithValue(context.Background(), "gin", ginCtx)
+	auth := &cliproxyauth.Auth{ID: t.Name(), Provider: "codex", FileName: "codex-user-windows.json"}
+	t.Cleanup(func() { InvalidateCodexTurnStates(auth.ID) })
+	const requested = "gpt-6-sol"
+
+	for _, served := range []string{"gpt-5.6-luna", "", requested} {
+		// Reuse identical identity and model to exercise retries on one Gin context.
+		state := NewCodexTurnState(ctx, auth, "https://chatgpt.com/backend-api/codex/responses", turnStateBody("turn-1"), nil, requested, nil)
+		fields, ok := logging.CodexTurnStateLogFieldsForContext(ginCtx)
+		if !ok || fields.ResponseModel != "" {
+			t.Fatalf("new attempt inherited response model: %+v", fields)
+		}
+		state.ObserveRequest(http.Header{codexTurnStateHeader: {"request-state"}}, nil)
+		reporter := newCodexTestReporter(ctx, requested, auth)
+		if served != "" {
+			reporter.ObserveCodexResponseModel([]byte(fmt.Sprintf(`{"type":"response.completed","response":{"model":%q}}`, served)))
+		}
+		reporter.EnsurePublished(ctx)
+		state.ObserveEvent([]byte(`{"type":"response.metadata","headers":{"x-codex-turn-state":"response-state"}}`))
+		state.LogResponse(ctx, nil, true)
+		fields, ok = logging.CodexTurnStateLogFieldsForContext(ginCtx)
+		if !ok || fields.RequestedModel != requested || fields.ResponseModel != served {
+			t.Fatalf("final model pair = %q/%q, want %q/%q", fields.RequestedModel, fields.ResponseModel, requested, served)
+		}
+		if fields.RequestTurnStateLen != len("request-state") || fields.ResponseTurnStateLen != len("response-state") {
+			t.Fatalf("final turn-state lengths lost: %+v", fields)
+		}
+	}
+}
 
 func TestCodexTurnStatePrefersStandardMetadataAcrossRequests(t *testing.T) {
 	for _, firstValue := range []bool{false, true} {
