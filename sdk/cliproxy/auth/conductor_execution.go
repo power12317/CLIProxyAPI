@@ -124,7 +124,6 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 		ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
 	}
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
-	ctx = m.withPrismTransportPolicy(ctx, req.Model)
 	req, opts = cliproxysession.Enrich(req, opts)
 	ctx, opts, releaseTransport := m.prepareCodexTransport(ctx, providers, req, opts)
 	if releaseTransport != nil {
@@ -191,7 +190,6 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
-	ctx = m.withPrismTransportPolicy(ctx, req.Model)
 	req, opts = cliproxysession.Enrich(req, opts)
 	WithCodexClientSystemMetadata(&opts, req.Payload)
 	m.withCodexSystemPairMetadata(&opts)
@@ -250,7 +248,6 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
 	}
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
-	ctx = m.withPrismTransportPolicy(ctx, req.Model)
 	req, opts = cliproxysession.Enrich(req, opts)
 	ctx, opts, releaseTransport := m.prepareCodexTransport(ctx, providers, req, opts)
 	defer func() {

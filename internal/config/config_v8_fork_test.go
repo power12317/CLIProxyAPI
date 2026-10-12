@@ -10,7 +10,6 @@ func TestV8MigrationPreservesIndependentForkModes(t *testing.T) {
 		yaml    string
 		enabled func(*Config) bool
 	}{
-		{"prism", "codex:\n  prism:\n    enabled: true\n", func(c *Config) bool { return c.Codex.Prism.Enabled }},
 		{"basispoints", "codex:\n  basispoints:\n    enabled: true\n", func(c *Config) bool { return c.Codex.Basispoints.Enabled }},
 		{"ticket", "codex:\n  turn-state-ticket:\n    enabled: true\n", func(c *Config) bool { return c.Codex.TurnStateTicket.Enabled }},
 		{"websocket", "codex:\n  force-websocket: true\n", func(c *Config) bool { return c.Codex.ForceWebsocket }},

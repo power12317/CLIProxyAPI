@@ -56,8 +56,4 @@ func TestGetCodexCapabilities(t *testing.T) {
 	if body["codex_runtime"] != true {
 		t.Fatal("Codex runtime capability must be preserved")
 	}
-	prism, ok := body["prism"].(map[string]any)
-	if !ok || len(prism) != 2 || prism["supported"] != true || prism["enabled"] != false {
-		t.Fatalf("prism capabilities = %#v", body["prism"])
-	}
 }

@@ -42,7 +42,6 @@ type CodexAutoExecutor struct {
 	httpExec        *CodexExecutor
 	wsExec          *CodexWebsocketsExecutor
 	basispointsExec *BasispointsExecutor
-	prismExec       *PrismExecutor
 	poolOnce        sync.Once
 	pool            *cliproxyexecutor.ExecutionSessionPool
 }
@@ -61,7 +60,6 @@ func NewCodexAutoExecutor(cfg *config.Config) *CodexAutoExecutor {
 		httpExec:        NewCodexExecutor(cfg),
 		wsExec:          NewCodexWebsocketsExecutor(cfg),
 		basispointsExec: NewBasispointsExecutor(cfg),
-		prismExec:       NewPrismExecutor(cfg),
 	}
 }
 
@@ -109,10 +107,6 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	}
 	if isCodexOpenAIImageRequest(opts) && e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
 		cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
-	}
-	if !isCodexOpenAIImageRequest(opts) && e != nil && e.prismExec != nil && e.prismExec.routes(auth, req.Model) {
-		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
-		return e.prismExec.Execute(ctx, auth, req, opts)
 	}
 	if e != nil && e.httpExec != nil {
 		var release func()
@@ -196,10 +190,6 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	}
 	if isCodexOpenAIImageRequest(opts) && e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
 		cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
-	}
-	if !isCodexOpenAIImageRequest(opts) && e != nil && e.prismExec != nil && e.prismExec.routes(auth, req.Model) {
-		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
-		return e.prismExec.ExecuteStream(ctx, auth, req, opts)
 	}
 	if e != nil && e.httpExec != nil {
 		sharedCtx, fresh, release, remote, err := bridge.PrepareShared(ctx, e.httpExec.cfg, auth)

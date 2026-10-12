@@ -7,7 +7,6 @@ on:
       - '*'
       - '!websocket-har-alignment-v*'
       - '!basispoints/**'
-      - '!prism/**'
 
 permissions:
   contents: write

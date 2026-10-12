@@ -1041,9 +1041,6 @@ oauth:
       # Optional Basispoints interface for Codex models.
       basispoints:
         enabled: false
-      # Optional Prism browser bridge for Codex OAuth accounts. Uses sub2api defaults.
-      prism:
-        enabled: false
       # Prefer WebSockets for ChatGPT Codex generation, regardless of client transport.
       # Five failed handshake attempts fall back to HTTP for this request only.
       force-websocket: false
