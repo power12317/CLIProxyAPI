@@ -16,6 +16,15 @@ When upgrading the old `codex-master` service, use
 remove the old container while retaining its bind-mounted data. CPAMP remains a
 separate project with its own `docker-compose.yml`.
 
+[Prism Compose](docker-compose.prism.yml) runs the published CPA and
+[`prism-adapter`](https://github.com/power12317/prism-adapter) images without a
+local build. The adapter shares CPA's network namespace at `127.0.0.1:8319` and
+persists state in `./prism-data`. Keep the bundled
+`deploy/prism-adapter/chromium-seccomp.json` alongside the Compose deployment.
+See [Prism deployment and startup commands](prism-adapter/README.md#docker-deployment),
+including how to combine it with Codex Server. The existing Prism switch remains
+disabled by default.
+
 If you want to use CLIProxyAPI on your desktop, we recommend our [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop client. It provides a graphical configuration UI, automatic updates, system tray integration, and one-click start/stop for the CLIProxyAPI service.
 
 CLIProxyAPI is a proxy server that provides OpenAI/Gemini/Claude/Codex/Grok compatible API interfaces for CLI.

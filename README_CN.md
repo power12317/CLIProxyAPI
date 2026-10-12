@@ -6,6 +6,16 @@
 
 推送 `v*` Git tag 后，发布 `ghcr.io/power12317/cliproxyapi` 的对应版本和 `latest` 镜像，支持 Linux amd64 和 arm64。[Codex Server Compose](docker-compose.codex.yml) 只增加 [Codex Server](https://github.com/power12317/codex-server)，使用 `ghcr.io/power12317/codex-server:latest`，数据绑定到 CPA 部署目录下的 `./codex-data:/var/lib/codex`，无需拉取 Codex Server 源码。服务和容器名为 `codex-server`，镜像覆盖变量为 `CODEX_SERVER_IMAGE`。从原 `codex-master` 服务升级时，使用 `docker compose -f docker-compose.codex.yml up -d --remove-orphans` 移除旧容器，保留绑定目录中的数据。CPAMP 是独立项目，继续使用自己的 `docker-compose.yml`。
 
+[Prism Compose](docker-compose.prism.yml) 直接拉取 CPA 和 [Prism Adapter](https://github.com/power12317/prism-adapter) 的已发布镜像，无需本地构建。适配器共享 CPA 网络命名空间，通过 `127.0.0.1:8319` 通信，状态保存到 `./prism-data`。部署时保留配套的 `deploy/prism-adapter/chromium-seccomp.json`，沿用已有 `config.yaml`、凭据目录及 Compose 项目名，然后执行：
+
+```bash
+docker compose -f docker-compose.prism.yml pull
+docker compose -f docker-compose.prism.yml up -d --wait
+docker compose -f docker-compose.prism.yml exec -T prism-adapter python container/healthcheck.py --verbose
+```
+
+原有 Prism 开关默认关闭，容器启动后再按需开启。若同时使用 Codex Server，使用 `-f docker-compose.codex.yml -f docker-compose.prism.yml` 合并部署，启动时加 `--no-build`。完整操作见 [Prism 部署说明](prism-adapter/README.md#docker-deployment)；真实账号测试见 [适配器中文说明](https://github.com/power12317/prism-adapter/blob/v2026.10.10-1/README_CN.md)。
+
 如果您想在您的桌面使用 CLIProxyAPI，我们推荐您使用我们的 [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) 桌面客户端，该客户端提供了图形化的配置界面、自动更新、系统托盘集成、一键启动/关闭 CLIProxyAPI 服务等功能。
 
 CLIProxyAPI 是一个为 CLI 提供 OpenAI/Gemini/Claude/Codex/Grok 兼容 API 接口的代理服务器。

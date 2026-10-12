@@ -85,7 +85,61 @@ reconnect follows the official page for up to three start attempts; unknown
 outcomes are never automatically resubmitted. Pending records are per conversation.
 Projects remain in the Prism workspace; upstream does not automatically delete them.
 
-## Installation
+## Docker deployment
+
+Use the repository-root `docker-compose.prism.yml` to pull the published CPA and
+`ghcr.io/power12317/prism-adapter:latest` images. No local build or Python
+installation is required. The standalone adapter release `v2026.10.10-1` was
+verified with CPA `v2026.10.10-3` on Linux amd64 and arm64; image overrides are
+`PRISM_ADAPTER_IMAGE` and `CLI_PROXY_IMAGE` when a fixed version is needed.
+
+Run from the existing CPA deployment directory and keep its Compose project name
+(including the same `-p` argument if one was previously used). Preserve the
+existing configuration and credential directories; `config.yaml` must exist.
+The usual `CLI_PROXY_CONFIG_PATH`, `CLI_PROXY_AUTH_PATH`, `CLI_PROXY_LOG_PATH`,
+and `CLI_PROXY_PLUGIN_PATH` overrides remain available.
+
+```sh
+docker compose -f docker-compose.prism.yml pull
+docker compose -f docker-compose.prism.yml up -d --wait
+docker compose -f docker-compose.prism.yml exec -T prism-adapter python container/healthcheck.py --verbose
+docker compose -f docker-compose.prism.yml logs --tail=100 prism-adapter
+```
+
+The adapter shares `cli-proxy-api`'s network namespace and listens on
+`127.0.0.1:8319`; no adapter port is published to the host. Its image initializes
+`./prism-data:/var/lib/cliproxy-prism`, drops to UID/GID 10001, and starts the
+adapter without a bridge key. OAuth and caller/session identities still come
+from CPA. The existing CPA Prism switch remains disabled by default; enable it
+after the services are ready. `/health` checks process liveness only. Chromium
+starts on demand, and real-account model access requires a subsequent request.
+
+Keep `deploy/prism-adapter/chromium-seccomp.json` with the Compose file, using
+that relative directory layout. It is copied unchanged from
+[`power12317/prism-adapter` release `v2026.10.10-1`](https://github.com/power12317/prism-adapter/releases/tag/v2026.10.10-1),
+commit `e766c73443a2652c711c9b7cbf2b096246e3c6e7`. The profile derives from
+Moby's Apache-2.0 seccomp profile; its license is included at
+`deploy/prism-adapter/COPYING.SECCOMP`. It retains Chromium's user-namespace
+sandbox and uses the same capabilities and security options as that release's
+tested Compose. The 1 GiB `/dev/shm` setting is a shared-memory capacity, not a
+memory reservation or a change to adapter concurrency.
+
+To retain Codex Server as well, use both files for all subsequent operations:
+
+```sh
+docker compose -f docker-compose.codex.yml -f docker-compose.prism.yml pull
+docker compose -f docker-compose.codex.yml -f docker-compose.prism.yml up -d --no-build --wait
+```
+
+The second file uses published images; `--no-build` also suppresses the build
+configuration inherited from the Codex Compose file. Both sidecars share the
+same CPA network. Update them together through Compose when recreating CPA so
+they join its current network namespace. Do not remove `prism-data` during an
+upgrade or rollback. For an independently customized CPA stack, the adapter
+release also provides an overlay that adds only the adapter service; see its
+[Chinese deployment and account-testing guide](https://github.com/power12317/prism-adapter/blob/v2026.10.10-1/README_CN.md).
+
+## Standalone host installation
 
 Use the matching prebuilt Chromium runtime and a non-root service account:
 
