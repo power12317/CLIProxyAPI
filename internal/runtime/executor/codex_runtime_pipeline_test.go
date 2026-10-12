@@ -208,7 +208,7 @@ func TestCodexRuntimeResponseClearsInvalidReasoningReplay(t *testing.T) {
 						return
 					}
 					runtimeTestAccept(c, m, request)
-					runtimeTestFinish(c, request, `{"type":"response.failed","response":{"status":"failed","error":{"message":"Invalid signature in thinking block","type":"invalid_request_error"}}}`)
+					runtimeTestNativeError(c, request, 400, `{"error":{"message":"Invalid signature in thinking block","type":"invalid_request_error"}}`)
 				})
 				opts := runtimeTestOptions()
 				opts.SourceFormat = sdktranslator.FormatClaude

@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-// BodyReader exposes the bridge's unparsed HTTP chunks as a normal response body.
+// BodyReader exposes native model output chunks as a response body.
 type BodyReader struct {
 	Client  *Client
 	pending []byte

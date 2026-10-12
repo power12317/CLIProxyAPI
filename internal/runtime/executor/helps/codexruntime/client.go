@@ -4,6 +4,7 @@ package codexruntime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 
 // Error is deliberately request-scoped: an ambiguous inference cannot be replayed.
 type Error struct {
@@ -32,21 +33,23 @@ func fail(status int, message string) error { return &Error{Status: status, Mess
 
 // Capabilities describes the master shared by all managed credentials.
 type Capabilities struct {
-	ProtocolVersion  int      `json:"protocolVersion"`
-	RuntimeVersion   string   `json:"runtimeVersion"`
-	UpstreamRevision string   `json:"upstreamRevision"`
-	ExecutionMode    string   `json:"executionMode"`
-	RawBody          bool     `json:"rawBody"`
-	Operations       []string `json:"operations"`
-	ManualOAuth      bool     `json:"manualOAuth"`
-	UpstreamLogs     bool     `json:"upstreamLogs"`
-	UpstreamBodyLogs bool     `json:"upstreamBodyLogs"`
+	ProtocolVersion      int      `json:"protocolVersion"`
+	RuntimeVersion       string   `json:"runtimeVersion"`
+	UpstreamRevision     string   `json:"upstreamRevision"`
+	ExecutionMode        string   `json:"executionMode"`
+	NativeModelExecution bool     `json:"nativeModelExecution"`
+	RawBody              bool     `json:"rawBody"`
+	Operations           []string `json:"operations"`
+	ManualOAuth          bool     `json:"manualOAuth"`
+	UpstreamLogs         bool     `json:"upstreamLogs"`
+	UpstreamBodyLogs     bool     `json:"upstreamBodyLogs"`
 }
 
-// UpstreamLog describes an actual HTTP attempt made by the worker.
+// UpstreamLog describes an actual native transport attempt made by the worker.
 type UpstreamLog struct {
 	RequestID         string      `json:"requestId"`
 	Kind              string      `json:"kind"`
+	Transport         string      `json:"transport"`
 	URL               string      `json:"url"`
 	Method            string      `json:"method"`
 	Headers           http.Header `json:"headers"`
@@ -90,20 +93,19 @@ type message struct {
 }
 
 type Client struct {
-	conn             *websocket.Conn
-	ctx              context.Context
-	stop             func() bool
-	once             sync.Once
-	onClose          func()
-	nextID           int
-	requestID        string
-	done             bool
-	pending          []message
-	Caps             Capabilities
-	Headers          http.Header
-	StatusCode       int
-	OnUpstream       func(UpstreamLog)
-	upstreamResponse *UpstreamLog
+	conn       *websocket.Conn
+	ctx        context.Context
+	stop       func() bool
+	once       sync.Once
+	onClose    func()
+	nextID     int
+	requestID  string
+	done       bool
+	pending    []message
+	Caps       Capabilities
+	Headers    http.Header
+	StatusCode int
+	OnUpstream func(UpstreamLog)
 }
 
 // Dial opens the internal TCP bridge for inference or explicit management calls.
@@ -125,7 +127,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	c := &Client{conn: conn, ctx: ctx}
 	// The local runtime bridge carries complete requests and upstream logs without a size limit.
 	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
-	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "3"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
+	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "4"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -139,7 +141,11 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	}
 	if c.Caps.ProtocolVersion != ProtocolVersion || c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawBody {
 		c.Close()
-		return nil, fail(502, "Codex runtime protocol or capabilities mismatch")
+		return nil, fail(502, fmt.Sprintf("Codex runtime protocol or capabilities mismatch (requires protocol %d, got %d); upgrade CPA and codex-server together", ProtocolVersion, c.Caps.ProtocolVersion))
+	}
+	if !c.Caps.NativeModelExecution {
+		c.Close()
+		return nil, fail(502, "Codex runtime requires nativeModelExecution; upgrade CPA and codex-server together")
 	}
 	return c, nil
 }
@@ -245,12 +251,6 @@ func (c *Client) Start(req Request) error {
 	if json.Unmarshal(req.Request, &body) != nil || body == nil {
 		return fail(400, "Codex runtime request must be a JSON object")
 	}
-	if v := body["previous_response_id"]; req.Operation == "responses" && len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
-		return fail(400, "Codex runtime does not support previous_response_id")
-	}
-	if req.Operation == "responses" && string(body["generate"]) == "false" {
-		return fail(400, "Codex runtime does not support prewarm")
-	}
 	var result struct {
 		RequestID  string      `json:"requestId"`
 		StatusCode int         `json:"statusCode"`
@@ -267,7 +267,7 @@ func (c *Client) Start(req Request) error {
 	return nil
 }
 
-// Next returns original HTTP body chunks without parsing Responses events.
+// Next returns native output bytes without interpreting model events or recovery.
 func (c *Client) Next() (Frame, error) {
 	if c.done {
 		return Frame{}, io.EOF
@@ -313,6 +313,14 @@ func (c *Client) Next() (Frame, error) {
 		switch m.Method {
 		case "cpa/inference/completed":
 			c.done = true
+			// The final native output and success share one IPC notification, so
+			// a later socket close cannot invalidate an already confirmed result.
+			if len(p.BodyBytes) > 0 {
+				if c.OnUpstream != nil && !c.Caps.UpstreamBodyLogs {
+					c.OnUpstream(UpstreamLog{RequestID: p.RequestID, Kind: "body", BodyBytes: p.BodyBytes})
+				}
+				return Frame{Body: p.BodyBytes}, nil
+			}
 			return Frame{}, io.EOF
 		case "cpa/inference/error":
 			c.done = true
@@ -328,7 +336,7 @@ func (c *Client) Next() (Frame, error) {
 			}
 			return Frame{}, c.remoteError(status, p.Message, body, p.Headers)
 		case "cpa/inference/body":
-			if c.OnUpstream != nil {
+			if c.OnUpstream != nil && !c.Caps.UpstreamBodyLogs {
 				c.OnUpstream(UpstreamLog{RequestID: p.RequestID, Kind: "body", BodyBytes: p.BodyBytes})
 			}
 			return Frame{Body: p.BodyBytes}, nil
@@ -346,11 +354,7 @@ func (c *Client) observeUpstream(raw json.RawMessage) error {
 	}
 	entry.Headers = canonicalHeaders(entry.Headers)
 	switch entry.Kind {
-	case "request":
-		c.upstreamResponse = nil
-	case "response":
-		c.upstreamResponse = &entry
-	case "error":
+	case "request", "response", "error", "body":
 	default:
 		return fail(502, "Unknown Codex runtime upstream log kind")
 	}
@@ -361,15 +365,7 @@ func (c *Client) observeUpstream(raw json.RawMessage) error {
 }
 
 func (c *Client) remoteError(status int, message, body string, headers http.Header) error {
-	if last := c.upstreamResponse; last != nil && last.StatusCode >= 400 {
-		status = last.StatusCode
-		if body == "" {
-			body = last.Body
-		}
-		if len(headers) == 0 {
-			headers = last.Headers
-		}
-	}
+	// Attempt diagnostics cannot override the native executor's final outcome.
 	if body != "" {
 		message = body
 	}

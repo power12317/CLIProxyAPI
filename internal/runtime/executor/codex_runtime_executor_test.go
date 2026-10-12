@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
@@ -57,7 +58,7 @@ func runtimeTestMaster(t *testing.T, id string, handle func(*websocket.Conn, run
 				_ = c.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read":
-				caps := bridge.Capabilities{ProtocolVersion: 3, RuntimeVersion: "test", UpstreamRevision: "test-sha", ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
+				caps := bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha", ExecutionMode: "inference-only", RawBody: true, NativeModelExecution: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
 				for _, apply := range customize {
 					apply(&caps)
 				}
@@ -88,6 +89,7 @@ func runtimeTestAccept(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) 
 	_ = c.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{"requestId": req.RequestID, "statusCode": 200, "headers": http.Header{"Content-Type": {"text/event-stream"}, "Set-Cookie": {"synthetic-secret"}, "X-Request-Id": {"upstream-id"}}}})
 }
 func runtimeTestBody(c *websocket.Conn, req bridge.Request, body []byte) {
+	runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: body})
 	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/body", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": body}})
 }
 func runtimeTestFinish(c *websocket.Conn, req bridge.Request, events ...string) {
@@ -96,6 +98,12 @@ func runtimeTestFinish(c *websocket.Conn, req bridge.Request, events ...string) 
 	}
 	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID}})
 }
+func runtimeTestNativeError(c *websocket.Conn, req bridge.Request, status int, body string) {
+	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/error", "params": map[string]any{
+		"requestId": req.RequestID, "httpStatus": status, "body": body, "message": "native model execution failed",
+	}})
+}
+
 func runtimeTestExecutor(runtime config.CodexRuntimeConfig) *CodexRuntimeExecutor {
 	return NewCodexRuntimeExecutor(&config.Config{Codex: config.CodexConfig{Runtime: runtime}})
 }
@@ -121,7 +129,8 @@ func TestCodexRuntimeCPARequestAndResponseFidelity(t *testing.T) {
 	body := []byte(`{"model":"runtime-model","input":[{"role":"user","content":"inspect"}],"instructions":"caller instructions","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"lookup"},"parallel_tool_calls":false,"client_metadata":{"extension":"client-value"},"future_field":[1,true],"prompt_cache_key":"untrusted-session","stream":false}`)
 	opts := runtimeTestOptions()
 	opts.Headers = http.Header{"Authorization": {"synthetic-bearer"}, "Cookie": {"synthetic-cookie"}}
-	res, err := runtimeTestExecutor(w).Execute(context.Background(), a, coreexecutor.Request{Model: "runtime-model", Payload: body}, opts)
+	ctx := logging.WithRequestID(context.Background(), "native-request-correlation")
+	res, err := runtimeTestExecutor(w).Execute(ctx, a, coreexecutor.Request{Model: "runtime-model", Payload: body}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +138,7 @@ func TestCodexRuntimeCPARequestAndResponseFidelity(t *testing.T) {
 	for _, field := range []string{"input", "instructions", "tool_choice", "future_field"} {
 		equalRuntimeJSON(t, []byte(gjson.GetBytes(body, field).Raw), []byte(gjson.GetBytes(r.Request, field).Raw))
 	}
-	if r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || gjson.GetBytes(r.Request, "prompt_cache_key").String() != "untrusted-session" || !gjson.GetBytes(r.Request, "stream").Bool() {
+	if r.RequestID != "native-request-correlation" || r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || gjson.GetBytes(r.Request, "prompt_cache_key").String() != "untrusted-session" || !gjson.GetBytes(r.Request, "stream").Bool() {
 		t.Fatal("incorrect identity/normalization", r)
 	}
 	if gjson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || gjson.GetBytes(r.Request, "tools.1.type").String() != "image_generation" || !gjson.GetBytes(r.Request, "parallel_tool_calls").Bool() || gjson.GetBytes(r.Request, "client_metadata.extension").String() != "client-value" {
@@ -282,7 +291,7 @@ func TestCodexRuntimeFailedNativeResponseRetainsDetails(t *testing.T) {
 	terminal := `{"type":"response.failed","response":{"id":"failed","status":"failed","error":{"code":"model_failure","message":"synthetic failure"},"output":[]}}`
 	w, a := runtimeTestMaster(t, "failed", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
 		runtimeTestAccept(c, m, r)
-		runtimeTestFinish(c, r, terminal)
+		runtimeTestNativeError(c, r, 502, terminal)
 	})
 	_, err := runtimeTestExecutor(w).Execute(context.Background(), a, coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{}`)}, runtimeTestOptions())
 	var failure *bridge.Error
@@ -382,7 +391,7 @@ func TestCodexRuntimeRawBodyChunkingAndMultilineSSE(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeEOFWithoutTerminalFailsInCPA(t *testing.T) {
+func TestCodexRuntimeCompletionWithoutModelResultIsProtocolFailure(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		cfg, auth := runtimeTestMaster(t, "incomplete.json", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
 			runtimeTestAccept(c, m, r)
@@ -405,8 +414,8 @@ func TestCodexRuntimeEOFWithoutTerminalFailsInCPA(t *testing.T) {
 			_, err = executor.Execute(context.Background(), auth, req, runtimeTestOptions())
 		}
 		var failure *bridge.Error
-		if !errors.As(err, &failure) || failure.StatusCode() != 408 || !strings.Contains(err.Error(), "before response.completed") {
-			t.Fatalf("normal body EOF hid missing terminal (stream=%v): %v", stream, err)
+		if !errors.As(err, &failure) || failure.StatusCode() != 502 || !strings.Contains(err.Error(), "completed without a model result") {
+			t.Fatalf("invalid worker completion hid missing result (stream=%v): %v", stream, err)
 		}
 	}
 }
@@ -440,6 +449,72 @@ func TestCodexRuntimeStreamToolCallsUseCPAProtocolTranslators(t *testing.T) {
 			}
 			if !strings.Contains(output.String(), "lookup") || !strings.Contains(output.String(), "value") {
 				t.Fatalf("CPA translation lost tool content: %s", output.String())
+			}
+		})
+	}
+}
+
+func TestCodexRuntimeNativeRecoveryAndAtomicCompletion(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "nonstream"
+		if stream {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			var calls, directCalls atomic.Int32
+			cfg, auth := runtimeTestMaster(t, "native-recovery.json", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+				calls.Add(1)
+				runtimeTestAccept(c, m, req)
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "request", Transport: "websocket"})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 503, Body: `{"error":{"message":"attempt failed"}}`})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte("data: {\"type\":\"error\",\"error\":{\"message\":\"failed-attempt-body\"}}\n\n")})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "error", Message: "native executor recovering"})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "request", Transport: "http"})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte("data: " + runtimeTerminal + "\n\n")})
+				_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{
+					"requestId": req.RequestID, "bodyBase64": []byte("data: " + runtimeTerminal + "\n\n"),
+				}})
+				// The IPC connection closes without any additional cleanup notification.
+			})
+			ctx, ginContext := runtimeLoggingContext()
+			ctx = context.WithValue(ctx, "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
+				directCalls.Add(1)
+				return nil, errors.New("unexpected CPA upstream call")
+			})))
+			var transports []bool
+			ctx = coreexecutor.WithUpstreamTransportCallback(ctx, func(websocket bool) { transports = append(transports, websocket) })
+			executor := runtimeTestExecutor(cfg)
+			executor.cfg.RequestLog = true
+			req := coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{"input":[]}`)}
+			var output []byte
+			if stream {
+				result, err := executor.ExecuteStream(ctx, auth, req, runtimeTestOptions())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for chunk := range result.Chunks {
+					if chunk.Err != nil {
+						t.Fatal(chunk.Err)
+					}
+					output = append(output, chunk.Payload...)
+				}
+			} else {
+				result, err := executor.Execute(ctx, auth, req, runtimeTestOptions())
+				if err != nil {
+					t.Fatal(err)
+				}
+				output = result.Payload
+			}
+			if calls.Load() != 1 || directCalls.Load() != 0 || !reflect.DeepEqual(transports, []bool{true, false}) {
+				t.Fatalf("CPA interfered with native recovery: master=%d CPA=%d transports=%v", calls.Load(), directCalls.Load(), transports)
+			}
+			responseLog := runtimeLogText(t, ginContext, "API_RESPONSE")
+			if !strings.Contains(responseLog, "failed-attempt-body") || strings.Count(responseLog, `"call_id":"call_1"`) != 1 {
+				t.Fatalf("native attempt logs missing or final business body logged twice: %s", responseLog)
+			}
+			if bytes.Count(output, []byte(`"call_id":"call_1"`)) != 1 || bytes.Contains(output, []byte("attempt failed")) || bytes.Contains(output, []byte("recovering")) {
+				t.Fatalf("tool result duplicated or diagnostic exposed as output: %s", output)
 			}
 		})
 	}

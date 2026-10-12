@@ -52,7 +52,7 @@ func serveMaster(t *testing.T, caps Capabilities, handle func(*websocket.Conn, m
 func validCaps() Capabilities {
 	return Capabilities{
 		ProtocolVersion: ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha",
-		ExecutionMode: "inference-only", RawBody: true, Operations: []string{"responses"},
+		ExecutionMode: "inference-only", RawBody: true, NativeModelExecution: true, Operations: []string{"responses"},
 		ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true,
 	}
 }
@@ -73,6 +73,7 @@ func notify(conn *websocket.Conn, method string, params any) {
 }
 
 func sendBody(conn *websocket.Conn, body []byte) {
+	notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "body", BodyBytes: body})
 	notify(conn, "cpa/inference/body", map[string]any{"requestId": "req", "bodyBase64": body})
 }
 
@@ -284,8 +285,10 @@ func TestMasterRejectsOldProtocolAndParsedEventCapabilities(t *testing.T) {
 	for _, change := range []func(*Capabilities){
 		func(c *Capabilities) { c.ProtocolVersion = 1 },
 		func(c *Capabilities) { c.ProtocolVersion = 2 },
+		func(c *Capabilities) { c.ProtocolVersion = 3 },
 		func(c *Capabilities) { c.ExecutionMode = "agent" },
 		func(c *Capabilities) { c.RawBody = false },
+		func(c *Capabilities) { c.NativeModelExecution = false },
 	} {
 		caps := validCaps()
 		change(&caps)
@@ -325,33 +328,28 @@ func TestBrokenBodyStreamIsARequestScopedError(t *testing.T) {
 	}
 }
 
-func TestMasterHTTPErrorPreservesBodyAndHeaders(t *testing.T) {
+func TestMasterFinalErrorOverridesAttemptDiagnostics(t *testing.T) {
 	body := `{"error":{"message":"quota exceeded","code":"usage_limit_reached"}}`
 	for _, beforeStart := range []bool{true, false} {
-		for _, viaLog := range []bool{true, false} {
+		for _, finalBody := range []string{body, ""} {
 			name := "stream"
 			if beforeStart {
 				name = "start"
 			}
-			if viaLog {
-				name += "/from-upstream-log"
+			if finalBody == "" {
+				name += "/without-body"
 			}
 			t.Run(name, func(t *testing.T) {
-				headers := http.Header{"retry-after": {"13"}, "x-request-id": {"http-error"}, "set-cookie": {"private"}}
+				headers := http.Header{"retry-after": {"13"}, "x-request-id": {"native-final"}, "set-cookie": {"private"}}
 				endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 					if !beforeStart {
 						accept(conn, m)
 						sendBody(conn, []byte(": started\n\n"))
 					}
-					status := 429
-					errBody, errHeaders := body, headers
-					if viaLog {
-						notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "response", StatusCode: 429, Body: body, Headers: headers})
-						status, errBody, errHeaders = 502, "", nil
-					}
-					params := map[string]any{"requestId": "req", "httpStatus": status, "body": errBody, "headers": errHeaders, "message": "upstream failed"}
+					notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "response", StatusCode: 401, Body: "earlier auth attempt", Headers: http.Header{"X-Request-Id": {"earlier-attempt"}}})
+					params := map[string]any{"requestId": "req", "httpStatus": 429, "body": finalBody, "headers": headers, "message": "native execution failed"}
 					if beforeStart {
-						_ = conn.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "upstream failed", "data": params}})
+						_ = conn.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "native execution failed", "data": params}})
 					} else {
 						notify(conn, "cpa/inference/error", params)
 					}
@@ -367,12 +365,15 @@ func TestMasterHTTPErrorPreservesBodyAndHeaders(t *testing.T) {
 					}
 					_, err = client.Next()
 				}
-				var upstream *Error
-				if !errors.As(err, &upstream) || upstream.StatusCode() != 429 || string(upstream.ResponseBody()) != body {
-					t.Fatalf("HTTP error changed: %#v", err)
+				var native *Error
+				if !errors.As(err, &native) || native.StatusCode() != 429 || string(native.ResponseBody()) != finalBody {
+					t.Fatalf("native final error replaced by attempt diagnostic: %#v", err)
 				}
-				if upstream.Headers().Get("Retry-After") != "13" || upstream.Headers().Get("X-Request-ID") != "http-error" || upstream.Headers().Get("Set-Cookie") != "" {
-					t.Fatal("HTTP error headers changed", upstream.Headers())
+				if finalBody == "" && err.Error() != "native execution failed" {
+					t.Fatalf("native message replaced by diagnostic: %v", err)
+				}
+				if native.Headers().Get("Retry-After") != "13" || native.Headers().Get("X-Request-ID") != "native-final" || native.Headers().Get("Set-Cookie") != "" {
+					t.Fatal("native final headers changed", native.Headers())
 				}
 			})
 		}
@@ -472,19 +473,54 @@ func TestExplicitReloadUsesOriginalCredentialID(t *testing.T) {
 	if err := client.Call("cpa/credential/reload", map[string]string{"credentialId": "Group/Account-A.json"}, &caps); err != nil {
 		t.Fatal(err)
 	}
-	if !caps.ManualOAuth || !caps.RawBody || caps.ProtocolVersion != 3 {
+	if !caps.ManualOAuth || !caps.RawBody || caps.ProtocolVersion != ProtocolVersion {
 		t.Fatal("reload did not return master capabilities", caps)
 	}
 }
 
-func TestUnsupportedContinuationNeverSubmitted(t *testing.T) {
-	endpoint := serveMaster(t, validCaps(), func(*websocket.Conn, message) { t.Error("unsupported inference submitted") })
-	client := dialMaster(t, endpoint)
+func TestNativeInputValidationBelongsToWorker(t *testing.T) {
 	for _, body := range []string{`{"previous_response_id":"old"}`, `{"generate":false}`} {
-		req := request()
-		req.Request = json.RawMessage(body)
-		if client.Start(req) == nil {
-			t.Fatal("unsupported continuation accepted")
+		t.Run(body, func(t *testing.T) {
+			endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
+				var req Request
+				if err := json.Unmarshal(m.Params, &req); err != nil || string(req.Request) != body {
+					t.Errorf("native input was changed: %s (%v)", req.Request, err)
+				}
+				_ = conn.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{
+					"code": -32602, "message": "unsupported native input", "data": map[string]any{"httpStatus": 400},
+				}})
+			})
+			client := dialMaster(t, endpoint)
+			req := request()
+			req.Request = json.RawMessage(body)
+			err := client.Start(req)
+			var native *Error
+			if !errors.As(err, &native) || native.StatusCode() != 400 || err.Error() != "unsupported native input" {
+				t.Fatalf("worker validation result lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeCompletionIncludesFinalBodyBeforeConnectionCloses(t *testing.T) {
+	final := []byte(`{"created":1,"data":[{"b64_json":"image"}]}`)
+	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
+		accept(conn, m)
+		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "body", BodyBytes: final})
+		notify(conn, "cpa/inference/completed", map[string]any{"requestId": "req", "bodyBase64": final})
+	})
+	client := dialMaster(t, endpoint)
+	var logged []byte
+	client.OnUpstream = func(entry UpstreamLog) {
+		if entry.Kind == "body" {
+			logged = append(logged, entry.BodyBytes...)
 		}
+	}
+	if err := client.Start(request()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(&BodyReader{Client: client})
+	if err != nil || !bytes.Equal(got, final) || !bytes.Equal(logged, final) {
+		t.Fatalf("confirmed native result changed on IPC close: body=%s logged=%s err=%v", got, logged, err)
 	}
 }

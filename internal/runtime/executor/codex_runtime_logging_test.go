@@ -115,7 +115,7 @@ func TestCodexRuntimeLogsRetriesAndUpstreamRejection(t *testing.T) {
 		runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 401, Body: "expired token"})
 		runtimeLogNotification(c, req, runtimeLogRequest())
 		runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 429, Headers: http.Header{"retry-after": {"37"}, "x-request-id": {"rejected-request"}}, Body: failure})
-		_ = c.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "request rejected", "data": map[string]any{"httpStatus": 429}}})
+		_ = c.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "request rejected", "data": map[string]any{"httpStatus": 429, "body": failure, "headers": http.Header{"Retry-After": {"37"}, "X-Request-Id": {"rejected-request"}}}}})
 	})
 	e := runtimeTestExecutor(w)
 	e.cfg.RequestLog = true
@@ -196,7 +196,7 @@ func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200, OaiLBNode: request.OaiLBNode})
 				runtimeTestAccept(c, m, req)
 				if mode == "failed-event" {
-					runtimeTestFinish(c, req, `{"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"out of capacity"}}}`)
+					runtimeTestNativeError(c, req, 429, `{"error":{"type":"rate_limit_error","message":"out of capacity"}}`)
 				}
 			})
 			e := runtimeTestExecutor(w)

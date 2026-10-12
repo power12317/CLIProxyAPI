@@ -59,9 +59,6 @@ func (e *CodexRuntimeExecutor) executeImageViaMaster(ctx context.Context, auth *
 		}
 		event := frame.Data
 		upstreamLog.Event(event)
-		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
-			return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
-		}
 		kind := gjson.GetBytes(event, "type").String()
 		if imageAPI == "images" {
 			if kind == "image_generation.completed" || kind == "image_edit.completed" {
@@ -207,10 +204,6 @@ func (e *CodexRuntimeExecutor) executeImageStreamViaMaster(ctx context.Context, 
 			}
 			event := frame.Data
 			upstreamLog.Event(event)
-			if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
-				send(nil, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
-				return
-			}
 			kind := gjson.GetBytes(event, "type").String()
 			if imageAPI == "images" {
 				terminal = terminal || kind == "image_generation.completed" || kind == "image_edit.completed"
@@ -268,12 +261,6 @@ func (e *CodexRuntimeExecutor) translateImageJSON(ctx context.Context, reporter 
 	terminal, err := json.Marshal(map[string]any{"type": "response.completed", "response": json.RawMessage(data)})
 	if err != nil {
 		return nil, err
-	}
-	if gjson.GetBytes(data, "status").String() == "failed" {
-		terminal, _ = sjson.SetBytes(terminal, "type", "response.failed")
-		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(terminal, e.cfg.Codex.ModelLevelCooling); ok {
-			return nil, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody}
-		}
 	}
 	results, created, usage, meta, err := codexExtractImageResults(terminal, nil, nil)
 	if err != nil {

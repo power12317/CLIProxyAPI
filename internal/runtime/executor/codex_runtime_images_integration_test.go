@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,11 +16,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -34,38 +39,125 @@ import (
 
 // This exercises the real master and child worker with fake credentials and a local upstream.
 func TestCodexRuntimeImagesRealWorker(t *testing.T) {
+	testCodexNativeRuntimeRealWorker(t, "http")
+}
+
+func TestCodexRuntimeWebsocketRealWorker(t *testing.T) {
+	testCodexNativeRuntimeRealWorker(t, "websocket")
+}
+
+func TestCodexRuntimeNativeFallbackRealWorker(t *testing.T) {
+	testCodexNativeRuntimeRealWorker(t, "fallback")
+}
+
+func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	binary := os.Getenv("CODEX_RUNTIME_TEST_BINARY")
 	if binary == "" {
-		t.Skip("set CODEX_RUNTIME_TEST_BINARY to the image-capable codex-app-server")
+		t.Skip("set CODEX_RUNTIME_TEST_BINARY to the native-model-runtime codex-app-server")
 	}
 	home := t.TempDir()
 	type exchange struct {
-		path    string
-		body    []byte
-		headers http.Header
+		path      string
+		body      []byte
+		headers   http.Header
+		websocket bool
 	}
 	requests := make(chan exchange, 32)
 	cancelled := make(chan struct{}, 4)
-	var workerCalls, cpaCalls atomic.Int32
+	var workerCalls, cpaCalls, websocketAttempts atomic.Int32
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
 		cpaCalls.Add(1)
 		return nil, fmt.Errorf("CPA direct upstream request forbidden")
 	})
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	var recoveryAttempts sync.Map
+	responseEvents := func(body []byte) ([][]byte, bool) {
+		events := nativeRuntimeResponseEvents(t, home, body)
+		for _, marker := range []string{"recover-after-output-false", "recover-after-output-true"} {
+			if bytes.Contains(body, []byte(marker)) {
+				if _, retried := recoveryAttempts.LoadOrStore(marker, true); !retried {
+					events = events[:len(events)-1]
+					for i, event := range events {
+						event = bytes.ReplaceAll(event, []byte("native result"), []byte("discarded-partial"))
+						event = bytes.ReplaceAll(event, []byte("msg_native"), []byte("msg_partial"))
+						events[i] = bytes.ReplaceAll(event, []byte("resp_native"), []byte("resp_partial"))
+					}
+					return events, true
+				}
+			}
+		}
+		return events, false
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if !strings.HasPrefix(r.URL.Path, "/v1/images/") && r.URL.Path != "/v1/responses" {
 			_, _ = io.WriteString(w, `{"models":[]}`)
 			return
 		}
+		if websocket.IsWebSocketUpgrade(r) {
+			websocketAttempts.Add(1)
+			if nativeTransport == "fallback" {
+				http.Error(w, "controlled native handshake failure", http.StatusServiceUnavailable)
+				return
+			}
+			upgrader := websocket.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, http.Header{"X-Request-Id": {"native-ws-trace"}})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			if r.Header.Get("Authorization") != "Bearer synthetic-worker-token" {
+				t.Error("native WebSocket did not use the worker credential")
+			}
+			for {
+				_, body, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				workerCalls.Add(1)
+				requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true}
+				if bytes.Contains(body, []byte("cancel-response")) {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_cancel"}}`))
+					_, next, errRead := conn.ReadMessage()
+					if errRead == nil && gjson.GetBytes(next, "type").String() != "response.cancel" {
+						t.Error("native request was replayed after cancellation")
+					}
+					cancelled <- struct{}{}
+					return
+				}
+				events, disconnect := responseEvents(body)
+				for _, event := range events {
+					if err := conn.WriteMessage(websocket.TextMessage, event); err != nil {
+						return
+					}
+				}
+				if disconnect {
+					return
+				}
+			}
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
 		}
+		if r.Header.Get("Content-Encoding") == "zstd" {
+			decoder, errDecoder := zstd.NewReader(nil)
+			if errDecoder != nil {
+				t.Error(errDecoder)
+				return
+			}
+			body, err = decoder.DecodeAll(body, nil)
+			decoder.Close()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+		}
 		workerCalls.Add(1)
-		requests <- exchange{r.URL.Path, body, r.Header.Clone()}
+		requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone()}
 		if r.Header.Get("Authorization") != "Bearer synthetic-worker-token" {
 			t.Error("worker did not use its shared credential")
 		}
@@ -80,37 +172,26 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			return
 		}
 		if prompt == "cancel" {
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"part\"}\n\n")
-			w.(http.Flusher).Flush()
 			<-r.Context().Done()
 			cancelled <- struct{}{}
 			return
 		}
 		if r.URL.Path == "/v1/responses" {
 			w.Header().Set("Content-Type", "text/event-stream")
-			output := `[{"type":"image_generation_call","result":"real-worker-image","output_format":"png"}]`
-			if bytes.Contains(body, []byte("compaction_trigger")) {
-				output = `[{"type":"compaction","encrypted_content":"compact-result"}]`
-			}
-			if value := gjson.GetBytes(body, "stream"); value.Exists() && !value.Bool() {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = fmt.Fprintf(w, `{"id":"response-image","status":"completed","output":%s}`, output)
+			if bytes.Contains(body, []byte("cancel-response")) {
+				_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cancel\"}}\n\n")
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+				cancelled <- struct{}{}
 				return
 			}
-			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-image\",\"status\":\"completed\",\"output\":%s}}\n\n", output)
+			events, _ := responseEvents(body)
+			for _, event := range events {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+			}
 			return
 		}
-		if gjson.GetBytes(body, "stream").Bool() {
-			w.Header().Set("Content-Type", "text/event-stream")
-			kind := "image_generation"
-			if r.URL.Path == "/v1/images/edits" {
-				kind = "image_edit"
-			}
-			_, _ = fmt.Fprintf(w, "event: %s.partial_image\ndata: {\"type\":\"%s.partial_image\",\"b64_json\":\"part\"}\n\nevent: %s.completed\ndata: {\"type\":\"%s.completed\",\"b64_json\":\"real-worker-image\"}\n\n", kind, kind, kind, kind)
-		} else {
-			_, _ = io.WriteString(w, `{"created":1,"data":[{"b64_json":"real-worker-image"}]}`)
-		}
+		_, _ = io.WriteString(w, `{"created":1,"data":[{"b64_json":"real-worker-image","generation_id":"gen_native"}]}`)
 	}))
 	t.Cleanup(upstream.Close)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -121,6 +202,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 	_ = listener.Close()
 	settings := config.CodexRuntimeConfig{Enabled: true, URL: fmt.Sprintf("ws://127.0.0.1:%d/cpa/v1/ws", port)}
 	cfg := &config.Config{Codex: config.CodexConfig{Runtime: settings}}
+	cfg.DisableImageGeneration = config.DisableImageGenerationPassthrough
 	cfg.RequestLog = true
 	auth := runtimeTestAuth("image-account.json")
 	runtimeImageAuth(t, cfg, auth)
@@ -138,7 +220,8 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 	if err := os.MkdirAll(accountHome, 0700); err != nil {
 		t.Fatal(err)
 	}
-	toml := fmt.Sprintf("model = \"gpt-image-1.5\"\nmodel_provider = \"image_mock\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nchatgpt_base_url = %q\n[model_providers.image_mock]\nname = \"OpenAI\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = true\nrequest_max_retries = 0\nstream_max_retries = 0\n", upstream.URL, upstream.URL+"/v1")
+	toml := fmt.Sprintf("model = \"gpt-image-1.5\"\nmodel_provider = \"image_mock\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nchatgpt_base_url = %q\n[model_providers.image_mock]\nname = \"OpenAI\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = true\nrequest_max_retries = 0\nstream_max_retries = 1\n", upstream.URL, upstream.URL+"/v1")
+	toml += fmt.Sprintf("supports_websockets = %t\n", nativeTransport != "http")
 	if err := os.WriteFile(filepath.Join(accountHome, "config.toml"), []byte(toml), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +272,31 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			}
 		}
 	}
-	requestIndex := 0
+	readExchange := func(t *testing.T) exchange {
+		t.Helper()
+		select {
+		case request := <-requests:
+			return request
+		case <-time.After(15 * time.Second):
+			t.Fatal("native worker did not issue an upstream model request")
+			return exchange{}
+		}
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.SetConfig(cfg)
+	manager.RegisterExecutor(NewCodexAutoExecutor(cfg))
+	account := auth.Clone()
+	account.Metadata["plan_type"] = "pro"
+	if _, err := manager.Register(context.Background(), account); err != nil {
+		t.Fatal(err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(account.ID, "codex", []*registry.ModelInfo{{ID: "gpt-image-1.5", OwnedBy: "openai"}, {ID: "gpt-6.1-sol", OwnedBy: "openai"}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(account.ID) })
+	handler := openaihandlers.NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager))
+	router := gin.New()
+	router.POST(codexImagesGenerationsPath, handler.ImagesGenerations)
+	router.POST(codexImagesEditsPath, handler.ImagesEdits)
+	router.POST("/v1/chat/completions", handler.ChatCompletions)
 	for _, path := range []string{codexImagesGenerationsPath, codexImagesEditsPath} {
 		for _, stream := range []bool{false, true} {
 			for _, form := range []bool{false, true} {
@@ -197,236 +304,268 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 					continue
 				}
 				t.Run(fmt.Sprintf("%s/stream=%t/multipart=%t", path, stream, form), func(t *testing.T) {
-					requestIndex++
-					trace := fmt.Sprintf("image-real-%d", requestIndex)
-					ctx, ginContext := runtimeLoggingContext()
-					ctx = logging.WithRequestID(ctx, trace)
-					ctx = context.WithValue(ctx, "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
-						cpaCalls.Add(1)
-						return nil, fmt.Errorf("CPA direct call forbidden")
-					})))
-					payload, contentType := runtimeImagePayload(t, form)
-					opts := codexOpenAIImageTestOptions(path, stream)
-					opts.Headers = http.Header{"Content-Type": {contentType}, "Cookie": {"client-cookie"}}
 					models := []config.PayloadModelRule{{Name: "gpt-image-1.5", Protocol: "openai"}}
-					cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{Models: models, Params: map[string]any{"prompt": "final-prompt", "model": "gpt-image-2.5", "extension.number": 7}}}, Filter: []config.PayloadFilterRule{{Models: models, Params: []string{"quality", "prompt_cache_key"}}}}
+					cfg.Payload = config.PayloadConfig{
+						Override: []config.PayloadRule{{Models: models, Params: map[string]any{"prompt": "configured-native-prompt", "model": "gpt-image-2.5"}}},
+						Filter:   []config.PayloadFilterRule{{Models: models, Params: []string{"quality"}}},
+					}
+					defer func() { cfg.Payload = config.PayloadConfig{} }()
+					payload, contentType := nativeRuntimeImagePayload(t, path, stream, form)
 					before := workerCalls.Load()
-					output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, opts, stream)
-					if err != nil {
-						t.Fatal(err)
+					req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+					req.Header.Set("Content-Type", contentType)
+					req.Header.Set("Cookie", "client-cookie")
+					rec := httptest.NewRecorder()
+					router.ServeHTTP(rec, req)
+					if rec.Code != 200 || !strings.Contains(rec.Body.String(), "real-worker-image") || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+						t.Fatalf("status=%d CPA=%d worker=%d body=%s", rec.Code, cpaCalls.Load(), workerCalls.Load()-before, rec.Body.String())
 					}
-					received := <-requests
-					if received.path != strings.TrimPrefix(path, "/v1") && received.path != "/v1"+strings.TrimPrefix(path, "/v1") {
-						t.Fatal(received.path)
+					received := readExchange(t)
+					if received.path != path || gjson.GetBytes(received.body, "prompt").String() != "configured-native-prompt" || gjson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || gjson.GetBytes(received.body, "quality").Exists() {
+						t.Fatalf("native image DTO lost supported business input: path=%s body=%s", received.path, received.body)
 					}
-					if gjson.GetBytes(received.body, "prompt").String() != "final-prompt" || gjson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || gjson.GetBytes(received.body, "quality").Exists() || gjson.GetBytes(received.body, "prompt_cache_key").Exists() || gjson.GetBytes(received.body, "extension.number").Int() != 7 {
-						t.Fatalf("worker lost image request values: %s", received.body)
+					if gjson.GetBytes(received.body, "stream").Exists() {
+						t.Fatal("downstream streaming mode changed the native Images DTO")
 					}
-					if form && (gjson.GetBytes(received.body, "images.#").Int() != 2 || !strings.HasSuffix(gjson.GetBytes(received.body, "mask.image_url").String(), "BAUG") || gjson.GetBytes(received.body, "extra.#").Int() != 2) {
-						t.Fatal("worker lost images/mask/duplicate fields")
+					if path == codexImagesEditsPath && (gjson.GetBytes(received.body, "images.#").Int() != 1 || !strings.HasSuffix(gjson.GetBytes(received.body, "images.0.image_url").String(), "AQID")) {
+						t.Fatal("native image edit lost its input image", string(received.body))
 					}
-					if cpaCalls.Load() != 0 || workerCalls.Load() != before+1 || !bytes.Contains(output, []byte("real-worker-image")) {
-						t.Fatalf("CPA=%d worker=%d result=%s", cpaCalls.Load(), workerCalls.Load()-before, output)
+					if stream && !strings.Contains(rec.Body.String(), "completed") {
+						t.Fatal("native final image was not adapted to the client event stream")
 					}
-					requestLog := runtimeLogText(t, ginContext, "API_REQUEST")
-					if !strings.Contains(requestLog, upstream.URL+received.path) || !strings.Contains(requestLog, "final-prompt") {
-						t.Fatal("CPA log did not record actual worker request")
-					}
-					workerLog, _ := os.ReadFile(logPath)
-					if !bytes.Contains(workerLog, []byte(`"rpcRequestId":"`+trace+`"`)) {
-						t.Fatal("master/worker request correlation missing")
-					}
-					t.Logf("CPA model HTTP=%d worker model HTTP=%d trace=%s", cpaCalls.Load(), workerCalls.Load()-before, trace)
+					t.Logf("CPA model requests=0; native worker requests=1; operation=%s", received.path)
 				})
 			}
 		}
 	}
-	cfg.Payload = config.PayloadConfig{}
-	t.Run("payload_stream_override_for_nonstream_client", func(t *testing.T) {
-		models := []config.PayloadModelRule{{Name: "gpt-image-1.5", Protocol: "openai"}}
-		cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{Models: models, Params: map[string]any{"stream": true}}}}
-		defer func() { cfg.Payload = config.PayloadConfig{} }()
-		payload, _ := runtimeImagePayload(t, false)
-		output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, false), false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		received := <-requests
-		if !gjson.GetBytes(received.body, "stream").Bool() || gjson.GetBytes(output, "data.0.b64_json").String() != "real-worker-image" || !gjson.GetBytes(output, "created").Exists() {
-			t.Fatal("stream override or image JSON conversion lost")
-		}
-	})
-	t.Run("public_HTTP_endpoints", func(t *testing.T) {
-		manager := coreauth.NewManager(nil, nil, nil)
-		manager.SetConfig(cfg)
-		manager.RegisterExecutor(NewCodexAutoExecutor(cfg))
-		account := auth.Clone()
-		account.Metadata["plan_type"] = "pro"
-		if _, err := manager.Register(context.Background(), account); err != nil {
-			t.Fatal(err)
-		}
-		registry.GetGlobalRegistry().RegisterClient(account.ID, "codex", []*registry.ModelInfo{{ID: "gpt-image-1.5", OwnedBy: "openai"}})
-		t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(account.ID) })
-		handler := openaihandlers.NewOpenAIAPIHandler(handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager))
-		router := gin.New()
-		router.POST(codexImagesGenerationsPath, handler.ImagesGenerations)
-		router.POST(codexImagesEditsPath, handler.ImagesEdits)
-		for _, path := range []string{codexImagesGenerationsPath, codexImagesEditsPath} {
+	t.Run("unsupported_image_inputs_are_explicit", func(t *testing.T) {
+		for _, field := range []string{"mask", "partial_images", "output_format", "extension"} {
 			for _, stream := range []bool{false, true} {
-				for _, form := range []bool{false, true} {
-					if form && path != codexImagesEditsPath {
-						continue
+				t.Run(fmt.Sprintf("%s/stream=%t", field, stream), func(t *testing.T) {
+					payload, _ := nativeRuntimeImagePayload(t, codexImagesEditsPath, stream, false)
+					var value any = "unsupported"
+					if field == "mask" {
+						value = map[string]string{"image_url": "data:image/png;base64,BAUG"}
+					} else if field == "partial_images" {
+						value = 1
+					} else if field == "output_format" {
+						value = "jpeg"
 					}
-					t.Run(fmt.Sprintf("%s/stream=%t/multipart=%t", path, stream, form), func(t *testing.T) {
-						payload, contentType := runtimeImagePayload(t, form)
-						if stream {
-							if form {
-								var err error
-								payload, contentType, err = prepareOpenAICompatImagesPayload(payload, "gpt-image-1.5", contentType, true)
-								if err != nil {
-									t.Fatal(err)
-								}
-							} else {
-								payload, _ = sjson.SetBytes(payload, "stream", true)
-							}
-						}
-						before := workerCalls.Load()
-						req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
-						req.Header.Set("Content-Type", contentType)
-						rec := httptest.NewRecorder()
-						router.ServeHTTP(rec, req)
-						if rec.Code != 200 || !strings.Contains(rec.Body.String(), "real-worker-image") || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
-							t.Fatalf("status=%d CPA=%d worker=%d body=%s", rec.Code, cpaCalls.Load(), workerCalls.Load()-before, rec.Body.String())
-						}
-						<-requests
-					})
+					payload, _ = sjson.SetBytes(payload, field, value)
+					before := workerCalls.Load()
+					_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesEditsPath, stream), stream)
+					if err == nil || !strings.Contains(err.Error(), field) || workerCalls.Load() != before || cpaCalls.Load() != 0 {
+						t.Fatalf("unsupported input was dropped or sent: field=%s worker=%d CPA=%d error=%v", field, workerCalls.Load()-before, cpaCalls.Load(), err)
+					}
+				})
+			}
+		}
+	})
+	for _, mode := range []string{"summary", "native_lite", "compaction_trigger", "hosted_image", "recovery_after_partial", "tools", "tool_results"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("responses/%s/stream=%t", mode, stream), func(t *testing.T) {
+				payload := []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"summarize this conversation"}]}`)
+				switch mode {
+				case "native_lite":
+					payload = []byte(`{"model":"gpt-6.1-sol","reasoning":{"context":"all_turns"},"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}]},{"role":"user","content":"native lite input"}],"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`)
+				case "compaction_trigger":
+					payload = []byte(`{"model":"gpt-6.1-sol","reasoning":{"context":"all_turns"},"input":[{"role":"user","content":"history"},{"type":"compaction_trigger"}]}`)
+				case "hosted_image":
+					payload = []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"draw-hosted"}],"tools":[{"type":"image_generation","quality":"high"}]}`)
+				case "recovery_after_partial":
+					payload = []byte(fmt.Sprintf(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"recover-after-output-%t"}]}`, stream))
+				case "tools":
+					payload = []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"tool-fixture"}],"tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"command":{"type":"string"}}}},{"type":"custom","name":"exec","format":{"type":"text"}},{"type":"custom","name":"apply_patch","format":{"type":"text"}}]}`)
+				case "tool_results":
+					payload = []byte(`{"model":"gpt-6.1-sol","input":[{"type":"function_call","call_id":"call_shell","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"call_shell","output":"client shell result"},{"type":"custom_tool_call","call_id":"call_exec","name":"exec","input":"hello"},{"type":"custom_tool_call_output","call_id":"call_exec","output":"client exec result"}]}`)
 				}
-			}
+				for key, value := range map[string]string{"session_id": "client-session", "thread_id": "client-thread", "turn_id": mode + "-turn"} {
+					payload, _ = sjson.SetBytes(payload, "client_metadata."+key, value)
+				}
+				if mode == "summary" {
+					cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{
+						Models: []config.PayloadModelRule{{Name: "gpt-6.1-sol", Protocol: "codex"}},
+						Params: map[string]any{"instructions": "native-supported-instructions", "service_tier": "priority", "reasoning.effort": "low", "text.verbosity": "low"},
+					}}}
+					defer func() { cfg.Payload = config.PayloadConfig{} }()
+				}
+				ctx, ginContext := runtimeLoggingContext()
+				trace := fmt.Sprintf("native-%s-%t", mode, stream)
+				ctx = logging.WithRequestID(ctx, trace)
+				before := workerCalls.Load()
+				output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-6.1-sol", Payload: payload}, runtimeTestOptions(), stream)
+				attempts := workerCalls.Load() - before
+				if err != nil || attempts < 1 || mode != "recovery_after_partial" && attempts != 1 || cpaCalls.Load() != 0 {
+					t.Fatalf("native Responses route failed: err=%v worker=%d CPA=%d", err, attempts, cpaCalls.Load())
+				}
+				var received exchange
+				for range attempts {
+					received = readExchange(t)
+				}
+				if mode == "recovery_after_partial" && (attempts < 2 || bytes.Contains(output, []byte("discarded-partial")) || !bytes.Contains(output, []byte("native result")) || !bytes.Contains(received.body, []byte("discarded-partial"))) {
+					t.Fatalf("native recovery lost accepted history or replayed failed output: attempts=%d final_input=%s result=%s", attempts, received.body, output)
+				}
+				if received.path != "/v1/responses" || received.websocket != (nativeTransport == "websocket") || received.websocket && gjson.GetBytes(received.body, "type").String() != "response.create" || !received.websocket && !gjson.GetBytes(received.body, "stream").Bool() {
+					t.Fatalf("native Responses request was not built: %s %s", received.path, received.body)
+				}
+				if mode == "summary" {
+					if !bytes.Contains(received.body, []byte("native-supported-instructions")) || gjson.GetBytes(received.body, "service_tier").String() != "priority" || gjson.GetBytes(received.body, "reasoning.effort").String() != "low" || gjson.GetBytes(received.body, "text.verbosity").String() != "low" {
+						t.Fatalf("supported CPA payload rules were lost at the native entry: %s", received.body)
+					}
+					for _, item := range gjson.GetBytes(received.body, "input").Array() {
+						if item.Get("role").String() == "user" && (item.Get("type").String() != "message" || item.Get("content.0.type").String() != "input_text") {
+							t.Fatalf("worker did not normalize native message input: %s", item.Raw)
+						}
+					}
+				}
+				if mode == "native_lite" && (gjson.GetBytes(received.body, "reasoning.context").String() != "all_turns" || !bytes.Contains(received.body, []byte("additional_tools"))) {
+					t.Fatalf("native Lite context or tool history was lost: %s", received.body)
+				}
+				if mode == "compaction_trigger" && (!bytes.Contains(received.body, []byte("compaction_trigger")) || !bytes.Contains(output, []byte("compact-result"))) {
+					t.Fatal("ordinary Responses compaction was lost")
+				}
+				if stream && !bytes.Contains(output, []byte("response.future_extension")) {
+					t.Fatal("nonterminal extension event was lost by response adaptation")
+				}
+				if mode == "hosted_image" {
+					if !bytes.Contains(received.body, []byte("additional_tools")) || !bytes.Contains(received.body, []byte("image_generation")) || !bytes.Contains(received.body, []byte(`"quality":"high"`)) || !bytes.Contains(output, []byte("native-hosted-image")) {
+						t.Fatalf("native hosted tool mapping lost its input or output: request=%s result=%s", received.body, output)
+					}
+					if stream && !bytes.Contains(output, []byte("hosted-partial")) {
+						t.Fatal("hosted partial image event was lost")
+					}
+				}
+				if mode == "tools" {
+					for _, call := range []string{"call_shell", "call_exec", "call_patch"} {
+						if !bytes.Contains(output, []byte(call)) {
+							t.Fatalf("client tool call missing: %s, body=%s", call, output)
+						}
+					}
+					if _, errStat := os.Stat(filepath.Join(home, "must-not-be-created")); !os.IsNotExist(errStat) {
+						t.Fatalf("server executed a client tool: %v", errStat)
+					}
+				}
+				if mode == "tool_results" && (!bytes.Contains(received.body, []byte("client shell result")) || !bytes.Contains(received.body, []byte("client exec result"))) {
+					t.Fatal("caller-owned tool results were lost")
+				}
+				requestLog := runtimeLogText(t, ginContext, "API_REQUEST")
+				target := upstream.URL + received.path
+				if received.websocket {
+					target = "ws" + strings.TrimPrefix(upstream.URL, "http") + received.path
+				}
+				if !strings.Contains(requestLog, target) {
+					t.Fatal("actual native request missing from CPA logs")
+				}
+				workerLog, _ := os.ReadFile(logPath)
+				if !bytes.Contains(workerLog, []byte(`"rpcRequestId":"`+trace+`"`)) {
+					t.Fatal("CPA/master/worker correlation missing")
+				}
+			})
 		}
-	})
-	t.Run("payload_filters_edit_content", func(t *testing.T) {
-		models := []config.PayloadModelRule{{Name: "gpt-image-1.5", Protocol: "openai"}}
-		cfg.Payload = config.PayloadConfig{
-			Override: []config.PayloadRule{{Models: models, Params: map[string]any{"stream": false}}},
-			Filter:   []config.PayloadFilterRule{{Models: models, Params: []string{"mask", "images.1", "quality"}}},
-		}
-		defer func() { cfg.Payload = config.PayloadConfig{} }()
-		payload, contentType := runtimeImagePayload(t, true)
-		opts := codexOpenAIImageTestOptions(codexImagesEditsPath, true)
-		opts.Headers = http.Header{"Content-Type": {contentType}}
-		output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, opts, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		received := <-requests
-		for _, field := range []string{"mask", "quality"} {
-			if gjson.GetBytes(received.body, field).Exists() {
-				t.Fatalf("image content filter lost: %s", field)
-			}
-		}
-		if gjson.GetBytes(received.body, "images.#").Int() != 1 || !bytes.Contains(output, []byte("image_edit.completed")) {
-			t.Fatal("filtered files or JSON-to-stream response was not preserved")
-		}
-	})
-	for _, mode := range []string{"image_responses", "image_responses_native_stream", "image_responses_native_normalization", "builtin_image_tool", "compaction_trigger", "summary"} {
-		t.Run(mode, func(t *testing.T) {
+	}
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("public_chat/stream=%t", stream), func(t *testing.T) {
+			payload := []byte(fmt.Sprintf(`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"chat fixture"}],"stream":%t}`, stream))
 			before := workerCalls.Load()
-			req := coreexecutor.Request{Model: "gpt-5.4-mini", Payload: []byte(`{"model":"gpt-5.4-mini","input":[{"role":"user","content":"summarize this conversation"}]}`)}
-			opts := runtimeTestOptions()
-			if strings.HasPrefix(mode, "image_responses") {
-				req = coreexecutor.Request{Model: "image-alias", Payload: []byte(`{"model":"image-alias","prompt":"draw"}`)}
-				opts = codexOpenAIImageTestOptions(codexImagesGenerationsPath, false)
-				if mode == "image_responses_native_normalization" {
-					models := []config.PayloadModelRule{{Name: "gpt-5.4-mini", Protocol: "codex"}}
-					cfg.Payload = config.PayloadConfig{
-						Override: []config.PayloadRule{{Models: models, Params: map[string]any{"input.0.content": "draw"}}},
-						Filter:   []config.PayloadFilterRule{{Models: models, Params: []string{"input.0.type", "instructions", "store", "parallel_tool_calls"}}},
-					}
-					defer func() { cfg.Payload = config.PayloadConfig{} }()
-				}
-				if mode == "image_responses_native_stream" {
-					cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{Models: []config.PayloadModelRule{{Name: "gpt-5.4-mini", Protocol: "codex"}}, Params: map[string]any{"stream": false}}}}
-					defer func() { cfg.Payload = config.PayloadConfig{} }()
-				}
-			} else if mode == "builtin_image_tool" {
-				req.Payload = []byte(`{"model":"gpt-5.4-mini","input":[{"role":"user","content":"draw"}],"tools":[{"type":"image_generation"}]}`)
-			} else if mode == "compaction_trigger" {
-				req.Payload = []byte(`{"model":"gpt-5.4-mini","input":[{"role":"user","content":"history"},{"type":"compaction_trigger"}]}`)
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != 200 || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 || !strings.Contains(rec.Body.String(), "native result") {
+				t.Fatalf("Chat did not execute through native runtime: status=%d native=%d CPA=%d body=%s", rec.Code, workerCalls.Load()-before, cpaCalls.Load(), rec.Body.String())
 			}
-			result, err := NewCodexAutoExecutor(cfg).Execute(context.Background(), auth, req, opts)
-			if err != nil {
-				t.Fatal(err)
+			if !stream && gjson.Get(rec.Body.String(), "choices.0.message.content").String() != "native result" {
+				t.Fatal("native output was not translated to Chat completions", rec.Body.String())
 			}
-			received := <-requests
-			if received.path != "/v1/responses" || cpaCalls.Load() != 0 || workerCalls.Load() != before+1 {
-				t.Fatal("Responses regression used wrong transport")
+			if stream && !strings.Contains(rec.Body.String(), "chat.completion.chunk") {
+				t.Fatal("native output was not translated to Chat SSE", rec.Body.String())
 			}
-			if mode == "compaction_trigger" && (!bytes.Contains(received.body, []byte("compaction_trigger")) || !bytes.Contains(result.Payload, []byte("compact-result"))) {
-				t.Fatal("normal Responses compaction was lost")
-			}
-			if strings.HasPrefix(mode, "image_responses") && gjson.GetBytes(result.Payload, "data.0.b64_json").String() != "real-worker-image" {
-				t.Fatalf("native Responses image result lost: %s", result.Payload)
-			}
-			if mode == "image_responses_native_stream" && !gjson.GetBytes(received.body, "stream").Bool() {
-				t.Fatalf("worker native streaming was overridden by CPA input: %s", received.body)
-			}
-			if mode == "image_responses_native_normalization" {
-				if gjson.GetBytes(received.body, "input.0.type").String() != "message" || gjson.GetBytes(received.body, "input.0.content.0.type").String() != "input_text" || gjson.GetBytes(received.body, "input.0.content.0.text").String() != "draw" {
-					t.Fatalf("worker did not normalize the message: %s", received.body)
-				}
-				if gjson.GetBytes(received.body, "instructions").Exists() || gjson.GetBytes(received.body, "store").Type != gjson.False || gjson.GetBytes(received.body, "parallel_tool_calls").Type != gjson.True {
-					t.Fatalf("worker native defaults were suppressed: %s", received.body)
-				}
-				t.Log("worker normalized message type/content and applied native Responses defaults")
+			received := readExchange(t)
+			if received.path != "/v1/responses" || received.websocket != (nativeTransport == "websocket") || !bytes.Contains(received.body, []byte("chat fixture")) {
+				t.Fatal("Chat input did not reach the native model request", string(received.body))
 			}
 		})
 	}
+	t.Run("standalone_compact_rejected", func(t *testing.T) {
+		before := workerCalls.Load()
+		opts := runtimeTestOptions()
+		opts.Alt = "responses/compact"
+		_, err := NewCodexAutoExecutor(cfg).Execute(context.Background(), auth, coreexecutor.Request{Model: "gpt-6.1-sol", Payload: []byte(`{"input":[]}`)}, opts)
+		if err == nil || workerCalls.Load() != before || cpaCalls.Load() != 0 {
+			t.Fatalf("standalone compact sent an upstream request: %v", err)
+		}
+	})
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("upstream_failure/stream=%t", stream), func(t *testing.T) {
 			before := workerCalls.Load()
 			_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: []byte(`{"model":"gpt-image-1.5","prompt":"fail"}`)}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, stream), stream)
-			if err == nil || !strings.Contains(err.Error(), "image quota failure") || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
-				t.Fatalf("unexpected failure/retry: %v", err)
+			if err == nil || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+				t.Fatalf("native failure replayed by CPA: worker=%d CPA=%d err=%v", workerCalls.Load()-before, cpaCalls.Load(), err)
 			}
-			<-requests
+			readExchange(t)
 		})
 		t.Run(fmt.Sprintf("cancel/stream=%t", stream), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: []byte(`{"model":"gpt-image-1.5","prompt":"cancel","stream":true}`)}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, stream), stream)
+				_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: []byte(`{"model":"gpt-image-1.5","prompt":"cancel"}`)}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, stream), stream)
 				result <- err
 			}()
+			readExchange(t)
+			cancel()
 			select {
-			case <-requests:
-				cancel()
+			case err := <-result:
+				if err == nil {
+					t.Fatal("cancellation reported success")
+				}
 			case <-time.After(15 * time.Second):
-				t.Fatal("worker did not send cancellation fixture")
-			}
-			select {
-			case <-result:
-			case <-time.After(15 * time.Second):
-				t.Fatal("CPA did not stop after cancellation")
+				t.Fatal("CPA did not propagate cancellation")
 			}
 			select {
 			case <-cancelled:
 			case <-time.After(15 * time.Second):
-				t.Fatal("worker upstream request survived cancellation")
+				t.Fatal("native upstream call survived cancellation")
+			}
+		})
+	}
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses_cancel/stream=%t", stream), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-6.1-sol", Payload: []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"cancel-response"}]}`)}, runtimeTestOptions(), stream)
+				result <- err
+			}()
+			readExchange(t)
+			cancel()
+			select {
+			case err := <-result:
+				if err == nil {
+					t.Fatal("cancelled Responses request reported success")
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("CPA did not cancel the native Responses call")
+			}
+			select {
+			case <-cancelled:
+			case <-time.After(15 * time.Second):
+				t.Fatal("native Responses transport survived cancellation")
 			}
 		})
 	}
 	t.Run("mixed_account_pool_does_not_retry_locally", func(t *testing.T) {
-		manager := coreauth.NewManager(nil, &coreauth.FillFirstSelector{}, nil)
-		manager.SetConfig(cfg)
-		manager.SetRetryConfig(2, 0, 0)
-		manager.RegisterExecutor(NewCodexAutoExecutor(cfg))
+		mixed := coreauth.NewManager(nil, &coreauth.FillFirstSelector{}, nil)
+		mixed.SetConfig(cfg)
+		mixed.SetRetryConfig(2, 0, 0)
+		mixed.RegisterExecutor(NewCodexAutoExecutor(cfg))
 		account := auth.Clone()
 		account.Metadata["disable_cooling"] = true
 		account.Attributes["priority"] = "10"
 		local := &coreauth.Auth{ID: "local-fallback.json", Provider: "codex", Metadata: map[string]any{"access_token": "local-token", "disable_cooling": true}, Attributes: map[string]string{"base_url": upstream.URL + "/v1", "priority": "0"}}
 		for _, entry := range []*coreauth.Auth{account, local} {
-			if _, err := manager.Register(context.Background(), entry); err != nil {
+			if _, err := mixed.Register(context.Background(), entry); err != nil {
 				t.Fatal(err)
 			}
 			registry.GetGlobalRegistry().RegisterClient(entry.ID, "codex", []*registry.ModelInfo{{ID: "gpt-image-1.5", OwnedBy: "openai"}})
@@ -438,19 +577,24 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			opts := codexOpenAIImageTestOptions(codexImagesGenerationsPath, stream)
 			var err error
 			if stream {
-				_, err = manager.ExecuteStream(context.Background(), []string{"codex"}, req, opts)
+				var result *coreexecutor.StreamResult
+				result, err = mixed.ExecuteStream(context.Background(), []string{"codex"}, req, opts)
+				if err == nil {
+					for chunk := range result.Chunks {
+						if chunk.Err != nil {
+							err = chunk.Err
+						}
+					}
+				}
 			} else {
-				_, err = manager.Execute(context.Background(), []string{"codex"}, req, opts)
+				_, err = mixed.Execute(context.Background(), []string{"codex"}, req, opts)
 			}
 			if err == nil || cpaCalls.Load() != 0 || workerCalls.Load() != before+1 {
-				t.Fatalf("mixed-pool fallback reached CPA: worker=%d CPA=%d err=%v", workerCalls.Load()-before, cpaCalls.Load(), err)
+				t.Fatalf("mixed pool reached CPA upstream: worker=%d CPA=%d err=%v", workerCalls.Load()-before, cpaCalls.Load(), err)
 			}
-			<-requests
+			readExchange(t)
 		}
 	})
-	if cpaCalls.Load() != 0 {
-		t.Fatal("CPA issued a model request")
-	}
 	client, err := bridge.Dial(context.Background(), settings.Endpoint())
 	if err != nil {
 		t.Fatal(err)
@@ -459,4 +603,100 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 	if err := client.Call("cpa/credential/reload", map[string]any{}, nil); err != nil {
 		t.Fatal(err)
 	}
+	if cpaCalls.Load() != 0 {
+		t.Fatal("CPA issued a model upstream request")
+	}
+	if nativeTransport != "http" && websocketAttempts.Load() == 0 {
+		t.Fatal("native WebSocket configuration was ignored")
+	}
+
+}
+
+func nativeRuntimeImagePayload(t *testing.T, path string, stream, form bool) ([]byte, string) {
+	t.Helper()
+	if !form {
+		payload := map[string]any{"model": "gpt-image-1.5", "prompt": "draw", "quality": "low", "stream": stream}
+		if path == codexImagesEditsPath {
+			payload["images"] = []map[string]string{{"image_url": "data:image/png;base64,AQID"}}
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body, "application/json"
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range map[string]string{"model": "gpt-image-1.5", "prompt": "draw", "quality": "low", "stream": strconv.FormatBool(stream)} {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, err := writer.CreateFormFile("image[]", "input.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = part.Write([]byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body.Bytes(), writer.FormDataContentType()
+}
+
+func nativeRuntimeResponseEvents(t *testing.T, home string, body []byte) [][]byte {
+	t.Helper()
+	output := `[{"type":"message","id":"msg_native","role":"assistant","status":"completed","content":[{"type":"output_text","text":"native result"}]}]`
+	if bytes.Contains(body, []byte("compaction_trigger")) {
+		output = `[{"type":"compaction","encrypted_content":"compact-result"}]`
+	}
+	if bytes.Contains(body, []byte("draw-hosted")) {
+		output = `[{"type":"image_generation_call","status":"completed","result":"native-hosted-image"}]`
+	}
+	if bytes.Contains(body, []byte("tool-fixture")) {
+		marker := filepath.Join(home, "must-not-be-created")
+		calls, errMarshal := json.Marshal([]map[string]any{
+			{"type": "function_call", "id": "fc_shell", "call_id": "call_shell", "name": "shell", "arguments": fmt.Sprintf(`{"command":"touch %s"}`, marker), "status": "completed"},
+			{"type": "custom_tool_call", "id": "ctc_exec", "call_id": "call_exec", "name": "exec", "input": "touch " + marker, "status": "completed"},
+			{"type": "custom_tool_call", "id": "ctc_patch", "call_id": "call_patch", "name": "apply_patch", "input": "*** Begin Patch\n*** Add File: " + marker + "\n+forbidden\n*** End Patch", "status": "completed"},
+		})
+		if errMarshal != nil {
+			t.Error(errMarshal)
+			return nil
+		}
+		output = string(calls)
+	}
+	events := []map[string]any{
+		{"type": "response.created", "response": map[string]any{"id": "resp_native"}},
+		{"type": "response.future_extension", "future": map[string]any{"kept": true}},
+	}
+	if bytes.Contains(body, []byte("draw-hosted")) {
+		events = append(events, map[string]any{"type": "response.image_generation_call.partial_image", "partial_image_b64": "hosted-partial", "partial_image_index": 0})
+	}
+	for index, item := range gjson.Parse(output).Array() {
+		added := []byte(item.Raw)
+		if item.Get("type").String() == "message" {
+			added, _ = sjson.SetBytes(added, "content", []any{})
+		}
+		events = append(events, map[string]any{"type": "response.output_item.added", "output_index": index, "item": json.RawMessage(added)})
+		if item.Get("type").String() == "message" {
+			events = append(events, map[string]any{"type": "response.output_text.delta", "output_index": index, "content_index": 0, "item_id": item.Get("id").String(), "delta": item.Get("content.0.text").String()})
+		}
+		events = append(events, map[string]any{"type": "response.output_item.done", "output_index": index, "item": json.RawMessage(item.Raw)})
+	}
+	events = append(events, map[string]any{"type": "response.completed", "response": map[string]any{
+		"id": "resp_native", "status": "completed", "output": json.RawMessage(output),
+		"usage": map[string]any{"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+	}})
+	var result [][]byte
+	for _, event := range events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Error(err)
+			return nil
+		}
+		result = append(result, encoded)
+	}
+	return result
 }

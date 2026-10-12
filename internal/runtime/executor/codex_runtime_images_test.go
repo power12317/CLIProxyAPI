@@ -148,7 +148,7 @@ func TestCodexRuntimeImagesRouteAndFinalPayload(t *testing.T) {
 }
 
 func TestCodexRuntimeImagesFailuresNeverUseCPAUpstream(t *testing.T) {
-	for _, mode := range []string{"master_unavailable", "missing_capability", "worker_unavailable", "upstream_error", "cancel"} {
+	for _, mode := range []string{"master_unavailable", "missing_capability", "old_builder_runtime", "worker_unavailable", "upstream_error", "cancel"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream=%t", mode, stream), func(t *testing.T) {
 				var nativeCalls, masterCalls atomic.Int32
@@ -166,6 +166,9 @@ func TestCodexRuntimeImagesFailuresNeverUseCPAUpstream(t *testing.T) {
 					}
 					_ = c.WriteJSON(map[string]any{"id": rpc.ID, "error": map[string]any{"code": -32000, "message": mode, "data": map[string]any{"httpStatus": status, "body": `{"error":{"message":"controlled failure"}}`}}})
 				}, func(caps *bridge.Capabilities) {
+					if mode == "old_builder_runtime" {
+						caps.NativeModelExecution = false
+					}
 					if mode != "missing_capability" {
 						caps.Operations = append(caps.Operations, "images/generations", "images/edits")
 					}
@@ -186,7 +189,7 @@ func TestCodexRuntimeImagesFailuresNeverUseCPAUpstream(t *testing.T) {
 				if err == nil || nativeCalls.Load() != 0 {
 					t.Fatalf("native=%d master=%d err=%v", nativeCalls.Load(), masterCalls.Load(), err)
 				}
-				if mode == "missing_capability" && masterCalls.Load() != 0 {
+				if (mode == "missing_capability" || mode == "old_builder_runtime") && masterCalls.Load() != 0 {
 					t.Fatal("unsupported operation reached inference")
 				}
 			})
