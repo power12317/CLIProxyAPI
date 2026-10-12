@@ -1116,6 +1116,11 @@ multimedia:
 
 # Application logs, request logs, usage aggregation, and profiling.
 observability:
+  event-notifications:
+    instance-name: ""
+    platform: feishu # feishu, wecom, or dingtalk
+    webhook: "" # Empty disables event notifications.
+    secret: ""
   logs:
     # Enable debug logging
     debug: false

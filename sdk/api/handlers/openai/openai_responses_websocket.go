@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexstatus"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -106,9 +107,11 @@ func websocketClosePayloadForUpstreamError(err error) (bool, []byte) {
 }
 
 type responsesWebsocketWriter struct {
-	conn    *websocket.Conn
-	writeMu sync.Mutex
-	closing atomic.Bool
+	quality        *codexstatus.Request
+	qualityVersion uint64
+	conn           *websocket.Conn
+	writeMu        sync.Mutex
+	closing        atomic.Bool
 }
 
 func newResponsesWebsocketWriter(conn *websocket.Conn) *responsesWebsocketWriter {
@@ -279,6 +282,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		duplexInput = readResponsesWebsocketInput(socketCtx, cancelSocket, conn)
 	}
 	writer := newResponsesWebsocketWriter(conn)
+	writer.quality = codexstatus.FromContext(c.Request.Context())
 	passthroughSessionID := uuid.NewString()
 	logSessionID := func() string { return logging.CodexSessionLogID(c) }
 	downstreamSessionKey := websocketDownstreamSessionKey(c.Request)
@@ -434,6 +438,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		if msgType != websocket.TextMessage && msgType != websocket.BinaryMessage {
 			continue
 		}
+		writer.quality.Reset()
 		// log.Infof(
 		// 	"responses websocket: downstream_in id=%s type=%d event=%s payload=%s",
 		// 	passthroughSessionID,

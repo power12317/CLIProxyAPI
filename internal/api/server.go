@@ -21,6 +21,7 @@ import (
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v8/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexstatus"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/managementasset"
@@ -37,6 +38,7 @@ import (
 // Server represents the main API server.
 // It encapsulates the Gin engine, HTTP server, handlers, and configuration.
 type Server struct {
+	eventMonitor *codexstatus.Monitor
 	// engine is the Gin web framework engine instance.
 	engine *gin.Engine
 
@@ -166,6 +168,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 
 	engine.Use(corsMiddleware())
+	eventMonitor := codexstatus.New(cfg.EventNotifications)
+	engine.Use(eventMonitor.Middleware())
 	wd, err := os.Getwd()
 	if err != nil {
 		wd = configFilePath
@@ -177,6 +181,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	// Create server instance
 	s := &Server{
+		eventMonitor:        eventMonitor,
 		engine:              engine,
 		handlers:            handlers.NewBaseAPIHandlers(effectiveSDKConfig(cfg), authManager),
 		cfg:                 cfg,
@@ -406,6 +411,9 @@ func (s *Server) Start() error {
 // Returns:
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
+	if s.eventMonitor != nil {
+		s.eventMonitor.Close()
+	}
 	log.Debug("Stopping API server...")
 
 	if s.keepAliveEnabled {

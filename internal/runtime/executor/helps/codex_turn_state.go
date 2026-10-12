@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexstatus"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -55,6 +56,8 @@ func newCodexTurnStateCache(now func() time.Time) *codexTurnStateCache {
 // CodexTurnState captures the final identity of one upstream request. A request
 // retains its bucket so responses in flight cannot resurrect an invalidated auth.
 type CodexTurnState struct {
+	quality        *codexstatus.Attempt
+	email          string
 	cache          *codexTurnStateCache
 	bucket         *codexTurnStateBucket
 	key            codexTurnStateKey
@@ -163,6 +166,7 @@ func codexTurnStateFromRequest(auth *cliproxyauth.Auth, target string, body []by
 	}
 	if auth != nil {
 		state.authID = auth.ID
+		state.email, _ = auth.Metadata["email"].(string)
 		state.authFile = filepath.Base(strings.TrimSpace(auth.FileName))
 		if state.authFile == "." || state.authFile == "" {
 			state.authFile = filepath.Base(strings.TrimSpace(auth.ID))
@@ -313,6 +317,19 @@ func (s *CodexTurnState) ObserveRequest(headers http.Header, websocketBody []byt
 	s.fieldsMu.Lock()
 	s.requestLen = len(value)
 	s.fieldsMu.Unlock()
+	turnID := s.key.turnID
+	if len(websocketBody) > 0 {
+		turnID = codexTurnStateFromRequest(nil, "", websocketBody, headers, true).key.turnID
+	}
+	request := codexstatus.FromContext(s.ctx)
+	if request == nil && s.ctx != nil {
+		if c := ginContextFrom(s.ctx); c != nil && c.Request != nil {
+			request = codexstatus.FromContext(c.Request.Context())
+		}
+	}
+	if request != nil {
+		s.quality = request.Begin(codexstatus.Credential{ID: s.authID, Owner: s.key.accountID, File: s.authFile, Email: s.email}, turnID, len(value))
+	}
 	s.updateLogFields(false)
 }
 
@@ -324,6 +341,7 @@ func (s *CodexTurnState) observeMetadata(value string, preferred bool) {
 	if s == nil {
 		return
 	}
+	s.quality.Observe(len(value))
 	s.fieldsMu.Lock()
 	s.responseLen = len(value)
 	s.fieldsMu.Unlock()

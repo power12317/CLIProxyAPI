@@ -289,6 +289,13 @@ func writeResponsesWebsocketPayload(writer *responsesWebsocketWriter, wsTimeline
 	if writer.closing.Load() {
 		return websocket.ErrCloseSent
 	}
+	version, statusFrame := writer.quality.WebsocketStatus(writer.qualityVersion)
+	if len(statusFrame) > 0 {
+		if err := writer.conn.WriteMessage(websocket.TextMessage, statusFrame); err != nil {
+			return err
+		}
+		writer.qualityVersion = version
+	}
 	return writer.conn.WriteMessage(websocket.TextMessage, payload)
 }
 
