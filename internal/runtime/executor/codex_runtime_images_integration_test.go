@@ -64,10 +64,12 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		body      []byte
 		headers   http.Header
 		websocket bool
+		node      string
 	}
 	requests := make(chan exchange, 32)
 	cancelled := make(chan struct{}, 4)
 	var workerCalls, cpaCalls, websocketAttempts atomic.Int32
+	var omitWebsocketCookie atomic.Bool
 	var cpaRetryCalls atomic.Int32
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
@@ -114,14 +116,21 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			return
 		}
 		if websocket.IsWebSocketUpgrade(r) {
-			websocketAttempts.Add(1)
+			connectionID := websocketAttempts.Add(1)
 			if strings.HasPrefix(nativeTransport, "handshake-") {
 				status, _ := strconv.Atoi(strings.TrimPrefix(nativeTransport, "handshake-"))
 				http.Error(w, "controlled native handshake failure", status)
 				return
 			}
 			upgrader := websocket.Upgrader{}
-			conn, err := upgrader.Upgrade(w, r, http.Header{"X-Request-Id": {"native-ws-trace"}})
+			headers := http.Header{"X-Request-Id": {"native-ws-trace"}}
+			node := ""
+			if !omitWebsocketCookie.Load() {
+				node = fmt.Sprintf("unified-%d", connectionID)
+				claims := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"host":"chat.gateway.%s.api.openai.com"}`, node)))
+				headers.Set("Set-Cookie", "__oailb=e30."+claims+".signature; Path=/")
+			}
+			conn, err := upgrader.Upgrade(w, r, headers)
 			if err != nil {
 				t.Error(err)
 				return
@@ -136,7 +145,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					return
 				}
 				workerCalls.Add(1)
-				requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true}
+				requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true, node: node}
 				if bytes.Contains(body, []byte("fail-before-output")) || bytes.Contains(body, []byte("CPA-owned-retry")) && cpaRetryCalls.Add(1) == 1 {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":503,"error":{"message":"controlled native pre-output failure","type":"server_error","code":"server_error"}}`))
 					return
@@ -449,6 +458,59 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		})
 	}
 	if nativeTransport == "websocket" {
+		t.Run("connection_node_reaches_each_request_log", func(t *testing.T) {
+			defer omitWebsocketCookie.Store(false)
+			executor := NewCodexAutoExecutor(cfg)
+			var previousNode string
+			for connection := range 3 {
+				omitWebsocketCookie.Store(connection == 2)
+				beforeCalls, beforeConnections := workerCalls.Load(), websocketAttempts.Load()
+				payload := []byte(fmt.Sprintf(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"connection-node-probe"}],"client_metadata":{"session_id":"node-session-%d","thread_id":"node-thread-%d","turn_id":"node-turn-%d"}}`, connection, connection, connection))
+				var connectionNode string
+				for index := range 2 {
+					ctx, ginContext := runtimeLoggingContext()
+					req := coreexecutor.Request{Model: "gpt-6.1-sol", Payload: payload}
+					if index == 0 {
+						if _, err := executor.Execute(ctx, auth, req, runtimeTestOptions()); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						result, err := executor.ExecuteStream(ctx, auth, req, runtimeTestOptions())
+						if err != nil {
+							t.Fatal(err)
+						}
+						for chunk := range result.Chunks {
+							if chunk.Err != nil {
+								t.Fatal(chunk.Err)
+							}
+						}
+					}
+					received := readExchange(t)
+					if index == 0 {
+						connectionNode = received.node
+					}
+					if received.node != connectionNode || logging.CodexOaiLBNode(ginContext) != received.node {
+						t.Fatalf("connection %d request %d node lost: upstream=%q connection=%q CPA=%q", connection, index, received.node, connectionNode, logging.CodexOaiLBNode(ginContext))
+					}
+					requestLog := runtimeLogText(t, ginContext, "API_REQUEST")
+					if connectionNode == "" {
+						if strings.Contains(requestLog, "oailb_node:") {
+							t.Fatalf("new connection inherited a previous node: %s", requestLog)
+						}
+					} else if !strings.Contains(requestLog, "oailb_node: "+connectionNode+"\n") {
+						t.Fatalf("connection node missing from upstream request log: %s", requestLog)
+					}
+					t.Logf("connection %d request %d: upstream node=%q CPA node=%q", connection+1, index+1, received.node, logging.CodexOaiLBNode(ginContext))
+				}
+				if connection < 2 && (connectionNode == "" || connectionNode == previousNode) || connection == 2 && connectionNode != "" {
+					t.Fatalf("new connection node did not change: previous=%q current=%q", previousNode, connectionNode)
+				}
+				previousNode = connectionNode
+				if cpaCalls.Load() != 0 || workerCalls.Load()-beforeCalls != 2 || websocketAttempts.Load()-beforeConnections != 1 {
+					t.Fatalf("node exchange ownership/reuse changed: CPA=%d worker=%d WS=%d", cpaCalls.Load(), workerCalls.Load()-beforeCalls, websocketAttempts.Load()-beforeConnections)
+				}
+			}
+		})
 		t.Run("prefixed_turn_state_survives_live_delivery", func(t *testing.T) {
 			beforeCalls, beforeConnections := workerCalls.Load(), websocketAttempts.Load()
 			executor := NewCodexAutoExecutor(cfg)

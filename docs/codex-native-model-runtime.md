@@ -105,6 +105,27 @@ and the relevant handler/helper package tests. This is a CPA-only correction;
 IPC v5 and codex-server commit `6d9c1b9d5d3fe872e94608b428ae214e7ab90805`
 remain compatible.
 
+## WebSocket gateway node diagnostics
+
+The native WebSocket records the `__oailb` gateway node from its actual handshake:
+a response cookie takes precedence over the cookie actually sent, and no response
+cookie falls back to that request cookie. An explicitly deleted or invalid response
+cookie clears the node. The connection retains only the parsed node label, such as
+`unified-107`, and includes it in every `response.create` diagnostic through the
+existing `oaiLbNode` field. Closing the socket discards its diagnostic node.
+
+CPA consumes this field through its existing request and access logging. No CPA
+production change or IPC version change is required. The real-worker regression
+`connection_node_reaches_each_request_log` checks both unary and streaming calls
+on each reused socket, different nodes on separate sockets, and a fresh socket
+without a cookie. It also asserts one handshake per pair and zero CPA model egress.
+The old worker fails on the first call: its handshake reports a node but its next
+`response.create` diagnostic clears that node in CPA.
+
+The corrected worker passed 97 real-worker cases plus the delayed-diagnostic
+WebSocket regression under `-race`, including live HTTP and WebSocket delivery.
+The CPA node-consumer tests, access-logger tests and server build also passed.
+
 ## Native input compatibility
 
 The official model entry accepts a native `Prompt`, typed tools and history,
