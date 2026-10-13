@@ -102,10 +102,8 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 }
 
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	if isCodexOpenAIImageRequest(opts) {
-		ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
-	}
-	if isCodexOpenAIImageRequest(opts) && e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+	ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
+	if e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
 		cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
 	}
 	if e != nil && e.httpExec != nil {
@@ -118,14 +116,12 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		}
 		defer release()
 		if remote {
-			if isCodexOpenAIImageRequest(opts) {
-				cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
-			}
+			cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
 			return NewCodexRuntimeExecutor(e.httpExec.cfg).Execute(ctx, auth, req, opts)
 		}
 	}
-	if isCodexOpenAIImageRequest(opts) && cliproxyexecutor.CodexRuntimeRouteRequired(ctx) {
-		return cliproxyexecutor.Response{}, runtimeError(503, "Image request requires a Codex runtime credential")
+	if cliproxyexecutor.CodexRuntimeRouteRequired(ctx) {
+		return cliproxyexecutor.Response{}, runtimeError(503, "Request requires a Codex runtime credential")
 	}
 	if e != nil && e.httpExec != nil && isCodexOpenAIImageRequest(opts) {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
@@ -185,10 +181,8 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	if isCodexOpenAIImageRequest(opts) {
-		ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
-	}
-	if isCodexOpenAIImageRequest(opts) && e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+	ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
+	if e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
 		cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
 	}
 	if e != nil && e.httpExec != nil {
@@ -197,9 +191,7 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			return nil, err
 		}
 		if remote {
-			if isCodexOpenAIImageRequest(opts) {
-				cliproxyexecutor.RequireCodexRuntimeRoute(sharedCtx)
-			}
+			cliproxyexecutor.RequireCodexRuntimeRoute(sharedCtx)
 			result, err := NewCodexRuntimeExecutor(e.httpExec.cfg).ExecuteStream(sharedCtx, fresh, req, opts)
 			if err != nil {
 				release()
@@ -218,8 +210,8 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 }
 
 func (e *CodexAutoExecutor) executeNativeStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	if isCodexOpenAIImageRequest(opts) && cliproxyexecutor.CodexRuntimeRouteRequired(ctx) {
-		return nil, runtimeError(503, "Image request requires a Codex runtime credential")
+	if cliproxyexecutor.CodexRuntimeRouteRequired(ctx) {
+		return nil, runtimeError(503, "Request requires a Codex runtime credential")
 	}
 	if e != nil && e.httpExec != nil && isCodexOpenAIImageRequest(opts) {
 		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)

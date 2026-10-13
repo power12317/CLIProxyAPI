@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,8 +45,12 @@ func TestCodexRuntimeWebsocketRealWorker(t *testing.T) {
 	testCodexNativeRuntimeRealWorker(t, "websocket")
 }
 
-func TestCodexRuntimeNativeFallbackRealWorker(t *testing.T) {
-	testCodexNativeRuntimeRealWorker(t, "fallback")
+func TestCodexRuntimeHandshakeFailureRealWorker(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusUpgradeRequired} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			testCodexNativeRuntimeRealWorker(t, fmt.Sprintf("handshake-%d", status))
+		})
+	}
 }
 
 func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
@@ -65,27 +68,29 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	requests := make(chan exchange, 32)
 	cancelled := make(chan struct{}, 4)
 	var workerCalls, cpaCalls, websocketAttempts atomic.Int32
+	var cpaRetryCalls atomic.Int32
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
 		cpaCalls.Add(1)
 		return nil, fmt.Errorf("CPA direct upstream request forbidden")
 	})
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
-	var recoveryAttempts sync.Map
+	liveStream := newNativeRuntimeStreamProbe()
+	t.Cleanup(liveStream.close)
 	responseEvents := func(body []byte) ([][]byte, bool) {
 		events := nativeRuntimeResponseEvents(t, home, body)
-		for _, marker := range []string{"recover-after-output-false", "recover-after-output-true"} {
-			if bytes.Contains(body, []byte(marker)) {
-				if _, retried := recoveryAttempts.LoadOrStore(marker, true); !retried {
-					events = events[:len(events)-1]
-					for i, event := range events {
-						event = bytes.ReplaceAll(event, []byte("native result"), []byte("discarded-partial"))
-						event = bytes.ReplaceAll(event, []byte("msg_native"), []byte("msg_partial"))
-						events[i] = bytes.ReplaceAll(event, []byte("resp_native"), []byte("resp_partial"))
-					}
-					return events, true
-				}
+		if bytes.Contains(body, []byte("routing-ticket-probe")) {
+			metadata, _ := json.Marshal(map[string]any{"type": "codex.response.metadata", "headers": map[string]string{"x-codex-turn-state": strings.Repeat("T", 780)}})
+			events = append([][]byte{metadata}, events...)
+		}
+		if bytes.Contains(body, []byte("fail-after-output")) {
+			events = events[:len(events)-1]
+			for i, event := range events {
+				event = bytes.ReplaceAll(event, []byte("native result"), []byte("delivered-partial"))
+				event = bytes.ReplaceAll(event, []byte("msg_native"), []byte("msg_partial"))
+				events[i] = bytes.ReplaceAll(event, []byte("resp_native"), []byte("resp_partial"))
 			}
+			return events, true
 		}
 		return events, false
 	}
@@ -97,8 +102,9 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		}
 		if websocket.IsWebSocketUpgrade(r) {
 			websocketAttempts.Add(1)
-			if nativeTransport == "fallback" {
-				http.Error(w, "controlled native handshake failure", http.StatusServiceUnavailable)
+			if strings.HasPrefix(nativeTransport, "handshake-") {
+				status, _ := strconv.Atoi(strings.TrimPrefix(nativeTransport, "handshake-"))
+				http.Error(w, "controlled native handshake failure", status)
 				return
 			}
 			upgrader := websocket.Upgrader{}
@@ -118,6 +124,16 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				}
 				workerCalls.Add(1)
 				requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true}
+				if bytes.Contains(body, []byte("fail-before-output")) || bytes.Contains(body, []byte("CPA-owned-retry")) && cpaRetryCalls.Add(1) == 1 {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":503,"error":{"message":"controlled native pre-output failure","type":"server_error","code":"server_error"}}`))
+					return
+				}
+				if bytes.Contains(body, []byte("live-tool-stream")) {
+					liveStream.serve(r.Context(), func(event []byte) error {
+						return conn.WriteMessage(websocket.TextMessage, event)
+					})
+					continue
+				}
 				if bytes.Contains(body, []byte("cancel-response")) {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_cancel"}}`))
 					_, next, errRead := conn.ReadMessage()
@@ -177,7 +193,20 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			return
 		}
 		if r.URL.Path == "/v1/responses" {
+			if bytes.Contains(body, []byte("fail-before-output")) || bytes.Contains(body, []byte("CPA-owned-retry")) && cpaRetryCalls.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, `{"error":{"message":"controlled native pre-output failure","type":"server_error","code":"server_error"}}`)
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
+			if bytes.Contains(body, []byte("live-tool-stream")) {
+				liveStream.serve(r.Context(), func(event []byte) error {
+					_, errWrite := fmt.Fprintf(w, "data: %s\n\n", event)
+					w.(http.Flusher).Flush()
+					return errWrite
+				})
+				return
+			}
 			if bytes.Contains(body, []byte("cancel-response")) {
 				_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cancel\"}}\n\n")
 				w.(http.Flusher).Flush()
@@ -188,6 +217,11 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			events, _ := responseEvents(body)
 			for _, event := range events {
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
+			}
+			if bytes.Contains(body, []byte("fail-after-output-open-error")) {
+				_, _ = io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_partial\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"error-before-upstream-EOF\"}}}\n\n")
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
 			}
 			return
 		}
@@ -220,7 +254,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	if err := os.MkdirAll(accountHome, 0700); err != nil {
 		t.Fatal(err)
 	}
-	toml := fmt.Sprintf("model = \"gpt-image-1.5\"\nmodel_provider = \"image_mock\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nchatgpt_base_url = %q\n[model_providers.image_mock]\nname = \"OpenAI\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = true\nrequest_max_retries = 0\nstream_max_retries = 1\n", upstream.URL, upstream.URL+"/v1")
+	toml := fmt.Sprintf("model = \"gpt-image-1.5\"\nmodel_provider = \"image_mock\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nchatgpt_base_url = %q\n[model_providers.image_mock]\nname = \"OpenAI\"\nbase_url = %q\nwire_api = \"responses\"\nrequires_openai_auth = true\nrequest_max_retries = 3\nstream_max_retries = 3\n", upstream.URL, upstream.URL+"/v1")
 	toml += fmt.Sprintf("supports_websockets = %t\n", nativeTransport != "http")
 	if err := os.WriteFile(filepath.Join(accountHome, "config.toml"), []byte(toml), 0600); err != nil {
 		t.Fatal(err)
@@ -287,6 +321,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	manager.RegisterExecutor(NewCodexAutoExecutor(cfg))
 	account := auth.Clone()
 	account.Metadata["plan_type"] = "pro"
+	account.Metadata["disable_cooling"] = true
 	if _, err := manager.Register(context.Background(), account); err != nil {
 		t.Fatal(err)
 	}
@@ -297,6 +332,115 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	router.POST(codexImagesGenerationsPath, handler.ImagesGenerations)
 	router.POST(codexImagesEditsPath, handler.ImagesEdits)
 	router.POST("/v1/chat/completions", handler.ChatCompletions)
+	responsesHandler := openaihandlers.NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager))
+	router.POST("/v1/responses", responsesHandler.Responses)
+	if strings.HasPrefix(nativeTransport, "handshake-") {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("handshake_error_reaches_client/stream=%t", stream), func(t *testing.T) {
+				before := websocketAttempts.Load()
+				testNativeRuntimeHTTPFailure(t, router, "fail-before-output", stream, "controlled native handshake failure")
+				if websocketAttempts.Load() != before+1 || workerCalls.Load() != 0 || cpaCalls.Load() != 0 {
+					t.Fatalf("handshake retried or fell back: handshakes=%d worker HTTP=%d CPA=%d", websocketAttempts.Load()-before, workerCalls.Load(), cpaCalls.Load())
+				}
+			})
+		}
+		return
+	}
+	for _, marker := range []string{"fail-before-output", "fail-after-output"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("error_reaches_HTTP_client/%s/stream=%t", marker, stream), func(t *testing.T) {
+				before := workerCalls.Load()
+				testNativeRuntimeHTTPFailure(t, router, marker, stream, "")
+				if workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+					t.Fatalf("native failure was retried: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+				}
+				readExchange(t)
+			})
+		}
+	}
+	if nativeTransport == "http" {
+		t.Run("SSE_error_reaches_client_before_upstream_EOF", func(t *testing.T) {
+			before := workerCalls.Load()
+			testNativeRuntimeHTTPFailure(t, router, "fail-after-output-open-error", true, "error-before-upstream-EOF")
+			if workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+				t.Fatalf("SSE error caused a worker retry: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+			}
+			readExchange(t)
+		})
+	}
+	t.Run("CPA_retries_same_worker_with_same_request_ID", func(t *testing.T) {
+		manager.SetRetryConfig(1, 0, 0)
+		defer manager.SetRetryConfig(0, 0, 0)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			router.ServeHTTP(w, r.WithContext(logging.WithRequestID(r.Context(), "same-real-worker-retry")))
+		}))
+		defer server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		transport := &http.Transport{}
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-6.1-sol","stream":true,"input":[{"role":"user","content":"CPA-owned-retry"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		before := workerCalls.Load()
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = response.Body.Close() }()
+		output, err := io.ReadAll(response.Body)
+		if err != nil || response.StatusCode != 200 || !bytes.Contains(output, []byte("response.completed")) || bytes.Contains(output, []byte("controlled native pre-output failure")) {
+			t.Fatalf("CPA retry did not deliver the new native result: status=%d body=%s err=%v", response.StatusCode, output, err)
+		}
+		if workerCalls.Load()-before != 2 || cpaRetryCalls.Load() != 2 || cpaCalls.Load() != 0 {
+			t.Fatalf("unexpected retry ownership: worker=%d retry requests=%d CPA=%d", workerCalls.Load()-before, cpaRetryCalls.Load(), cpaCalls.Load())
+		}
+		readExchange(t)
+		readExchange(t)
+	})
+	t.Run("live_tool_stream_reaches_HTTP_client_before_native_completion", func(t *testing.T) {
+		before := workerCalls.Load()
+		testNativeRuntimeLiveHTTP(t, router, liveStream, home)
+		if workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+			t.Fatalf("unexpected model egress: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+		}
+		received := readExchange(t)
+		if received.websocket != (nativeTransport == "websocket") {
+			t.Fatalf("unexpected native transport: websocket=%t", received.websocket)
+		}
+	})
+	t.Run("HTTP_client_cancels_during_native_generation", func(t *testing.T) {
+		before := workerCalls.Load()
+		testNativeRuntimeHTTPCancellation(t, router, cancelled)
+		if workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+			t.Fatalf("cancellation replayed model work: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+		}
+		readExchange(t)
+	})
+	if nativeTransport == "websocket" {
+		t.Run("prefixed_turn_state_survives_live_delivery", func(t *testing.T) {
+			beforeCalls, beforeConnections := workerCalls.Load(), websocketAttempts.Load()
+			executor := NewCodexAutoExecutor(cfg)
+			payload := []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"routing-ticket-probe"}],"client_metadata":{"session_id":"same-source-session","thread_id":"same-source-thread","turn_id":"same-source-turn"}}`)
+			for index := range 2 {
+				ctx, ginContext := runtimeLoggingContext()
+				_, err := executor.Execute(ctx, auth, coreexecutor.Request{Model: "gpt-6.1-sol", Payload: payload}, runtimeTestOptions())
+				if err != nil {
+					t.Fatal(err)
+				}
+				received := readExchange(t)
+				ticket := gjson.GetBytes(received.body, "client_metadata.x-codex-turn-state").String()
+				fields, ok := logging.CodexTurnStateLogFieldsForContext(ginContext)
+				if !ok || len(ticket) != index*780 || fields.RequestTurnStateLen != index*780 || fields.ResponseTurnStateLen != 780 || index == 1 && ticket != strings.Repeat("T", 780) {
+					t.Fatalf("ticket or correlated log lost: actual=%d log=%+v", len(ticket), fields)
+				}
+				t.Logf("successful request %d: actual outbound ticket=%d bytes; log=%d/%d", index+1, len(ticket), fields.RequestTurnStateLen, fields.ResponseTurnStateLen)
+			}
+			if cpaCalls.Load() != 0 || workerCalls.Load()-beforeCalls != 2 || websocketAttempts.Load()-beforeConnections != 1 {
+				t.Fatalf("ticket exchange ownership/reuse changed: CPA=%d worker=%d WS=%d", cpaCalls.Load(), workerCalls.Load()-beforeCalls, websocketAttempts.Load()-beforeConnections)
+			}
+		})
+	}
 	for _, path := range []string{codexImagesGenerationsPath, codexImagesEditsPath} {
 		for _, stream := range []bool{false, true} {
 			for _, form := range []bool{false, true} {
@@ -361,7 +505,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			}
 		}
 	})
-	for _, mode := range []string{"summary", "native_lite", "compaction_trigger", "hosted_image", "recovery_after_partial", "tools", "tool_results"} {
+	for _, mode := range []string{"summary", "native_lite", "compaction_trigger", "hosted_image", "tools", "tool_results"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("responses/%s/stream=%t", mode, stream), func(t *testing.T) {
 				payload := []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"summarize this conversation"}]}`)
@@ -372,8 +516,6 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					payload = []byte(`{"model":"gpt-6.1-sol","reasoning":{"context":"all_turns"},"input":[{"role":"user","content":"history"},{"type":"compaction_trigger"}]}`)
 				case "hosted_image":
 					payload = []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"draw-hosted"}],"tools":[{"type":"image_generation","quality":"high"}]}`)
-				case "recovery_after_partial":
-					payload = []byte(fmt.Sprintf(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"recover-after-output-%t"}]}`, stream))
 				case "tools":
 					payload = []byte(`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"tool-fixture"}],"tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"command":{"type":"string"}}}},{"type":"custom","name":"exec","format":{"type":"text"}},{"type":"custom","name":"apply_patch","format":{"type":"text"}}]}`)
 				case "tool_results":
@@ -395,16 +537,10 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				before := workerCalls.Load()
 				output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-6.1-sol", Payload: payload}, runtimeTestOptions(), stream)
 				attempts := workerCalls.Load() - before
-				if err != nil || attempts < 1 || mode != "recovery_after_partial" && attempts != 1 || cpaCalls.Load() != 0 {
+				if err != nil || attempts != 1 || cpaCalls.Load() != 0 {
 					t.Fatalf("native Responses route failed: err=%v worker=%d CPA=%d", err, attempts, cpaCalls.Load())
 				}
-				var received exchange
-				for range attempts {
-					received = readExchange(t)
-				}
-				if mode == "recovery_after_partial" && (attempts < 2 || bytes.Contains(output, []byte("discarded-partial")) || !bytes.Contains(output, []byte("native result")) || !bytes.Contains(received.body, []byte("discarded-partial"))) {
-					t.Fatalf("native recovery lost accepted history or replayed failed output: attempts=%d final_input=%s result=%s", attempts, received.body, output)
-				}
+				received := readExchange(t)
 				if received.path != "/v1/responses" || received.websocket != (nativeTransport == "websocket") || received.websocket && gjson.GetBytes(received.body, "type").String() != "response.create" || !received.websocket && !gjson.GetBytes(received.body, "stream").Bool() {
 					t.Fatalf("native Responses request was not built: %s %s", received.path, received.body)
 				}
@@ -589,10 +725,12 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			} else {
 				_, err = mixed.Execute(context.Background(), []string{"codex"}, req, opts)
 			}
-			if err == nil || cpaCalls.Load() != 0 || workerCalls.Load() != before+1 {
-				t.Fatalf("mixed pool reached CPA upstream: worker=%d CPA=%d err=%v", workerCalls.Load()-before, cpaCalls.Load(), err)
+			if err == nil || cpaCalls.Load() != 0 || workerCalls.Load() != before+3 {
+				t.Fatalf("mixed pool ignored CPA retry budget or used direct egress: worker=%d CPA=%d err=%v", workerCalls.Load()-before, cpaCalls.Load(), err)
 			}
-			readExchange(t)
+			for range 3 {
+				readExchange(t)
+			}
 		}
 	})
 	client, err := bridge.Dial(context.Background(), settings.Endpoint())

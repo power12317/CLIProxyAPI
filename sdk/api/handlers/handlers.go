@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -543,10 +544,17 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	}
 	newCtx = context.WithValue(newCtx, "gin", c)
 	newCtx = context.WithValue(newCtx, "handler", handler)
+	newCtx, finishDiagnostics := logging.WithDiagnosticFinalizers(newCtx)
 	return newCtx, func(params ...interface{}) {
 		if c != nil {
 			logging.SetResponseStatus(cancelCtx, c.Writer.Status())
 		}
+		finishDiagnostics(func() {
+			if c != nil && c.Writer.Written() {
+				_ = httpwire.FlushResponse(c.Writer)
+			}
+			cancel()
+		})
 		if h.Cfg.RequestLog && len(params) == 1 {
 			if captured, exists := c.Get(logging.APIResponseCapturedContextKey); exists {
 				if capturedBool, ok := captured.(bool); ok && capturedBool {

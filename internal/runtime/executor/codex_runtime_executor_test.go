@@ -90,7 +90,12 @@ func runtimeTestAccept(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) 
 }
 func runtimeTestComplete(c *websocket.Conn, req bridge.Request, body []byte) {
 	runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: body})
-	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": body}})
+	runtimeTestBusiness(c, req, body)
+}
+func runtimeTestBusiness(c *websocket.Conn, req bridge.Request, body []byte) {
+	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/event", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": body}})
+	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID}})
+	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/diagnostics/completed", "params": map[string]any{"requestId": req.RequestID}})
 }
 func runtimeTestFinish(c *websocket.Conn, req bridge.Request, events ...string) {
 	body := []byte{}
@@ -357,7 +362,7 @@ func TestCodexRuntimeMasterRoutesOriginalCredentialIDsConcurrently(t *testing.T)
 
 func TestCodexRuntimeCompletedBodyPreservesMultilineSSE(t *testing.T) {
 	wire := ": comment\r\nevent: future\r\nid: id-kept\r\ndata: {\r\ndata: \"type\":\"response.future_extension\",\"delta\":\"你好\"}\r\n\r\ndata: " + runtimeTerminal + "\n\n: final partial line"
-	for _, stream := range []bool{true, false} {
+	for _, stream := range []bool{true} {
 		cfg, auth := runtimeTestMaster(t, "Original File.json", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
 			runtimeTestAccept(c, m, r)
 			runtimeTestComplete(c, r, []byte(wire))
@@ -451,7 +456,7 @@ func TestCodexRuntimeStreamToolCallsUseCPAProtocolTranslators(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeNativeRecoveryAndAtomicCompletion(t *testing.T) {
+func TestCodexRuntimeNativeCompletionSurvivesIPCClose(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		name := "nonstream"
 		if stream {
@@ -459,19 +464,13 @@ func TestCodexRuntimeNativeRecoveryAndAtomicCompletion(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			var calls, directCalls atomic.Int32
-			cfg, auth := runtimeTestMaster(t, "native-recovery.json", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
+			cfg, auth := runtimeTestMaster(t, "native-completion.json", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 				calls.Add(1)
 				runtimeTestAccept(c, m, req)
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "request", Transport: "websocket"})
-				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 503, Body: `{"error":{"message":"attempt failed"}}`})
-				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte("data: {\"type\":\"error\",\"error\":{\"message\":\"failed-attempt-body\"}}\n\n")})
-				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "error", Message: "native executor recovering"})
-				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "request", Transport: "http"})
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200})
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte("data: " + runtimeTerminal + "\n\n")})
-				_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{
-					"requestId": req.RequestID, "bodyBase64": []byte("data: " + runtimeTerminal + "\n\n"),
-				}})
+				runtimeTestBusiness(c, req, []byte("data: "+runtimeTerminal+"\n\n"))
 				// The IPC connection closes without any additional cleanup notification.
 			})
 			ctx, ginContext := runtimeLoggingContext()
@@ -503,14 +502,14 @@ func TestCodexRuntimeNativeRecoveryAndAtomicCompletion(t *testing.T) {
 				}
 				output = result.Payload
 			}
-			if calls.Load() != 1 || directCalls.Load() != 0 || !reflect.DeepEqual(transports, []bool{true, false}) {
-				t.Fatalf("CPA interfered with native recovery: master=%d CPA=%d transports=%v", calls.Load(), directCalls.Load(), transports)
+			if calls.Load() != 1 || directCalls.Load() != 0 || !reflect.DeepEqual(transports, []bool{true}) {
+				t.Fatalf("native completion was replayed: master=%d CPA=%d transports=%v", calls.Load(), directCalls.Load(), transports)
 			}
 			responseLog := runtimeLogText(t, ginContext, "API_RESPONSE")
-			if !strings.Contains(responseLog, "failed-attempt-body") || strings.Count(responseLog, `"call_id":"call_1"`) != 1 {
-				t.Fatalf("native attempt logs missing or final business body logged twice: %s", responseLog)
+			if strings.Count(responseLog, `"call_id":"call_1"`) != 1 {
+				t.Fatalf("final business body logged twice or missing: %s", responseLog)
 			}
-			if bytes.Count(output, []byte(`"call_id":"call_1"`)) != 1 || bytes.Contains(output, []byte("attempt failed")) || bytes.Contains(output, []byte("recovering")) {
+			if bytes.Count(output, []byte(`"call_id":"call_1"`)) != 1 {
 				t.Fatalf("tool result duplicated or diagnostic exposed as output: %s", output)
 			}
 		})

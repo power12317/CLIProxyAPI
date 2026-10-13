@@ -133,6 +133,7 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 	}
 	client.OnUpstream = upstreamLog.Record
 	upstreamLog.RawBody = true
+	upstreamLog.Bind(client)
 	requestID := logging.GetRequestID(ctx)
 	if requestID == "" {
 		id, errID := uuid.NewV7()
@@ -238,6 +239,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 			}
 		}
 		upstreamLog.Error(err)
+		upstreamLog.Flush()
 		reporter.PublishFailure(ctx, err)
 		return nil, err
 	}
@@ -268,6 +270,16 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 		outputItems := make(map[int64][]byte)
 		var outputFallback [][]byte
 		terminal := false
+		var finalChunks []coreexecutor.StreamChunk
+		deliver := func(chunk coreexecutor.StreamChunk) bool {
+			if terminal {
+				// Hold only terminal framing until the native success notification.
+				// A downstream client may cancel immediately upon seeing completion.
+				finalChunks = append(finalChunks, chunk)
+				return true
+			}
+			return send(chunk)
+		}
 		fail := func(err error) {
 			var remote *bridge.Error
 			if errors.As(err, &remote) {
@@ -285,6 +297,11 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				if !terminal {
 					fail(runtimeError(502, "Codex runtime completed without a model result"))
 				} else {
+					for _, chunk := range finalChunks {
+						if !send(chunk) {
+							return
+						}
+					}
 					reporter.EnsurePublished(ctx)
 				}
 				return
@@ -296,7 +313,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 			event := helps.RestoreCodexMultiAgentV2Response(frame.Data, optimizeMultiAgentV2)
 			if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 				if (format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex) && len(frame.Wire) > 0 {
-					if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
+					if !deliver(coreexecutor.StreamChunk{Payload: frame.Wire}) {
 						return
 					}
 				}
@@ -325,7 +342,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				if !bytes.Equal(event, frame.Data) {
 					frame.Wire = append(append([]byte("data: "), event...), '\n', '\n')
 				}
-				if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
+				if !deliver(coreexecutor.StreamChunk{Payload: frame.Wire}) {
 					return
 				}
 			} else {
@@ -336,7 +353,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				}
 				line := append([]byte("data: "), event...)
 				for _, chunk := range helps.TranslateStreamWithClaudeInputTokens(ctx, sdktranslator.FormatCodex, format, req.Model, original, body, line, &param, claudeTokens) {
-					if !send(coreexecutor.StreamChunk{Payload: chunk}) {
+					if !deliver(coreexecutor.StreamChunk{Payload: chunk}) {
 						return
 					}
 				}

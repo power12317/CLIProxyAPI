@@ -127,6 +127,7 @@ func (e *CodexRuntimeExecutor) executeImageStreamViaMaster(ctx context.Context, 
 	client, err := e.startOperation(ctx, auth, req, opts, body, upstreamLog, imageAPI)
 	if err != nil {
 		upstreamLog.Error(err)
+		upstreamLog.Flush()
 		return nil, err
 	}
 	chunks := make(chan coreexecutor.StreamChunk)

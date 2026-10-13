@@ -13,7 +13,9 @@ change the deployment contract of `main`.
 CPA retains its protocol translation, model mapping, business preprocessing,
 and payload rules. The result is input to the native model executor, rather
 than a specification of the exact upstream wire payload. Native input mapping,
-normalization, transport, recovery, and model completion belong to codex-server.
+normalization, transport, and model completion belong to codex-server.
+The CPA entry sets worker retry budgets to zero and returns errors immediately;
+CPA retains retry ownership under its existing policy.
 Unsupported native input must fail explicitly. Neither CPA direct egress nor
 the former bridge HTTP sender is a fallback for an enabled Runtime request.
 
@@ -24,46 +26,60 @@ model invocation. It does not start an Agent tool loop.
 
 ## IPC boundary
 
-The WebSocket RPC endpoint remains unchanged; protocol version 4 describes the
-final business bytes carried by `cpa/inference/completed.bodyBase64`. Native
-model execution is the only implementation, with no execution selector or
-alternate bridge sender. The existing `executionMode: "inference-only"` and
-`rawBody: true` describe the model-only boundary and byte framing; they do not
-select a model transport. CPA and codex-server use this same message contract.
+The WebSocket RPC endpoint remains unchanged. Protocol version 5 separates
+acceptance, live native model events, native termination, and diagnostics:
 
-`cpa/inference/upstream` is diagnostic data from actual native exchanges.
-Its `transport` field identifies `http` or `websocket`. With
-`upstreamBodyLogs: true`, `kind: "body"` carries the actual attempt bytes as
-`bodyBase64`; final business output is not logged a second time. Attempt errors and HTTP
-status codes are logged, but cannot replace the native executor's final state.
-The same request identifier associates CPA logs and the master/worker call.
+- `cpa/inference/start` returns when the first native business event is ready;
+  it does not wait for model completion or diagnostic delivery.
+- `cpa/inference/event {requestId, bodyBase64}` carries incremental
+  business output. Text and client tool argument deltas are delivered while the
+  model is still generating.
+- `cpa/inference/completed {requestId}` confirms native success separately from
+  the body. Failure after acceptance uses `cpa/inference/error`; failures before
+  acceptance remain start RPC errors.
+- `cpa/inference/upstream` records actual native exchanges, and
+  `cpa/inference/diagnostics/completed {requestId}` ends that diagnostic stream.
 
-Native model failure and cancellation use the start RPC error, with the final
-HTTP status, error body and safe response headers. If the worker exits after
-the start reply but before completion, the master reports that interruption
-through `cpa/inference/error`. CPA does not derive final failure from the last
-failed attempt's diagnostics.
+CPA and codex-server must be upgraded together. Protocol 4 peers are rejected
+explicitly; there is no buffered-output compatibility mode or CPA model fallback.
+Native model execution is the only implementation. `executionMode:
+"inference-only"` and `rawBody: true` describe execution ownership and framing,
+not a selectable upstream transport.
 
-`cpa/inference/completed` confirms native success and carries the final
-`bodyBase64` bytes in the same notification. This makes the final output and
-success indivisible at the IPC boundary: a later connection close cannot turn
-that confirmed result into a failure. A close before confirmed completion is
-an uncertain bridge failure and is not replayed by CPA. A completion without
-the model result needed for client protocol translation is an IPC contract
-error, not an upstream model timeout.
+Native diagnostics carry their actual `http` or `websocket` transport. With
+`upstreamBodyLogs: true`, original attempt bytes are logged without logging the
+business copy twice. Diagnostic HTTP errors never replace the native final
+outcome. CPA receives the socket independently of diagnostic callbacks, and its
+HTTP consumer flushes business output before joining trailing logs. The same
+request ID associates CPA, master, worker, and native upstream exchanges.
 
-CPA retains basic response translation and usage extraction. It does not run
-its independent SSE failure/cooling classifier on native output. Ordinary
-Responses and image output keep their respective result adapters; an image
-event stream is not treated as a sequence of ordinary Responses completions.
+The final model completion frame is released after the independent native
+success confirmation. This terminal-only hold prevents a client that disconnects
+immediately on `response.completed` from racing native success bookkeeping;
+preceding deltas do not wait. A connection loss before native confirmation is a
+request-scoped error and is never replayed by CPA. Delivery cancellation after
+confirmed native completion is recorded as a delivery interruption, not a native
+model failure.
 
-The experimental response adapter buffers each native attempt and releases
-business output only after native success. Failed attempts remain diagnostic
-data. This avoids replaying text or tool calls into a client protocol that has
-no attempt-reset operation. SSE framing remains available, but time to first
-business output is delayed until the native model response completes. It is
-not token-by-token live delivery. The native request and recovery policy does
-not change with the downstream streaming choice.
+CPA retains basic response translation and usage extraction. Images retain
+their own result adapter rather than using Responses completion rules. Each
+worker invocation makes a native model call with its retry budgets set to zero:
+no worker recovery loop, retry after a 401, or WebSocket-to-HTTP replay. Normal
+Codex CLI entrypoints keep their official recovery behavior.
+
+Explicit native failures retain their status, body, headers, and typed error in
+the bridge protocol. They enter CPA's existing error, credential-selection, and
+retry handling. After Runtime is selected, subsequent CPA attempts remain on
+Runtime-owned credentials; a mixed pool cannot fall back to CPA model egress.
+Ambiguous IPC failure retains the existing no-replay classification. Once CPA
+has delivered business output, a stream failure terminates that stream and is
+returned to the client; it never concatenates another model attempt. The obsolete
+worker attempt notifications and CPA per-attempt body reconstruction are removed.
+
+Diagnostic consumers preserve CPA attempt order independently of business
+receipt. A later attempt can deliver model output while the previous attempt's
+logs are still draining. Failed-attempt logs remain attached to the correct
+request/response exchange.
 
 ## Native input compatibility
 
@@ -86,14 +102,8 @@ variant is not used by this entry. The declaration, partial-image events and
 results passed both the independent official comparison and real-worker tests
 against a mock upstream. This is not a live production service acceptance test.
 
-During recovery, newly generated client tool calls from a failed attempt remain
-uncommitted: they have not been delivered to the client and are not inserted as
-unpaired calls into recovery history. The caller's original call/result history
-is retained; the server never fabricates an aborted tool result. This explicitly
-excludes the full Agent's local tool execution and history behavior from the
-model-only comparison.
 
-The codex-server [input contract](https://github.com/power12317/codex-server/blob/834df84ff6186aae690751f3576b392fa0e92cb5/codex-rs/app-server/docs/cpa-native-model-runtime.md)
+The codex-server [input contract](https://github.com/power12317/codex-server/blob/codex/native-model-runtime/codex-rs/app-server/docs/cpa-native-model-runtime.md)
 provides the complete supported-field table and the native execution boundary.
 
 ## Test images and deployment
@@ -127,45 +137,73 @@ and communicates with CPA.
 
 ## Verification
 
-The matched worker commit is `834df84ff6186aae690751f3576b392fa0e92cb5`.
-Its final local macOS arm64 binary has SHA256
-`902df54637d8820621d78cb782b6d7bdc0ad9e08c6b9fe03c9e8eec292e9287c`.
-The independent official comparison used separate build directories and passed
-16 of 16 scenarios against commit
-`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`. The worker's
-[validation report](https://github.com/power12317/codex-server/blob/834df84ff6186aae690751f3576b392fa0e92cb5/codex-rs/app-server/docs/cpa-native-model-validation.md)
-records the reference preparation, exact comparison rules, original-source
-checks, model-only tool boundary and native component results.
+The official comparison baseline remains Codex `0.162.1`, commit
+`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`. The earlier native-entry comparison
+covered 16 scenarios using independent builds. This change intentionally differs
+in retry ownership, as requested: errors return to CPA instead of native recovery.
+It does not claim identical retry behavior to the ordinary official CLI.
 
-CPA verification on the same host:
+The streaming test first failed against CPA `c3cfdb3c` and worker `4d86a145`:
+the upstream sent `response.created` and paused, but the actual HTTP client
+received no headers before the 20-second test watchdog. The corrected contract
+is validated with phase barriers: a real HTTP client must receive the first
+event, each of three tool-argument deltas, tool-input done, and output-item done
+before the upstream is allowed to send completion. No server-side tool sentinel
+may be created.
+
+Error tests count actual upstream requests with provider retry budgets configured
+above zero to verify that the CPA native entry overrides them. They cover native
+HTTP and WebSocket errors before and after output, Images failures, cancellation,
+and rejected WebSocket handshakes. Handshake failures must not cause a second
+handshake or HTTP fallback. A separate CPA retry test uses a real HTTP client and
+a mock master: one Runtime credential fails, CPA selects another Runtime
+credential, and business output arrives while the first attempt's diagnostics
+are deliberately blocked. A local credential between the two remains unused.
+
+The real-worker matrices also cover Chat Completions, Images, Responses,
+streaming/nonstreaming formats, JSON/multipart image edits, native normalization,
+supported payload rules, Lite, compaction history, hosted images and partial
+events, caller tools/results, actual cancellation, unsupported inputs, and mixed
+credential pools. CPA's model transport is blocked and counted; model egress
+must remain zero. Prefixed WebSocket metadata verifies actual outgoing ticket
+bytes and correlated logs: `0/780` followed by `780/780` on the same connection.
+
+Blocked-diagnostic tests validate start, incremental body, and native completion
+independently of diagnostic callbacks. Actual HTTP JSON/SSE bytes are flushed
+before diagnostic finalization. Native success remains confirmed if downstream
+delivery is canceled afterwards.
+
+The final paired macOS arm64 worker binary reports `codex-app-server 0.162.1`
+and has SHA-256
+`5c30250a6bfb252cacfba04507a5dcdb7496ee98d811341831777a4dfaa8566d`.
+It includes the master correlation fix for repeated CPA request IDs while prior
+diagnostics are still open. CPA retains the original request ID externally; the
+master records its association with the existing internal worker RPC sequence.
+
+The zero-retry streaming candidate was verified with 92 of 92 real-worker leaf
+cases passing under the Go race detector. HTTP and WebSocket first-event times
+were approximately 7 ms and 85 ms in the local fixture; these are delivery
+measurements, not production model-latency guarantees. The independent delayed-
+diagnostics CPA retry tests passed for both account rotation and the same worker.
+The mixed-account test configured two CPA retries and observed three worker
+requests and zero CPA model requests.
 
 | Check | Result |
 | --- | --- |
-| Complete executor, executor helper and runtime IPC package tests | All three packages passed |
-| Runtime/IPC/logging regressions with the Go race detector | Passed |
-| Actual CPA handlers/executors to master and worker, HTTP/WS/native fallback | 114 leaf cases passed with `-race` against the final binary |
-| Server build | Passed |
-| Branch image workflow syntax | `actionlint` passed |
-| Compose image resolution | Both experimental package names verified |
-| Existing management toggle/reload tests | Targeted tests passed |
+| Executor, helpers, bridge, API handlers, OpenAI handlers, auth manager, logging: complete package tests with `-race` | All seven packages passed |
+| Updated CPA retry, route ownership and diagnostic lifecycle regressions with `-race` | Passed |
+| Real worker HTTP/WS/error/handshake matrix with `-race` | 92 leaf cases passed |
+| CPA retry while previous diagnostics are blocked, same account and account rotation | Passed |
+| Required server build, formatting and whitespace checks | Passed |
+| Middleware tests without `-race` | Passed |
+| Wider middleware race check | Existing failure, independently reproduced on the unmodified base |
 
-The real-worker matrices cover public Chat Completions and Images endpoints,
-Responses, streaming/nonstreaming client formats, JSON/multipart image edits,
-native input normalization, supported payload rules including verbosity, Lite,
-compaction history, hosted images and partial events, client function/custom
-calls and subsequent results, native partial-output recovery, actual cancellation
-of HTTP/WS upstream work, explicit unsupported fields, and a mixed credential
-pool that cannot fall back to CPA egress. All model requests are observed at the
-local upstream, and CPA's model transport is blocked and counted: its count must
-remain zero. Tool-name collision fixtures contain commands for a sentinel file;
-the file must remain absent.
-
-Diagnostic regressions check actual HTTP/WS transport reporting, readable
-logging of native zstd requests without changing transmitted bytes, routing
-metadata from WS frames or chunked/multiline SSE before completion, and no
-repeated business-body log. Failed-attempt diagnostics cannot overwrite the
-native final error. IPC loss cannot trigger outer CPA replay; final native bytes
-and completion are tested as one notification.
+The wider race check detected
+`TestRequestLoggingMiddleware_StreamingPreservesFullUUIDForLogger`: the existing
+`ResponseWriterWrapper.Finalize` and `processStreamingChunks` race on the stream
+channel field. It was reproduced from an untouched Git archive of `c3cfdb3c`,
+using the same test and race detector. This change does not modify that middleware;
+that race suite is not reported as passing.
 
 The wider management test selection has one pre-existing failure:
 `TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile/completed`. Its

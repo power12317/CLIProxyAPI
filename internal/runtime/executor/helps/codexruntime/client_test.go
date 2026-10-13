@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -77,7 +79,11 @@ func logBody(conn *websocket.Conn, body []byte) {
 }
 
 func complete(conn *websocket.Conn, body []byte) {
-	notify(conn, "cpa/inference/completed", map[string]any{"requestId": "req", "bodyBase64": body})
+	if len(body) > 0 {
+		notify(conn, "cpa/inference/event", map[string]any{"requestId": "req", "bodyBase64": body})
+	}
+	notify(conn, "cpa/inference/completed", map[string]any{"requestId": "req"})
+	notify(conn, "cpa/inference/diagnostics/completed", map[string]any{"requestId": "req"})
 }
 
 func dialMaster(t *testing.T, endpoint string) *Client {
@@ -168,6 +174,7 @@ func TestRawBodyFidelityAndOrderedLogsBeforeAcceptance(t *testing.T) {
 	if !bytes.Equal(got, raw) {
 		t.Fatal("raw SSE lost content")
 	}
+	client.WaitDiagnostics()
 	var kinds []string
 	var logged []byte
 	for _, entry := range logs {
@@ -216,15 +223,16 @@ func TestMasterPreservesLargeRequestsLogsAndBody(t *testing.T) {
 	if errStart := client.Start(req); errStart != nil {
 		t.Fatal("large request or upstream log rejected", errStart)
 	}
-	if !sawRequest {
-		t.Fatal("large upstream request log missing")
-	}
 	frame, errNext := client.Next()
 	if errNext != nil || string(frame.Body) != input {
 		t.Fatal("large response body changed or rejected", errNext)
 	}
 	if _, errNext = client.Next(); errNext != io.EOF {
 		t.Fatal("large request completion missing", errNext)
+	}
+	client.WaitDiagnostics()
+	if !sawRequest {
+		t.Fatal("large upstream request log missing")
 	}
 }
 
@@ -272,6 +280,7 @@ func TestUpstreamLogsDoNotCountAsUnrelatedNotifications(t *testing.T) {
 	if _, err := client.Next(); err != io.EOF {
 		t.Fatal(err)
 	}
+	client.WaitDiagnostics()
 	if count != 560 {
 		t.Fatalf("got %d logs, want 560", count)
 	}
@@ -282,6 +291,7 @@ func TestMasterRejectsOldProtocolAndParsedEventCapabilities(t *testing.T) {
 		func(c *Capabilities) { c.ProtocolVersion = 1 },
 		func(c *Capabilities) { c.ProtocolVersion = 2 },
 		func(c *Capabilities) { c.ProtocolVersion = 3 },
+		func(c *Capabilities) { c.ProtocolVersion = 4 },
 		func(c *Capabilities) { c.ExecutionMode = "agent" },
 		func(c *Capabilities) { c.RawBody = false },
 	} {
@@ -342,7 +352,7 @@ func TestMasterFinalErrorOverridesAttemptDiagnostics(t *testing.T) {
 						logBody(conn, []byte(": started\n\n"))
 					}
 					notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "response", StatusCode: 401, Body: "earlier auth attempt", Headers: http.Header{"X-Request-Id": {"earlier-attempt"}}})
-					params := map[string]any{"requestId": "req", "httpStatus": 429, "body": finalBody, "headers": headers, "message": "native execution failed"}
+					params := map[string]any{"requestId": "req", "httpStatus": 429, "body": finalBody, "headers": headers, "message": "native execution failed", "nativeError": map[string]string{"type": "usage_limit_reached"}}
 					if beforeStart {
 						_ = conn.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "native execution failed", "data": params}})
 					} else {
@@ -358,8 +368,11 @@ func TestMasterFinalErrorOverridesAttemptDiagnostics(t *testing.T) {
 					_, err = client.Next()
 				}
 				var native *Error
-				if !errors.As(err, &native) || native.StatusCode() != 429 || string(native.ResponseBody()) != finalBody {
+				if !errors.As(err, &native) || native.StatusCode() != 429 || string(native.ResponseBody()) != finalBody || string(native.NativeError) != `{"type":"usage_limit_reached"}` {
 					t.Fatalf("native final error replaced by attempt diagnostic: %#v", err)
+				}
+				if native.IsRequestScoped() || native.IsCodexReplayUnsafe() {
+					t.Fatal("explicit native error bypasses CPA retry policy")
 				}
 				if finalBody == "" && err.Error() != "native execution failed" {
 					t.Fatalf("native message replaced by diagnostic: %v", err)
@@ -491,12 +504,12 @@ func TestNativeInputValidationBelongsToWorker(t *testing.T) {
 	}
 }
 
-func TestNativeCompletionIncludesFinalBodyBeforeConnectionCloses(t *testing.T) {
+func TestNativeCompletionFollowsFinalBodyBeforeConnectionCloses(t *testing.T) {
 	final := []byte(`{"created":1,"data":[{"b64_json":"image"}]}`)
 	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 		accept(conn, m)
 		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "body", BodyBytes: final})
-		notify(conn, "cpa/inference/completed", map[string]any{"requestId": "req", "bodyBase64": final})
+		complete(conn, final)
 	})
 	client := dialMaster(t, endpoint)
 	var logged []byte
@@ -509,7 +522,94 @@ func TestNativeCompletionIncludesFinalBodyBeforeConnectionCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(&BodyReader{Client: client})
+	client.WaitDiagnostics()
 	if err != nil || !bytes.Equal(got, final) || !bytes.Equal(logged, final) {
 		t.Fatalf("confirmed native result changed on IPC close: body=%s logged=%s err=%v", got, logged, err)
 	}
+}
+
+func TestBusinessDeliveryDoesNotWaitForBlockedDiagnostics(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	nextPhase := make(chan struct{})
+	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
+		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "request"})
+		<-entered
+		accept(conn, m)
+		notify(conn, "cpa/inference/event", map[string]any{"requestId": "req", "bodyBase64": []byte("first")})
+		<-nextPhase
+		notify(conn, "cpa/inference/event", map[string]any{"requestId": "req", "bodyBase64": []byte("second")})
+		complete(conn, nil)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := Dial(ctx, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	client.OnUpstream = func(UpstreamLog) { close(entered); <-release }
+	if err = client.Start(request()); err != nil {
+		t.Fatal("acceptance waited for diagnostic consumption", err)
+	}
+	frame, err := client.Next()
+	if err != nil || string(frame.Body) != "first" {
+		t.Fatalf("first event waited for diagnostics: %q, %v", frame.Body, err)
+	}
+	close(nextPhase)
+	frame, err = client.Next()
+	if err != nil || string(frame.Body) != "second" {
+		t.Fatalf("increment waited for diagnostics: %q, %v", frame.Body, err)
+	}
+	if _, err = client.Next(); err != io.EOF {
+		t.Fatalf("native completion waited for diagnostics: %v", err)
+	}
+	select {
+	case <-client.diagnosticsDone:
+		t.Fatal("diagnostic callback was not actually blocked")
+	default:
+	}
+	unblock()
+	client.WaitDiagnostics()
+}
+
+func TestCancellationDoesNotRewriteConfirmedNativeSuccess(t *testing.T) {
+	confirmed := make(chan struct{})
+	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, rpc message) {
+		accept(conn, rpc)
+		notify(conn, "cpa/inference/event", map[string]any{"requestId": "req", "bodyBase64": []byte("final native event")})
+		notify(conn, "cpa/inference/completed", map[string]any{"requestId": "req"})
+		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "body"})
+		notify(conn, "cpa/inference/diagnostics/completed", map[string]any{"requestId": "req"})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := Dial(ctx, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	client.OnUpstream = func(UpstreamLog) { close(confirmed) }
+	if err = client.Start(request()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-confirmed:
+	case <-ctx.Done():
+		t.Fatal("native completion was not received")
+	}
+	cancel()
+	if !client.NativeCompleted() {
+		t.Fatal("cancellation rewrote native success")
+	}
+	frame, err := client.Next()
+	if err != nil || string(frame.Body) != "final native event" {
+		t.Fatalf("confirmed result lost during delivery cancellation: %q (%v)", frame.Body, err)
+	}
+	if _, err = client.Next(); err != io.EOF {
+		t.Fatalf("native success became cancellation: %v", err)
+	}
+	client.WaitDiagnostics()
 }

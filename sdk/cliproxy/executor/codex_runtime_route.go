@@ -7,7 +7,7 @@ import (
 
 type codexRuntimeRouteKey struct{}
 
-// WithCodexRuntimeRoute keeps image retries on the selected runtime transport.
+// WithCodexRuntimeRoute keeps retries on the selected runtime transport.
 func WithCodexRuntimeRoute(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()

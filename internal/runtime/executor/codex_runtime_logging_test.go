@@ -149,7 +149,7 @@ func TestCodexRuntimeLogsRawSSEWithoutDuplicatingEvents(t *testing.T) {
 			for _, b := range []byte(wire) {
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte{b}})
 			}
-			_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": []byte(wire)}})
+			runtimeTestBusiness(c, req, []byte(wire))
 		}, func(c *bridge.Capabilities) { c.UpstreamLogs, c.UpstreamBodyLogs = true, true })
 		e := runtimeTestExecutor(w)
 		e.cfg.RequestLog = true
