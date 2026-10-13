@@ -54,7 +54,7 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read", "cpa/credential/reload":
-				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, ExecutionMode: "inference-only", RawBody: true, NativeModelExecution: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}})
+				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}})
 			case "cpa/inference/start":
 				rpcCalls.Add(1)
 				latest, _ := codexshared.Read(path)

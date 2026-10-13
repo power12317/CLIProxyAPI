@@ -63,10 +63,6 @@ func runtimeImagePayload(t *testing.T, multipartEdit bool) ([]byte, string) {
 	return buf.Bytes(), w.FormDataContentType()
 }
 
-func runtimeImageComplete(c *websocket.Conn, req bridge.Request) {
-	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID}})
-}
-
 func runtimeImageResult(t *testing.T, auto *CodexAutoExecutor, ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, stream bool) ([]byte, error) {
 	t.Helper()
 	if !stream {
@@ -113,11 +109,10 @@ func TestCodexRuntimeImagesRouteAndFinalPayload(t *testing.T) {
 						}
 						_ = c.WriteJSON(map[string]any{"id": rpc.ID, "result": map[string]any{"requestId": req.RequestID, "statusCode": 200, "headers": http.Header{"Content-Type": {contentType}}}})
 						if stream {
-							runtimeTestBody(c, req, []byte("event: image_generation.partial_image\ndata: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"partial\"}\n\nevent: image_generation.completed\ndata: {\"type\":\"image_generation.completed\",\"b64_json\":\"final\"}\n\n"))
+							runtimeTestComplete(c, req, []byte("event: image_generation.partial_image\ndata: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"partial\"}\n\nevent: image_generation.completed\ndata: {\"type\":\"image_generation.completed\",\"b64_json\":\"final\"}\n\n"))
 						} else {
-							runtimeTestBody(c, req, []byte(`{"created":123,"data":[{"b64_json":"final"}]}`))
+							runtimeTestComplete(c, req, []byte(`{"created":123,"data":[{"b64_json":"final"}]}`))
 						}
-						runtimeImageComplete(c, req)
 					}, func(caps *bridge.Capabilities) {
 						caps.Operations = append(caps.Operations, "images/generations", "images/edits")
 					})
@@ -148,7 +143,7 @@ func TestCodexRuntimeImagesRouteAndFinalPayload(t *testing.T) {
 }
 
 func TestCodexRuntimeImagesFailuresNeverUseCPAUpstream(t *testing.T) {
-	for _, mode := range []string{"master_unavailable", "missing_capability", "old_builder_runtime", "worker_unavailable", "upstream_error", "cancel"} {
+	for _, mode := range []string{"master_unavailable", "missing_capability", "worker_unavailable", "upstream_error", "cancel"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream=%t", mode, stream), func(t *testing.T) {
 				var nativeCalls, masterCalls atomic.Int32
@@ -166,9 +161,6 @@ func TestCodexRuntimeImagesFailuresNeverUseCPAUpstream(t *testing.T) {
 					}
 					_ = c.WriteJSON(map[string]any{"id": rpc.ID, "error": map[string]any{"code": -32000, "message": mode, "data": map[string]any{"httpStatus": status, "body": `{"error":{"message":"controlled failure"}}`}}})
 				}, func(caps *bridge.Capabilities) {
-					if mode == "old_builder_runtime" {
-						caps.NativeModelExecution = false
-					}
 					if mode != "missing_capability" {
 						caps.Operations = append(caps.Operations, "images/generations", "images/edits")
 					}
@@ -189,7 +181,7 @@ func TestCodexRuntimeImagesFailuresNeverUseCPAUpstream(t *testing.T) {
 				if err == nil || nativeCalls.Load() != 0 {
 					t.Fatalf("native=%d master=%d err=%v", nativeCalls.Load(), masterCalls.Load(), err)
 				}
-				if (mode == "missing_capability" || mode == "old_builder_runtime") && masterCalls.Load() != 0 {
+				if mode == "missing_capability" && masterCalls.Load() != 0 {
 					t.Fatal("unsupported operation reached inference")
 				}
 			})
@@ -205,8 +197,10 @@ func TestCodexRuntimeImagesResponsesCompatibility(t *testing.T) {
 					t.Error("image Responses conversion lost")
 				}
 				runtimeTestAccept(c, rpc, req)
-				runtimeTestBody(c, req, []byte("data: {\"type\":\"response.image_generation_call.partial_image\",\"partial_image_b64\":\"part\"}\n\n"))
-				runtimeTestFinish(c, req, `{"type":"response.completed","response":{"created_at":1,"output":[{"type":"image_generation_call","result":"final","output_format":"png"}]}}`)
+				runtimeTestFinish(c, req,
+					`{"type":"response.image_generation_call.partial_image","partial_image_b64":"part"}`,
+					`{"type":"response.completed","response":{"created_at":1,"output":[{"type":"image_generation_call","result":"final","output_format":"png"}]}}`,
+				)
 			}, func(caps *bridge.Capabilities) { caps.Operations = append(caps.Operations, "images/generations") })
 			cfg := &config.Config{Codex: config.CodexConfig{Runtime: settings}}
 			runtimeImageAuth(t, cfg, auth)
@@ -247,21 +241,19 @@ func TestCodexRuntimeImagesPayloadBeforeWorkerNormalization(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeImagesPartialThenError(t *testing.T) {
-	for _, failure := range []string{"event_error", "transfer_error", "incomplete"} {
+func TestCodexRuntimeImagesFailedAttemptsDoNotDeliverPartialOutput(t *testing.T) {
+	for _, failure := range []string{"upstream_error", "transfer_error", "disconnect"} {
 		t.Run(failure, func(t *testing.T) {
 			var nativeCalls atomic.Int32
 			settings, auth := runtimeTestMaster(t, "partial.json", func(c *websocket.Conn, rpc runtimeTestRPC, req bridge.Request) {
-				runtimeTestAccept(c, rpc, req)
-				runtimeTestBody(c, req, []byte("data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"part\"}\n\n"))
-				switch failure {
-				case "event_error":
-					runtimeTestBody(c, req, []byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"image failed\",\"type\":\"server_error\"}}\n\n"))
-					runtimeImageComplete(c, req)
-				case "transfer_error":
-					_ = c.WriteJSON(map[string]any{"method": "cpa/inference/error", "params": map[string]any{"requestId": req.RequestID, "httpStatus": 502, "message": "image transfer truncated"}})
-				case "incomplete":
-					runtimeImageComplete(c, req)
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte("data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"part\"}\n\n")})
+				if failure == "disconnect" {
+					return
+				}
+				if failure == "upstream_error" {
+					runtimeTestNativeError(c, rpc, 429, `{"error":{"message":"image quota exceeded","type":"rate_limit_error"}}`)
+				} else {
+					runtimeTestNativeError(c, rpc, 502, `{"error":{"message":"image transfer truncated","type":"server_error"}}`)
 				}
 			}, func(caps *bridge.Capabilities) { caps.Operations = append(caps.Operations, "images/generations") })
 			cfg := &config.Config{Codex: config.CodexConfig{Runtime: settings}}
@@ -272,8 +264,8 @@ func TestCodexRuntimeImagesPartialThenError(t *testing.T) {
 			})))
 			payload, _ := runtimeImagePayload(t, false)
 			output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), ctx, auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, true), true)
-			if err == nil || !bytes.Contains(output, []byte("partial_image")) || nativeCalls.Load() != 0 {
-				t.Fatalf("partial/error lost or direct call made: output=%s error=%v native=%d", output, err, nativeCalls.Load())
+			if err == nil || len(output) != 0 || nativeCalls.Load() != 0 {
+				t.Fatalf("failed attempt delivered output or CPA sent upstream: output=%s error=%v native=%d", output, err, nativeCalls.Load())
 			}
 		})
 	}

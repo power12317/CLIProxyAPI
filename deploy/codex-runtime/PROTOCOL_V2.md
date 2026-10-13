@@ -1,6 +1,6 @@
 # CPA shared-credential bridge v2
 
-> Historical contract, superseded by [protocol v3](PROTOCOL_V3.md). Do not use
+> Historical contract, superseded by [native model runtime contract](../../docs/codex-native-model-runtime.md). Do not use
 > the worker, credential-file, or authentication configuration below for deployment.
 > Current deployment instructions are in [README_CN.md](README_CN.md).
 

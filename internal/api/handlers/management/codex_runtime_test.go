@@ -114,7 +114,7 @@ func runtimeMaster(t *testing.T, handle func(string, map[string]any) any) (strin
 				continue
 			case "initialize":
 			case "cpa/capabilities/read":
-				result = bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, ExecutionMode: "inference-only", RawBody: true, NativeModelExecution: true, ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
+				result = bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, ExecutionMode: "inference-only", RawBody: true, ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
 			default:
 				result = handle(msg.Method, msg.Params)
 			}
@@ -190,7 +190,7 @@ func TestCodexRuntimePreferencesSurviveGlobalToggleAndReloadCPA(t *testing.T) {
 			t.Errorf("unexpected RPC %s", method)
 		}
 		reloads.Add(1)
-		return bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, RawBody: true, NativeModelExecution: true, ExecutionMode: "inference-only"}
+		return bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, RawBody: true, ExecutionMode: "inference-only"}
 	})
 	h, path := runtimeHandler(t, false, endpoint)
 	other := bridge.CredentialPath(h.cfg, "组别/账号 B.json")

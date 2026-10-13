@@ -1,7 +1,7 @@
 # Plan B validation record
 
 > Historical test results for v1, not validation of the current v3 master design.
-> The current contract is [PROTOCOL_V3.md](PROTOCOL_V3.md); current deployment is
+> The current contract is [native model runtime contract](../../docs/codex-native-model-runtime.md); current deployment is
 > documented in [README_CN.md](README_CN.md).
 
 Date: 2026-09-27. CPA branch: `codex/plan-b-managed-auth`, based on `02a86349`.

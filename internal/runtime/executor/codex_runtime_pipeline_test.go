@@ -196,45 +196,38 @@ func TestCodexRuntimeResponseRestoresMultiAgentNamespace(t *testing.T) {
 
 func TestCodexRuntimeResponseClearsInvalidReasoningReplay(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		for _, rpcFailure := range []bool{false, true} {
-			t.Run(fmt.Sprintf("stream=%v/rpc=%v", stream, rpcFailure), func(t *testing.T) {
-				internalcache.ClearCodexReasoningReplayCache()
-				t.Cleanup(internalcache.ClearCodexReasoningReplayCache)
-				encrypted := validCodexReasoningEncryptedContentForTestSeed(9)
-				internalcache.CacheCodexReasoningReplayItem("gpt-5.4", "claude:pipeline-invalid:agent:main", []byte(`{"type":"reasoning","summary":[],"content":null,"encrypted_content":"`+encrypted+`"}`))
-				settings, auth := runtimeTestMaster(t, "replay", func(c *websocket.Conn, m runtimeTestRPC, request bridge.Request) {
-					if rpcFailure {
-						_ = c.WriteJSON(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "Invalid signature in thinking block", "data": map[string]any{"httpStatus": 400, "body": `{"error":{"message":"Invalid signature in thinking block","type":"invalid_request_error"}}`}}})
-						return
-					}
-					runtimeTestAccept(c, m, request)
-					runtimeTestNativeError(c, request, 400, `{"error":{"message":"Invalid signature in thinking block","type":"invalid_request_error"}}`)
-				})
-				opts := runtimeTestOptions()
-				opts.SourceFormat = sdktranslator.FormatClaude
-				req := coreexecutor.Request{Model: "gpt-5.4", Payload: []byte(`{"model":"gpt-5.4","metadata":{"user_id":"{\"device_id\":\"device\",\"account_uuid\":\"\",\"session_id\":\"pipeline-invalid\"}"},"messages":[{"role":"user","content":"next"}]}`)}
-				e := runtimeTestExecutor(settings)
-				var err error
-				if stream {
-					var result *coreexecutor.StreamResult
-					result, err = e.ExecuteStream(context.Background(), auth, req, opts)
-					if err == nil {
-						for chunk := range result.Chunks {
-							if chunk.Err != nil {
-								err = chunk.Err
-							}
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			internalcache.ClearCodexReasoningReplayCache()
+			t.Cleanup(internalcache.ClearCodexReasoningReplayCache)
+			encrypted := validCodexReasoningEncryptedContentForTestSeed(9)
+			internalcache.CacheCodexReasoningReplayItem("gpt-5.4", "claude:pipeline-invalid:agent:main", []byte(`{"type":"reasoning","summary":[],"content":null,"encrypted_content":"`+encrypted+`"}`))
+			settings, auth := runtimeTestMaster(t, "replay", func(c *websocket.Conn, m runtimeTestRPC, request bridge.Request) {
+				runtimeTestNativeError(c, m, 400, `{"error":{"message":"Invalid signature in thinking block","type":"invalid_request_error"}}`)
+			})
+			opts := runtimeTestOptions()
+			opts.SourceFormat = sdktranslator.FormatClaude
+			req := coreexecutor.Request{Model: "gpt-5.4", Payload: []byte(`{"model":"gpt-5.4","metadata":{"user_id":"{\"device_id\":\"device\",\"account_uuid\":\"\",\"session_id\":\"pipeline-invalid\"}"},"messages":[{"role":"user","content":"next"}]}`)}
+			e := runtimeTestExecutor(settings)
+			var err error
+			if stream {
+				var result *coreexecutor.StreamResult
+				result, err = e.ExecuteStream(context.Background(), auth, req, opts)
+				if err == nil {
+					for chunk := range result.Chunks {
+						if chunk.Err != nil {
+							err = chunk.Err
 						}
 					}
-				} else {
-					_, err = e.Execute(context.Background(), auth, req, opts)
 				}
-				if err == nil {
-					t.Fatal("expected invalid signature error")
-				}
-				if _, ok := internalcache.GetCodexReasoningReplayItem("gpt-5.4", "claude:pipeline-invalid:agent:main"); ok {
-					t.Fatal("CPA invalid-signature replay cleanup was skipped")
-				}
-			})
-		}
+			} else {
+				_, err = e.Execute(context.Background(), auth, req, opts)
+			}
+			if err == nil {
+				t.Fatal("expected invalid signature error")
+			}
+			if _, ok := internalcache.GetCodexReasoningReplayItem("gpt-5.4", "claude:pipeline-invalid:agent:main"); ok {
+				t.Fatal("CPA invalid-signature replay cleanup was skipped")
+			}
+		})
 	}
 }

@@ -1,6 +1,6 @@
 # CPA / Codex inference bridge v1
 
-> Historical contract, superseded by [protocol v3](PROTOCOL_V3.md). Do not use
+> Historical contract, superseded by [native model runtime contract](../../docs/codex-native-model-runtime.md). Do not use
 > this Unix-socket contract for deployment. Current deployment instructions are
 > in [README_CN.md](README_CN.md).
 

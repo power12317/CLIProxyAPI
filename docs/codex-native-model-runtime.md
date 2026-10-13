@@ -24,13 +24,12 @@ model invocation. It does not start an Agent tool loop.
 
 ## IPC boundary
 
-The WebSocket RPC endpoint remains unchanged; the branch uses protocol version
-4. The protocol version prevents both old-CPA/new-worker and new-CPA/old-worker
-combinations from accepting incompatible completion semantics. It also requires `nativeModelExecution: true`, together with
-`executionMode: "inference-only"` and `rawBody: true`. Here `rawBody` describes
-the byte framing of IPC output; it does not select an upstream HTTP sender.
-An older runtime fails capability negotiation with HTTP 502 and an explicit
-paired-upgrade message. No inference is submitted to that runtime.
+The WebSocket RPC endpoint remains unchanged; protocol version 4 describes the
+final business bytes carried by `cpa/inference/completed.bodyBase64`. Native
+model execution is the only implementation, with no execution selector or
+alternate bridge sender. The existing `executionMode: "inference-only"` and
+`rawBody: true` describe the model-only boundary and byte framing; they do not
+select a model transport. CPA and codex-server use this same message contract.
 
 `cpa/inference/upstream` is diagnostic data from actual native exchanges.
 Its `transport` field identifies `http` or `websocket`. With
@@ -39,13 +38,13 @@ Its `transport` field identifies `http` or `websocket`. With
 status codes are logged, but cannot replace the native executor's final state.
 The same request identifier associates CPA logs and the master/worker call.
 
-`cpa/inference/body` carries deliverable native output, not errors from an
-attempt that native execution is still recovering. The native final failure
-uses `cpa/inference/error`, or the start RPC error, with its own HTTP status,
-error body and safe response headers. CPA does not derive these from the last
+Native model failure and cancellation use the start RPC error, with the final
+HTTP status, error body and safe response headers. If the worker exits after
+the start reply but before completion, the master reports that interruption
+through `cpa/inference/error`. CPA does not derive final failure from the last
 failed attempt's diagnostics.
 
-`cpa/inference/completed` confirms native success. It may carry the final
+`cpa/inference/completed` confirms native success and carries the final
 `bodyBase64` bytes in the same notification. This makes the final output and
 success indivisible at the IPC boundary: a later connection close cannot turn
 that confirmed result into a failure. A close before confirmed completion is
@@ -94,7 +93,7 @@ is retained; the server never fabricates an aborted tool result. This explicitly
 excludes the full Agent's local tool execution and history behavior from the
 model-only comparison.
 
-The codex-server [input contract](https://github.com/power12317/codex-server/blob/01374b099f224c76b557530c2e74bb04f4930ac2/codex-rs/app-server/docs/cpa-native-model-runtime.md)
+The codex-server [input contract](https://github.com/power12317/codex-server/blob/834df84ff6186aae690751f3576b392fa0e92cb5/codex-rs/app-server/docs/cpa-native-model-runtime.md)
 provides the complete supported-field table and the native execution boundary.
 
 ## Test images and deployment
@@ -128,13 +127,13 @@ and communicates with CPA.
 
 ## Verification
 
-The matched worker commit is `01374b099f224c76b557530c2e74bb04f4930ac2`.
+The matched worker commit is `834df84ff6186aae690751f3576b392fa0e92cb5`.
 Its final local macOS arm64 binary has SHA256
-`6a19b9f60647fd5fe2a2a04b31644e1fc775b1ae3437183e6467b5801fef3f64`.
+`902df54637d8820621d78cb782b6d7bdc0ad9e08c6b9fe03c9e8eec292e9287c`.
 The independent official comparison used separate build directories and passed
 16 of 16 scenarios against commit
 `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`. The worker's
-[validation report](https://github.com/power12317/codex-server/blob/01374b099f224c76b557530c2e74bb04f4930ac2/codex-rs/app-server/docs/cpa-native-model-validation.md)
+[validation report](https://github.com/power12317/codex-server/blob/834df84ff6186aae690751f3576b392fa0e92cb5/codex-rs/app-server/docs/cpa-native-model-validation.md)
 records the reference preparation, exact comparison rules, original-source
 checks, model-only tool boundary and native component results.
 

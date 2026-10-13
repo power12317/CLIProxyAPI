@@ -52,7 +52,7 @@ func serveMaster(t *testing.T, caps Capabilities, handle func(*websocket.Conn, m
 func validCaps() Capabilities {
 	return Capabilities{
 		ProtocolVersion: ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha",
-		ExecutionMode: "inference-only", RawBody: true, NativeModelExecution: true, Operations: []string{"responses"},
+		ExecutionMode: "inference-only", RawBody: true, Operations: []string{"responses"},
 		ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true,
 	}
 }
@@ -72,9 +72,12 @@ func notify(conn *websocket.Conn, method string, params any) {
 	_ = conn.WriteJSON(map[string]any{"method": method, "params": params})
 }
 
-func sendBody(conn *websocket.Conn, body []byte) {
+func logBody(conn *websocket.Conn, body []byte) {
 	notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "body", BodyBytes: body})
-	notify(conn, "cpa/inference/body", map[string]any{"requestId": "req", "bodyBase64": body})
+}
+
+func complete(conn *websocket.Conn, body []byte) {
+	notify(conn, "cpa/inference/completed", map[string]any{"requestId": "req", "bodyBase64": body})
 }
 
 func dialMaster(t *testing.T, endpoint string) *Client {
@@ -101,7 +104,7 @@ func TestMasterPreservesCredentialIDsWithoutSeparateAccountIdentity(t *testing.T
 		}
 		seen <- params
 		accept(conn, m)
-		notify(conn, "cpa/inference/completed", map[string]string{"requestId": "req"})
+		complete(conn, []byte{})
 	})
 	for _, credentialID := range []string{"Group/Account-A.json", "group/account-a.json"} {
 		client := dialMaster(t, endpoint)
@@ -133,14 +136,14 @@ func TestRawBodyFidelityAndOrderedLogsBeforeAcceptance(t *testing.T) {
 	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "request", URL: "https://chatgpt.com/backend-api/codex/responses", Method: "POST", Headers: http.Header{"x-source": {"actual"}}, Body: `{"input":[]}`})
 		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "response", StatusCode: 201, Headers: http.Header{"x-request-id": {"upstream"}}})
-		sendBody(conn, chunks[0])
-		// A later log must remain behind the body that preceded it.
+		logBody(conn, chunks[0])
+		// Attempt logs retain their order before the final business result.
 		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "error", Message: "diagnostic"})
 		accept(conn, m)
 		for _, chunk := range chunks[1:] {
-			sendBody(conn, chunk)
+			logBody(conn, chunk)
 		}
-		notify(conn, "cpa/inference/completed", map[string]string{"requestId": "req"})
+		complete(conn, raw)
 	})
 	client := dialMaster(t, endpoint)
 	var logs []UpstreamLog
@@ -154,17 +157,11 @@ func TestRawBodyFidelityAndOrderedLogsBeforeAcceptance(t *testing.T) {
 	if client.Headers.Get("Set-Cookie") != "" || client.Headers.Get("Authorization") != "" {
 		t.Fatal("private headers exposed", client.Headers)
 	}
-	var got []byte
-	for _, want := range chunks {
-		frame, err := client.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(frame.Body, want) {
-			t.Fatalf("chunk changed: got %q, want %q", frame.Body, want)
-		}
-		got = append(got, frame.Body...)
+	frame, err := client.Next()
+	if err != nil {
+		t.Fatal(err)
 	}
+	got := frame.Body
 	if _, err := client.Next(); err != io.EOF {
 		t.Fatalf("completed without parsing a model terminal = %v", err)
 	}
@@ -201,8 +198,8 @@ func TestMasterPreservesLargeRequestsLogsAndBody(t *testing.T) {
 		}
 		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: req.RequestID, Kind: "request", Body: string(body)})
 		accept(conn, m)
-		sendBody(conn, []byte(input))
-		notify(conn, "cpa/inference/completed", map[string]string{"requestId": req.RequestID})
+		logBody(conn, []byte(input))
+		complete(conn, []byte(input))
 	})
 	client := dialMaster(t, endpoint)
 	sawRequest := false
@@ -235,19 +232,18 @@ func TestBodyIsNotParsedAsResponsesEvents(t *testing.T) {
 	payload := []byte("data: {\"type\":\"response.completed\"}\n\ndata: {\"type\":\"function_call\",\"arguments\":\"invalid {\"}\n\n")
 	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 		accept(conn, m)
-		sendBody(conn, payload)
-		sendBody(conn, []byte{0xff, 0x00})
-		notify(conn, "cpa/inference/completed", map[string]string{"requestId": "req"})
+		logBody(conn, payload)
+		logBody(conn, []byte{0xff, 0x00})
+		complete(conn, append(append([]byte{}, payload...), 0xff, 0x00))
 	})
 	client := dialMaster(t, endpoint)
 	if err := client.Start(request()); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range [][]byte{payload, {0xff, 0x00}} {
-		frame, err := client.Next()
-		if err != nil || !bytes.Equal(frame.Body, want) {
-			t.Fatalf("body interpreted by bridge: %q, %v", frame.Body, err)
-		}
+	want := append(append([]byte{}, payload...), 0xff, 0x00)
+	frame, err := client.Next()
+	if err != nil || !bytes.Equal(frame.Body, want) {
+		t.Fatalf("body interpreted by bridge: %q, %v", frame.Body, err)
 	}
 	if _, err := client.Next(); err != io.EOF {
 		t.Fatal(err)
@@ -265,7 +261,7 @@ func TestUpstreamLogsDoNotCountAsUnrelatedNotifications(t *testing.T) {
 			notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "request"})
 			notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "response", StatusCode: 200})
 		}
-		notify(conn, "cpa/inference/completed", map[string]string{"requestId": "req"})
+		complete(conn, []byte{})
 	})
 	client := dialMaster(t, endpoint)
 	count := 0
@@ -288,7 +284,6 @@ func TestMasterRejectsOldProtocolAndParsedEventCapabilities(t *testing.T) {
 		func(c *Capabilities) { c.ProtocolVersion = 3 },
 		func(c *Capabilities) { c.ExecutionMode = "agent" },
 		func(c *Capabilities) { c.RawBody = false },
-		func(c *Capabilities) { c.NativeModelExecution = false },
 	} {
 		caps := validCaps()
 		change(&caps)
@@ -304,15 +299,15 @@ func TestMasterRejectsOldProtocolAndParsedEventCapabilities(t *testing.T) {
 }
 
 func TestBrokenBodyStreamIsARequestScopedError(t *testing.T) {
-	for _, mode := range []string{"disconnect", "wrong-request", "old-event"} {
+	for _, mode := range []string{"disconnect", "wrong-request", "unknown-notification"} {
 		t.Run(mode, func(t *testing.T) {
 			endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 				accept(conn, m)
 				switch mode {
 				case "wrong-request":
-					notify(conn, "cpa/inference/body", map[string]any{"requestId": "other", "bodyBase64": []byte("data")})
-				case "old-event":
-					notify(conn, "cpa/inference/event", map[string]any{"requestId": "req", "event": map[string]string{"type": "response.created"}})
+					notify(conn, "cpa/inference/completed", map[string]any{"requestId": "other", "bodyBase64": []byte("data")})
+				case "unknown-notification":
+					notify(conn, "cpa/inference/unknown", map[string]any{"requestId": "req", "event": map[string]string{"type": "response.created"}})
 				}
 			})
 			client := dialMaster(t, endpoint)
@@ -344,7 +339,7 @@ func TestMasterFinalErrorOverridesAttemptDiagnostics(t *testing.T) {
 				endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 					if !beforeStart {
 						accept(conn, m)
-						sendBody(conn, []byte(": started\n\n"))
+						logBody(conn, []byte(": started\n\n"))
 					}
 					notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "response", StatusCode: 401, Body: "earlier auth attempt", Headers: http.Header{"X-Request-Id": {"earlier-attempt"}}})
 					params := map[string]any{"requestId": "req", "httpStatus": 429, "body": finalBody, "headers": headers, "message": "native execution failed"}
@@ -358,9 +353,6 @@ func TestMasterFinalErrorOverridesAttemptDiagnostics(t *testing.T) {
 				err := client.Start(request())
 				if !beforeStart {
 					if err != nil {
-						t.Fatal(err)
-					}
-					if _, err = client.Next(); err != nil {
 						t.Fatal(err)
 					}
 					_, err = client.Next()
@@ -383,15 +375,12 @@ func TestMasterFinalErrorOverridesAttemptDiagnostics(t *testing.T) {
 func TestTransportStreamErrorIsNotNormalEOF(t *testing.T) {
 	endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 		accept(conn, m)
-		sendBody(conn, []byte("data: partial"))
+		logBody(conn, []byte("data: partial"))
 		notify(conn, "cpa/inference/upstream", UpstreamLog{RequestID: "req", Kind: "error", Message: "upstream stream reset"})
 		notify(conn, "cpa/inference/error", map[string]any{"requestId": "req", "httpStatus": 502, "message": "upstream stream reset"})
 	})
 	client := dialMaster(t, endpoint)
 	if err := client.Start(request()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Next(); err != nil {
 		t.Fatal(err)
 	}
 	_, err := client.Next()

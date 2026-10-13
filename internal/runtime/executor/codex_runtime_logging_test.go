@@ -147,9 +147,9 @@ func TestCodexRuntimeLogsRawSSEWithoutDuplicatingEvents(t *testing.T) {
 			runtimeTestAccept(c, m, req)
 			// Body chunks are independent of SSE lines and may split UTF-8 bytes.
 			for _, b := range []byte(wire) {
-				runtimeTestBody(c, req, []byte{b})
+				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte{b}})
 			}
-			runtimeTestFinish(c, req)
+			_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": []byte(wire)}})
 		}, func(c *bridge.Capabilities) { c.UpstreamLogs, c.UpstreamBodyLogs = true, true })
 		e := runtimeTestExecutor(w)
 		e.cfg.RequestLog = true
@@ -194,9 +194,10 @@ func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 				}
 				// The worker reports the request node when this response has no routing cookie.
 				runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "response", StatusCode: 200, OaiLBNode: request.OaiLBNode})
-				runtimeTestAccept(c, m, req)
 				if mode == "failed-event" {
-					runtimeTestNativeError(c, req, 429, `{"error":{"type":"rate_limit_error","message":"out of capacity"}}`)
+					runtimeTestNativeError(c, m, 429, `{"error":{"type":"rate_limit_error","message":"out of capacity"}}`)
+				} else {
+					runtimeTestAccept(c, m, req)
 				}
 			})
 			e := runtimeTestExecutor(w)

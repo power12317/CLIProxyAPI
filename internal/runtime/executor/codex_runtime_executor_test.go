@@ -58,7 +58,7 @@ func runtimeTestMaster(t *testing.T, id string, handle func(*websocket.Conn, run
 				_ = c.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read":
-				caps := bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha", ExecutionMode: "inference-only", RawBody: true, NativeModelExecution: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
+				caps := bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha", ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
 				for _, apply := range customize {
 					apply(&caps)
 				}
@@ -88,19 +88,20 @@ func runtimeTestAuth(id string) *coreauth.Auth {
 func runtimeTestAccept(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 	_ = c.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{"requestId": req.RequestID, "statusCode": 200, "headers": http.Header{"Content-Type": {"text/event-stream"}, "Set-Cookie": {"synthetic-secret"}, "X-Request-Id": {"upstream-id"}}}})
 }
-func runtimeTestBody(c *websocket.Conn, req bridge.Request, body []byte) {
+func runtimeTestComplete(c *websocket.Conn, req bridge.Request, body []byte) {
 	runtimeLogNotification(c, req, bridge.UpstreamLog{Kind: "body", BodyBytes: body})
-	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/body", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": body}})
+	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID, "bodyBase64": body}})
 }
 func runtimeTestFinish(c *websocket.Conn, req bridge.Request, events ...string) {
+	body := []byte{}
 	for _, event := range events {
-		runtimeTestBody(c, req, []byte("data: "+event+"\n\n"))
+		body = append(body, []byte("data: "+event+"\n\n")...)
 	}
-	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/completed", "params": map[string]any{"requestId": req.RequestID}})
+	runtimeTestComplete(c, req, body)
 }
-func runtimeTestNativeError(c *websocket.Conn, req bridge.Request, status int, body string) {
-	_ = c.WriteJSON(map[string]any{"method": "cpa/inference/error", "params": map[string]any{
-		"requestId": req.RequestID, "httpStatus": status, "body": body, "message": "native model execution failed",
+func runtimeTestNativeError(c *websocket.Conn, rpc runtimeTestRPC, status int, body string) {
+	_ = c.WriteJSON(map[string]any{"id": rpc.ID, "error": map[string]any{
+		"code": -32000, "message": "native model execution failed", "data": map[string]any{"httpStatus": status, "body": body},
 	}})
 }
 
@@ -290,8 +291,7 @@ func TestCodexRuntimeAmbiguousFailureDoesNotReplay(t *testing.T) {
 func TestCodexRuntimeFailedNativeResponseRetainsDetails(t *testing.T) {
 	terminal := `{"type":"response.failed","response":{"id":"failed","status":"failed","error":{"code":"model_failure","message":"synthetic failure"},"output":[]}}`
 	w, a := runtimeTestMaster(t, "failed", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
-		runtimeTestAccept(c, m, r)
-		runtimeTestNativeError(c, r, 502, terminal)
+		runtimeTestNativeError(c, m, 502, terminal)
 	})
 	_, err := runtimeTestExecutor(w).Execute(context.Background(), a, coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{}`)}, runtimeTestOptions())
 	var failure *bridge.Error
@@ -304,7 +304,7 @@ func TestCodexRuntimeCancellationReleasesBlockedStream(t *testing.T) {
 	closed := make(chan struct{})
 	w, a := runtimeTestMaster(t, "cancel", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
 		runtimeTestAccept(c, m, r)
-		runtimeTestBody(c, r, []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"part\"}\n\n"))
+		runtimeLogNotification(c, r, bridge.UpstreamLog{Kind: "body", BodyBytes: []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"part\"}\n\n")})
 		_, _, _ = c.ReadMessage()
 		close(closed)
 	})
@@ -355,15 +355,12 @@ func TestCodexRuntimeMasterRoutesOriginalCredentialIDsConcurrently(t *testing.T)
 	}
 }
 
-func TestCodexRuntimeRawBodyChunkingAndMultilineSSE(t *testing.T) {
+func TestCodexRuntimeCompletedBodyPreservesMultilineSSE(t *testing.T) {
 	wire := ": comment\r\nevent: future\r\nid: id-kept\r\ndata: {\r\ndata: \"type\":\"response.future_extension\",\"delta\":\"你好\"}\r\n\r\ndata: " + runtimeTerminal + "\n\n: final partial line"
 	for _, stream := range []bool{true, false} {
 		cfg, auth := runtimeTestMaster(t, "Original File.json", func(c *websocket.Conn, m runtimeTestRPC, r bridge.Request) {
 			runtimeTestAccept(c, m, r)
-			for _, b := range []byte(wire) {
-				runtimeTestBody(c, r, []byte{b})
-			}
-			runtimeTestFinish(c, r)
+			runtimeTestComplete(c, r, []byte(wire))
 		})
 		executor := runtimeTestExecutor(cfg)
 		req := coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{"input":[]}`)}

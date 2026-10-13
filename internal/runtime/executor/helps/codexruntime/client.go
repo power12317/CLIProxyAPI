@@ -33,16 +33,15 @@ func fail(status int, message string) error { return &Error{Status: status, Mess
 
 // Capabilities describes the master shared by all managed credentials.
 type Capabilities struct {
-	ProtocolVersion      int      `json:"protocolVersion"`
-	RuntimeVersion       string   `json:"runtimeVersion"`
-	UpstreamRevision     string   `json:"upstreamRevision"`
-	ExecutionMode        string   `json:"executionMode"`
-	NativeModelExecution bool     `json:"nativeModelExecution"`
-	RawBody              bool     `json:"rawBody"`
-	Operations           []string `json:"operations"`
-	ManualOAuth          bool     `json:"manualOAuth"`
-	UpstreamLogs         bool     `json:"upstreamLogs"`
-	UpstreamBodyLogs     bool     `json:"upstreamBodyLogs"`
+	ProtocolVersion  int      `json:"protocolVersion"`
+	RuntimeVersion   string   `json:"runtimeVersion"`
+	UpstreamRevision string   `json:"upstreamRevision"`
+	ExecutionMode    string   `json:"executionMode"`
+	RawBody          bool     `json:"rawBody"`
+	Operations       []string `json:"operations"`
+	ManualOAuth      bool     `json:"manualOAuth"`
+	UpstreamLogs     bool     `json:"upstreamLogs"`
+	UpstreamBodyLogs bool     `json:"upstreamBodyLogs"`
 }
 
 // UpstreamLog describes an actual native transport attempt made by the worker.
@@ -142,10 +141,6 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	if c.Caps.ProtocolVersion != ProtocolVersion || c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawBody {
 		c.Close()
 		return nil, fail(502, fmt.Sprintf("Codex runtime protocol or capabilities mismatch (requires protocol %d, got %d); upgrade CPA and codex-server together", ProtocolVersion, c.Caps.ProtocolVersion))
-	}
-	if !c.Caps.NativeModelExecution {
-		c.Close()
-		return nil, fail(502, "Codex runtime requires nativeModelExecution; upgrade CPA and codex-server together")
 	}
 	return c, nil
 }
@@ -335,11 +330,6 @@ func (c *Client) Next() (Frame, error) {
 				}
 			}
 			return Frame{}, c.remoteError(status, p.Message, body, p.Headers)
-		case "cpa/inference/body":
-			if c.OnUpstream != nil && !c.Caps.UpstreamBodyLogs {
-				c.OnUpstream(UpstreamLog{RequestID: p.RequestID, Kind: "body", BodyBytes: p.BodyBytes})
-			}
-			return Frame{Body: p.BodyBytes}, nil
 		default:
 			return Frame{}, fail(502, "Unknown Codex runtime inference notification")
 		}

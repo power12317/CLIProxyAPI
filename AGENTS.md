@@ -43,6 +43,8 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 
 ## Code Conventions
 - Keep changes small and simple (KISS)
+- Preserve all native Codex executable, product, client, and version identifiers exactly as emitted by the corresponding official release for the same entrypoint and target platform. Do not invent names, version numbers, suffixes, or display overrides.
+- Verify Codex identity against official build output when changing runtime integration or packaging. Use the intended official entrypoint; never rename another binary or rewrite its version output to impersonate it. Bridge protocol versions and container image coordinates must not replace native product or version metadata.
 - Comments in English only
 - If editing code that already contains non-English comments, translate them to English (don’t add new non-English comments)
 - For user-visible strings, keep the existing language used in that file/area

@@ -75,7 +75,7 @@ stores are outside this test branch. Ordinary Responses HTTP/SSE is the implemen
 bridge operation; protocol capability negotiation declares the available operations.
 
 Use the generic [Compose overlay](compose.override.yaml) with your privately maintained deployment configuration.
-The exact frozen wire contract is [PROTOCOL_V3.md](PROTOCOL_V3.md). Earlier protocol
-and validation documents are historical and do not establish v3 test results.
+The exact frozen wire contract is [native model runtime contract](../../docs/codex-native-model-runtime.md). Earlier protocol
+and validation documents are historical and do not describe this branch's current execution behavior.
 Pushes to each development branch trigger its Docker build. Delivery confirms the
 push and Actions trigger without waiting for the build, as requested by the user.

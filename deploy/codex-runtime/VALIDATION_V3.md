@@ -1,7 +1,10 @@
 # Plan B master protocol v3 validation
 
-This record applies to the `V3-SEP-20260927` master/account-process design. It
-supersedes the v1/v2 validation records for current deployment decisions.
+> Historical validation of the replaced bridge sender. For this branch, use the
+> [native model runtime validation](../../docs/codex-native-model-runtime.md#verification).
+
+This record applies to the `V3-SEP-20260927` master/account-process design. These
+results describe the retired implementation only.
 
 ## CPA checks
 
