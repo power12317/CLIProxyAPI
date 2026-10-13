@@ -171,8 +171,8 @@ func (l *CodexRuntimeLog) Flush() {
 
 func (l *CodexRuntimeLog) finish() {
 	l.finishOnce.Do(func() {
-		l.joinPrevious()
 		<-l.executionDone
+		l.joinPrevious()
 		if l.wait != nil {
 			l.wait()
 		}
@@ -192,6 +192,7 @@ func (l *CodexRuntimeLog) joinPrevious() {
 	l.previousOnce.Do(func() {
 		if l.previous != nil {
 			l.previous()
+			l.previous = nil
 		}
 	})
 }

@@ -77,6 +77,19 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
 	liveStream := newNativeRuntimeStreamProbe()
 	t.Cleanup(liveStream.close)
+	liveWebsocket := newNativeRuntimeStreamProbe()
+	t.Cleanup(liveWebsocket.close)
+	liveForcedWebsocket := newNativeRuntimeStreamProbe()
+	t.Cleanup(liveForcedWebsocket.close)
+	streamProbe := func(body []byte) *nativeRuntimeStreamProbe {
+		if bytes.Contains(body, []byte("live-tool-stream-forced-ws")) {
+			return liveForcedWebsocket
+		}
+		if bytes.Contains(body, []byte("live-tool-stream-ws")) {
+			return liveWebsocket
+		}
+		return liveStream
+	}
 	responseEvents := func(body []byte) ([][]byte, bool) {
 		events := nativeRuntimeResponseEvents(t, home, body)
 		if bytes.Contains(body, []byte("routing-ticket-probe")) {
@@ -128,8 +141,8 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":503,"error":{"message":"controlled native pre-output failure","type":"server_error","code":"server_error"}}`))
 					return
 				}
-				if bytes.Contains(body, []byte("live-tool-stream")) {
-					liveStream.serve(r.Context(), func(event []byte) error {
+				if bytes.Contains(body, []byte("live-tool-stream")) && !bytes.Contains(body, []byte("independent-followup")) {
+					streamProbe(body).serve(r.Context(), func(event []byte) error {
 						return conn.WriteMessage(websocket.TextMessage, event)
 					})
 					continue
@@ -199,8 +212,8 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				return
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			if bytes.Contains(body, []byte("live-tool-stream")) {
-				liveStream.serve(r.Context(), func(event []byte) error {
+			if bytes.Contains(body, []byte("live-tool-stream")) && !bytes.Contains(body, []byte("independent-followup")) {
+				streamProbe(body).serve(r.Context(), func(event []byte) error {
 					_, errWrite := fmt.Fprintf(w, "data: %s\n\n", event)
 					w.(http.Flusher).Flush()
 					return errWrite
@@ -334,6 +347,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	router.POST("/v1/chat/completions", handler.ChatCompletions)
 	responsesHandler := openaihandlers.NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager))
 	router.POST("/v1/responses", responsesHandler.Responses)
+	router.GET("/v1/responses", responsesHandler.ResponsesWebsocket)
 	if strings.HasPrefix(nativeTransport, "handshake-") {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("handshake_error_reaches_client/stream=%t", stream), func(t *testing.T) {
@@ -417,6 +431,23 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		}
 		readExchange(t)
 	})
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprintf("live_WebSocket_client/force=%t", force), func(t *testing.T) {
+			cfg.CodexForceWebsocket = force
+			defer func() { cfg.CodexForceWebsocket = false }()
+			marker, probe := "live-tool-stream-ws", liveWebsocket
+			if force {
+				marker, probe = "live-tool-stream-forced-ws", liveForcedWebsocket
+			}
+			before := workerCalls.Load()
+			testNativeRuntimeLiveWebsocket(t, router, probe, home, marker)
+			if workerCalls.Load() != before+2 || cpaCalls.Load() != 0 {
+				t.Fatalf("unexpected WebSocket model egress: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+			}
+			readExchange(t)
+			readExchange(t)
+		})
+	}
 	if nativeTransport == "websocket" {
 		t.Run("prefixed_turn_state_survives_live_delivery", func(t *testing.T) {
 			beforeCalls, beforeConnections := workerCalls.Load(), websocketAttempts.Load()

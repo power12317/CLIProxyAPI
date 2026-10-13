@@ -274,6 +274,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	diagnosticCtx, finishDiagnostics := logging.WithBackgroundDiagnosticFinalizers(c.Request.Context())
+	c.Request = c.Request.WithContext(diagnosticCtx)
+	defer finishDiagnostics(func() {})
 	var duplexInput <-chan cliproxyexecutor.WebsocketInput
 	if h != nil && h.Cfg != nil && h.Cfg.CodexResponseSteering && !h.Cfg.CodexBasispoints {
 		socketCtx, cancelSocket := context.WithCancel(c.Request.Context())
@@ -697,7 +700,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 
 		modelName := gjson.GetBytes(requestJSON, "model").String()
 		lastAttemptedAuthID := pinnedAuthID
-		attemptedUpstreamMode := responsesWebsocketUpstreamModeUnknown
+		var attemptedUpstreamMode atomic.Value
+		attemptedUpstreamMode.Store(responsesWebsocketUpstreamModeUnknown)
 		selectedAuthObserved := false
 		nativeRequest := util.IsCodexResponsesLiteRequest(payload, c.Request.Header)
 		var preserveNativeOutput atomic.Bool
@@ -717,10 +721,14 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		}
 		cliCtx = handlers.WithExecutionSessionID(cliCtx, passthroughSessionID)
 		cliCtx = cliproxyexecutor.WithUpstreamTransportCallback(cliCtx, func(websocket bool) {
-			attemptedUpstreamMode = responsesWebsocketUpstreamModeHTTP
-			if websocket {
-				attemptedUpstreamMode = responsesWebsocketUpstreamModeWS
+			if cliCtx.Err() != nil {
+				return
 			}
+			mode := responsesWebsocketUpstreamModeHTTP
+			if websocket {
+				mode = responsesWebsocketUpstreamModeWS
+			}
+			attemptedUpstreamMode.Store(mode)
 			codexDuplexStream.Store(websocket && duplexInput != nil)
 		})
 		cliCtx = handlers.WithSelectedAuthIDCallback(cliCtx, func(authID string) {
@@ -737,8 +745,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			if !ok || selectedAuth == nil {
 				return
 			}
-			attemptedUpstreamMode = upstreamModeForAuth(selectedAuth)
-			codexDuplexStream.Store(duplexInput != nil && attemptedUpstreamMode == responsesWebsocketUpstreamModeWS && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
+			mode := upstreamModeForAuth(selectedAuth)
+			attemptedUpstreamMode.Store(mode)
+			codexDuplexStream.Store(duplexInput != nil && mode == responsesWebsocketUpstreamModeWS && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 			preserveNativeOutput.Store(nativeRequest && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 		})
 		executionAuthID := ""
@@ -755,7 +764,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		if !selectedAuthObserved {
 			// Plugin/alternate routes bypass auth selection. Keep canonical HTTP-mode
 			// state instead of inheriting the previous pinned websocket mode.
-			attemptedUpstreamMode = responsesWebsocketUpstreamModeHTTP
+			attemptedUpstreamMode.Store(responsesWebsocketUpstreamModeHTTP)
 		}
 		// A connection-scoped continuation cannot rotate credentials in place. Suppress
 		// credential errors and make the client replay the full turn on a new socket.
@@ -812,7 +821,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 
 		toolCacheTurn.commit()
 		pendingPrewarmID = ""
-		upstreamMode = attemptedUpstreamMode
+		upstreamMode, _ = attemptedUpstreamMode.Load().(string)
 		if upstreamMode == responsesWebsocketUpstreamModeWS && !forceBridge {
 			upstreamWebsocketAuthID = lastAttemptedAuthID
 			if lastAttemptedAuthID != "" {

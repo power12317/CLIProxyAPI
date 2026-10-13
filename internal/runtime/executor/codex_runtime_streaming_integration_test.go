@@ -155,6 +155,88 @@ func testNativeRuntimeLiveHTTP(t *testing.T, handler http.Handler, probe *native
 	}
 }
 
+func testNativeRuntimeLiveWebsocket(t *testing.T, handler http.Handler, probe *nativeRuntimeStreamProbe, home, marker string) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	defer probe.close()
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	started := time.Now()
+	if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "gpt-6.1-sol", "input": []any{map[string]any{"role": "user", "content": marker}}, "tools": []any{map[string]any{"type": "custom", "name": "exec", "format": map[string]any{"type": "text"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(event any) {
+		t.Helper()
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case probe.events <- data:
+		case <-ctx.Done():
+			t.Fatal("upstream WebSocket test did not reach the next phase", ctx.Err())
+		}
+	}
+	receive := func(kind string) []byte {
+		t.Helper()
+		_, body, err := conn.ReadMessage()
+		if err != nil || gjson.GetBytes(body, "type").String() != kind {
+			t.Fatalf("WebSocket client did not receive %s before the next upstream phase: %s (%v)", kind, body, err)
+		}
+		return body
+	}
+	send(map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_ws_live", "status": "in_progress"}})
+	receive("response.created")
+	t.Logf("WebSocket client first event at %s; upstream completion not released", time.Since(started))
+	item := map[string]any{"type": "custom_tool_call", "id": "ctc_ws_live", "call_id": "call_ws_live", "name": "exec", "input": "", "status": "in_progress"}
+	send(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": item})
+	receive("response.output_item.added")
+	parts := []string{"touch ", filepath.Join(home, "must-not-be-created"), " # caller only"}
+	for index, part := range parts {
+		send(map[string]any{"type": "response.custom_tool_call_input.delta", "output_index": 0, "item_id": "ctc_ws_live", "delta": part})
+		body := receive("response.custom_tool_call_input.delta")
+		if gjson.GetBytes(body, "delta").String() != part {
+			t.Fatalf("WebSocket tool delta changed: %s", body)
+		}
+		t.Logf("WebSocket client delta %d received before next phase and completion", index+1)
+	}
+	input := strings.Join(parts, "")
+	send(map[string]any{"type": "response.custom_tool_call_input.done", "output_index": 0, "item_id": "ctc_ws_live", "input": input})
+	receive("response.custom_tool_call_input.done")
+	item["input"], item["status"] = input, "completed"
+	send(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item})
+	receive("response.output_item.done")
+	send(map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_ws_live", "status": "completed", "output": []any{item}}})
+	receive("response.completed")
+	if err := conn.WriteJSON(map[string]any{"type": "response.create", "model": "gpt-6.1-sol", "input": []any{map[string]any{"role": "user", "content": "independent-followup"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, body, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal("WebSocket did not accept the next request after completion", err)
+		}
+		if gjson.GetBytes(body, "type").String() == "response.completed" {
+			t.Log("WebSocket client received the next request's completion on the same connection")
+			break
+		}
+		if gjson.GetBytes(body, "type").String() == "error" {
+			t.Fatalf("WebSocket followup failed: %s", body)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "must-not-be-created")); !os.IsNotExist(err) {
+		t.Fatalf("worker executed a caller-owned tool: %v", err)
+	}
+}
+
 func testNativeRuntimeHTTPCancellation(t *testing.T, handler http.Handler, cancelled <-chan struct{}) {
 	t.Helper()
 	server := httptest.NewServer(handler)

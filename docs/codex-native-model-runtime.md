@@ -81,6 +81,30 @@ receipt. A later attempt can deliver model output while the previous attempt's
 logs are still draining. Failed-attempt logs remain attached to the correct
 request/response exchange.
 
+## Downstream WebSocket delivery
+
+The earlier HTTP/WS transport matrix used an HTTP SSE client and varied the
+worker-to-upstream transport. The additional WebSocket-client tests connect to
+CPA's actual `GET /v1/responses` endpoint. Four combinations cover HTTP/WS native
+upstreams with CPA forced-WebSocket mode off/on. Each upstream event is released
+only after the client receives the preceding event, including tool deltas and
+tool-done events. The same client connection then completes a second request.
+
+This exposed two CPA completion-lifecycle issues: HTTP flushing of an already
+hijacked WebSocket connection could panic, and per-inference diagnostic joining
+could prevent the next request from starting. WebSocket writes now use only their
+own transport. Diagnostic tasks finish in the background under the socket
+handler's lifetime, in request order; they are joined before the handler's Gin
+context is released. Late transport observations do not update a finished turn.
+
+A separate blocked-diagnostic regression proves that the client can receive two
+completed responses before the first diagnostic stream is released, and that
+both upstream exchanges are retained in the final log. The complete real-worker
+matrix passes 96 leaf cases with `-race`, alongside that diagnostic regression
+and the relevant handler/helper package tests. This is a CPA-only correction;
+IPC v5 and codex-server commit `6d9c1b9d5d3fe872e94608b428ae214e7ab90805`
+remain compatible.
+
 ## Native input compatibility
 
 The official model entry accepts a native `Prompt`, typed tools and history,

@@ -550,7 +550,7 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 			logging.SetResponseStatus(cancelCtx, c.Writer.Status())
 		}
 		finishDiagnostics(func() {
-			if c != nil && c.Writer.Written() {
+			if c != nil && c.Writer.Written() && (c.Request == nil || !websocket.IsWebSocketUpgrade(c.Request)) {
 				_ = httpwire.FlushResponse(c.Writer)
 			}
 			cancel()
