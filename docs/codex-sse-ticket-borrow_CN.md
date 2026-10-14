@@ -307,7 +307,9 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
 - 独立镜像仓库：`ghcr.io/power12317/cliproxyapi-oailb-borrow`。
 - 本次镜像标签：`v2026.10.15-1`；完整地址为
   `ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.15-1`。
-- 推送分支标签后由 `docker-oailb-borrow` 工作流构建 `linux/amd64` 和 `linux/arm64`，再发布多架构镜像。
+- 推送 `codex/oailb-borrow` 分支或分支专用标签，均由 `docker-oailb-borrow` 工作流构建 `linux/amd64` 和 `linux/arm64`，再发布多架构镜像。
+- 日常更新统一使用 `ghcr.io/power12317/cliproxyapi-oailb-borrow:latest`，无需每次修改 Compose 版本号。
+- 分支构建同时保留 `sha-<完整提交 SHA>`，标签构建保留 `vYYYY.MM.DD-N`，用于定位版本和回退。
 - 工作流仅写入借票专用镜像仓库，不更新正式镜像的 `latest`。
 - 通用 Release 工作流明确排除 `oailb-borrow/**`，不会为实验标签运行正式版出包流程。
 - 镜像构建使用主线同款 Dockerfile，并在构建前刷新模型目录。
@@ -315,7 +317,7 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
 镜像发布成功后，A、B 均使用：
 
 ```bash
-docker pull ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.15-1
+docker pull ghcr.io/power12317/cliproxyapi-oailb-borrow:latest
 ```
 
 分支提交和标签推送成功只代表已经触发构建；镜像是否可拉取以工作流发布结果为准。
@@ -360,3 +362,41 @@ A、B 均须升级到 `v2026.10.15-1`；不应继续使用缺少原配置接口�
 排除上述已复现的主线基线失败后，`go test ./... -skip '^TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile$'`
 全部通过。CPAMP 联调使用其 `codex/oailb-borrow` 分支提交 `7aa30006`，验收测试为
 `TestExternalCPAOriginalBorrowContract`，结果由 CPAMP 话题独立记录；其工作区保持干净。
+
+
+## 13. 自动 latest 与主线重大修复（2026-10-15）
+
+借票独立镜像提供 `latest`。推送 `codex/oailb-borrow` 即自动构建，不再要求每次先打 tag。
+两种架构均构建成功后，当前分支最新提交才更新 `latest`；历史 tag 重建或较旧提交的慢任务不会把它回退。
+发布使用单独的并发组串行协调，正式 `cliproxyapi:latest` 不受影响。
+
+此分支的 `docker-compose.yml` 和 `.env.example` 默认镜像已改为借票专用 `latest`，
+Compose 默认拉取发布镜像。已有部署只需改一次镜像地址：
+
+```yaml
+image: ghcr.io/power12317/cliproxyapi-oailb-borrow:latest
+```
+
+如果使用本仓库的 `CLI_PROXY_IMAGE` 环境变量，也可以只在 `.env` 中设定一次：
+
+```dotenv
+CLI_PROXY_IMAGE=ghcr.io/power12317/cliproxyapi-oailb-borrow:latest
+```
+
+以后在 Compose 目录执行以下命令即可拉取并重建服务，无需改版本号：
+
+```bash
+docker compose up -d --pull always --no-build cli-proxy-api
+```
+
+本次已合入远端 main 的 `2b1de245`：修复启用 Codex runtime 后凭据启用/禁用状态没有持久化、
+容器重启又恢复旧状态的问题。管理状态正常写回，Codex worker 对 token 刷新的管理权保持不变，
+并保留 worker 已写入的新 token。上游已有回归覆盖反复启用/禁用、重启恢复及新 token 保留。
+借票接口与 A/B 的续期规则继续保留。
+
+
+本次验证：主线新增的凭据持久化回归、借票回归及相关竞态检查通过；构建通过。
+全量测试首轮遇到已知 runtime OAuth 基线失败及一次未改动 WebSocket 测试的通道重复关闭；
+该 WebSocket 测试单独连续重跑十次通过，随后仅排除已知 OAuth 基线失败的全量复核通过。
+工作流通过 actionlint；执行脚本验证分支/标签版本、双架构合并、过期构建不回退 latest 及拒绝其他分支。
+`docker compose config` 确认默认镜像是借票专用 latest，拉取策略为 always。
