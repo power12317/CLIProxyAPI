@@ -191,3 +191,21 @@ func ExportCodexSourceTicket(auth *cliproxyauth.Auth, model string, now time.Tim
 	}
 	return *t, nil
 }
+
+// CodexOaiLBBorrowResponse extends the original available/value/cflb envelope.
+// The embedded model-scoped snapshot is required by the SSE borrower; a legacy
+// cookie-only response cannot be promoted into a verified ticket bundle.
+type CodexOaiLBBorrowResponse struct {
+	Available        bool   `json:"available"`
+	Value            string `json:"value,omitempty"`
+	CFLB             string `json:"cflb,omitempty"`
+	RemainingSeconds int64  `json:"remaining_seconds,omitempty"`
+	*CodexTurnStateTicket
+}
+
+func NewCodexOaiLBBorrowResponse(ticket CodexTurnStateTicket, now time.Time) CodexOaiLBBorrowResponse {
+	if !ticket.valid(now) || ticket.Route == nil || !ticket.Route.valid(now) {
+		return CodexOaiLBBorrowResponse{}
+	}
+	return CodexOaiLBBorrowResponse{Available: true, Value: ticket.Route.OaiLB.Value, CFLB: ticket.Route.CFLB.Value, RemainingSeconds: int64(ticket.Route.deadline(ticket.ExpiresAt).Sub(now) / time.Second), CodexTurnStateTicket: &ticket}
+}

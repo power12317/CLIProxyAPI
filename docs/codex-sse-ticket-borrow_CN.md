@@ -165,7 +165,7 @@ oauth:
 - `source-auth-id` 和 `source-management-key` 必填。
 - `source-instance-id`、`source-auth-file` 是可选展示元数据，不参与来源账号选择。
 - 本分支使用 v8 配置路径；旧分支的 `codex-header-defaults.oailb-borrow` 拼写仍可读取。
-- 删除 `oailb-borrow` 或设为 `null` 关闭借票；空对象不是关闭方式，会报缺少必填配置。
+- CPAMP 原专用接口提交 `{}` 或 `null` 关闭借票；通用 v8 配置树仍使用 `null` 或删除字段。两者操作同一份设置。
 - B 的普通 `models` 探测列表不限制借票模型；按本次请求最终 payload 中的实际模型向 A 取快照。
 - B 的实验失败策略固定为“无有效票就报错”，不受普通 `fail-closed: false` 的放行策略影响。
 - B 的已验证缓存仅在内存中；重启后由第一个业务请求重新获取和验证，不启动后台借票。
@@ -174,24 +174,93 @@ oauth:
 加密方式兼容原 `oailb-borrow` 分支，数据密钥为当前 `oauth.auth-dir` 下的 `.oailb-data-key`，权限 0600。
 配置 GET 返回保存的密文。迁移旧分支的密文配置时保留对应数据密钥；不能拿另一个实例的数据密钥解密。
 
-## 7. 内部取票接口与日志
+## 7. 与 CPAMP 对齐的原有接口
 
-A 新增：
+2026-10-15 经 CPAMP「规划 CPA 集群化管理改造」话题核对，当前前后台并未整体迁往 v8。
+本功能恢复原 `oailb-borrow` 已约定的 v0 接口；CPA 内部仍使用当前配置模型，兼容旧 YAML 和 v8 YAML。
+只更改版本前缀不能兼容，下面的响应壳和关闭行为也是契约的一部分。
+
+### CPAMP 配置读写
 
 ```text
-POST /v8/management/credentials/codex/ticket-borrow
+GET /v0/management/codex-oailb-borrow
+PUT /v0/management/codex-oailb-borrow
+```
+
+GET 未配置来源时返回 HTTP 200：
+
+```json
+{"supported": true, "config": null}
+```
+
+`supported` 表示这个版本具备接口能力，与总开关是否开启、是否有票据、是否已配置来源无关。
+A、B 都提供该接口。选择来源时，CPAMP 先检查 A 的能力，然后沿用 `/v0/management/auth-files`
+读取来源凭据，Windows 与 macOS 按各自稳定 ID 选择。
+
+PUT 接受原来的五个字段：
+
+```json
+{
+  "source-instance-id": "source-a",
+  "source-url": "http://127.0.0.1:8318",
+  "source-management-key": "A的管理密钥",
+  "source-auth-id": "A的稳定凭据ID",
+  "source-auth-file": "codex-source-windows.json"
+}
+```
+
+保存成功返回 HTTP 200 `{"status":"ok"}`。密钥加密落盘，配置热重载；GET 用同样的
+`config` 字段回读来源实例、凭据 ID、文件名等设置，只允许回读密文，不返回明文密钥。
+提交 `{}` 或 `null` 关闭借用，随后 GET 返回 `{"supported":true,"config":null}`。
+非法配置或保存失败不得改变正在使用的设置。
+
+通用 v8 配置路径 `/v8/management/config/oauth/providers/codex/header-defaults/oailb-borrow`
+继续可用；在 v8 树中修改设置后，原 GET 接口会立即回读同一份值。专用 v0 接口不会把现有 v8 YAML 降级为旧布局。
+CPAMP 继续使用原来的页面与配置选择流程，无需修改项目代码。
+
+### CPA 实例之间实际借票
+
+恢复原取票入口：
+
+```text
+POST /v0/management/codex/oailb/borrow
 Authorization: Bearer <A的管理密钥>
 Content-Type: application/json
 
 {"auth_id":"A的稳定凭据ID","model":"gpt-6-astra"}
 ```
 
-接口使用现有 v8 管理鉴权，返回 `Cache-Control: no-store`。
-HTTP 200 的响应为一份完整来源快照，包括 `state`、`route.__cflb`、`route.__oailb` 和原始期限。
-每枚 Cookie 由 `value` 与可选 `expires_at` 构成；Cookie 未给明确期限时仍受所属票据期限限制。
-来源缺失、不完整、已过期或禁用返回不可借错误，接口不会启动模型调用。
-旧 `/v0/management` 接口没有扩展，A、B 需要同时升级以使用完整快照协议。
-普通凭据列表和凭据下载继续隐藏票据及 Cookie 内容。
+请求中的 `model` 是新完整快照协议必需字段，不能省略后随意选择其他模型。
+接口沿用 `available`、`value`、`cflb` 壳，并增加完整票据字段。HTTP 200 的可用响应结构：
+
+```json
+{
+  "available": true,
+  "value": "对应的__oailb",
+  "cflb": "对应的__cflb",
+  "account_id": "A的稳定凭据ID",
+  "model": "gpt-6-astra",
+  "state": "780长度的来源票据",
+  "length": 780,
+  "captured_at": "2026-10-15T00:00:00Z",
+  "expires_at": "2026-10-15T01:00:00Z",
+  "remaining_seconds": 600,
+  "route": {
+    "__cflb": {"value": "对应的__cflb"},
+    "__oailb": {"value": "对应的__oailb"}
+  }
+}
+```
+
+`captured_at` 和 `expires_at` 保存来源原始期限；`remaining_seconds` 取票据与 Cookie 的更早期限。
+每枚 Cookie 可以包含 `expires_at`。所有材料来自同一份快照，顶层 `value/cflb` 必须与 `route` 一致。
+无完整可用组合、凭据缺失、禁用或票据总开关关闭时，沿用 HTTP 200 `{"available":false}`，不触发上游采集。
+缺少 `auth_id/model` 返回 400；鉴权继续使用原管理密钥和访问限制，响应带 `Cache-Control: no-store`。
+
+A、B 均需本次修正版。旧版本只返回 Cookie 的响应不具备票据和模型信息，B 会明确拒绝，
+不能因为路径相同或 `available:true` 就视作成功。此前新增的
+`/v8/management/credentials/codex/ticket-borrow` 专用路由已移除，不再保留第二条取票路径。
+CPAMP 只负责配置来源，不请求或接收实际票据和 Cookie。普通凭据列表和下载仍隐藏这些材料。
 
 探针沿用原 `[TICKET-PROBE]` 日志格式，记录实际请求与响应长度，不输出原始票据和 Cookie。
 B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时也可能为 `780/780`。
@@ -234,10 +303,10 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
 
 - 发布分支：`codex/oailb-borrow`。
 - 分支标签格式：`oailb-borrow/vYYYY.MM.DD-N`。
-- 本次准备的标签：`oailb-borrow/v2026.10.14-1`。
+- 本次接口修正版标签：`oailb-borrow/v2026.10.15-1`。
 - 独立镜像仓库：`ghcr.io/power12317/cliproxyapi-oailb-borrow`。
-- 本次镜像标签：`v2026.10.14-1`；完整地址为
-  `ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.14-1`。
+- 本次镜像标签：`v2026.10.15-1`；完整地址为
+  `ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.15-1`。
 - 推送分支标签后由 `docker-oailb-borrow` 工作流构建 `linux/amd64` 和 `linux/arm64`，再发布多架构镜像。
 - 工作流仅写入借票专用镜像仓库，不更新正式镜像的 `latest`。
 - 通用 Release 工作流明确排除 `oailb-borrow/**`，不会为实验标签运行正式版出包流程。
@@ -246,7 +315,7 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
 镜像发布成功后，A、B 均使用：
 
 ```bash
-docker pull ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.14-1
+docker pull ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.15-1
 ```
 
 分支提交和标签推送成功只代表已经触发构建；镜像是否可拉取以工作流发布结果为准。
@@ -264,3 +333,30 @@ docker pull ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.14-1
 近期原生 runtime 的其他改动仍位于 `codex/native-model-runtime`，不属于此次指定的 main 合并范围。
 借票实现、A 提前十分钟续期、B 的 240/60 秒规则及独立镜像工作流均保留。
 本次同步不移动已发布的 `oailb-borrow/v2026.10.14-1` 标签，也不创建新发布标签。
+
+## 12. 接口整改验收（2026-10-15）
+
+本次按用户要求和 CPAMP 负责话题确认的契约恢复 v0 原路径；这是复用既有功能协议的整改，
+没有要求 CPAMP 整体切换 API 版本，也没有把实际取票接口当成配置接口。
+
+新增生产路由集成测试覆盖：鉴权、支持状态与开关解耦、未配置、来源凭据筛选、原五字段保存、
+密钥加密、重载回读、`{}`/`null` 清空、非法输入回滚、旧/v8 YAML 兼容、v8 通用设置与旧接口的一致性。
+测试让 B 的实际借票代码访问 A 的实际生产路由，再通过模拟上游完成两次验证；明确验证旧的
+Cookie-only 响应、缺少 `available` 的裸票响应、顶层与快照 Cookie 不一致均不能被接受。
+另安排 CPAMP 负责话题通过本机临时 CPA 实例独立验收原页面后端链路，全程不使用真实账号。
+
+
+实际联调结果：CPAMP 负责话题已用其真实集群服务连接两台本机 CPA 生产路由实例完成验收，
+确认能力识别、mac/Windows 分别列出、选择 Windows 稳定凭据 ID、保存、重新读取和 `{}` 关闭均通过。
+来源密钥在 CPA 配置文件中加密保存，CPAMP 返回给浏览器的借票配置响应未泄露来源密钥、OAuth token 或 Cookie。
+验收后临时实例已关闭；没有修改 CPAMP 产品代码。
+
+CPA 相关回归与竞态检查、服务端构建通过。全量测试仍存在此前已在主线复现的
+`TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile/completed` 基线失败；
+本轮接口整改未改动该功能。修正版继续发布到借票分支独立镜像，不覆盖正式镜像。
+A、B 均须升级到 `v2026.10.15-1`；不应继续使用缺少原配置接口的 `v2026.10.14-1`。
+
+
+排除上述已复现的主线基线失败后，`go test ./... -skip '^TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile$'`
+全部通过。CPAMP 联调使用其 `codex/oailb-borrow` 分支提交 `7aa30006`，验收测试为
+`TestExternalCPAOriginalBorrowContract`，结果由 CPAMP 话题独立记录；其工作区保持干净。

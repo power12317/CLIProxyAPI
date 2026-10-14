@@ -73,7 +73,7 @@ func newBorrowFixture(t *testing.T) *borrowFixture {
 		}
 		bundle := f.seed
 		bundle.Model = request.Model
-		_ = json.NewEncoder(w).Encode(bundle)
+		_ = json.NewEncoder(w).Encode(NewCodexOaiLBBorrowResponse(bundle, time.Now()))
 	}))
 	t.Cleanup(source.Close)
 	t.Cleanup(func() { InvalidateCodexCookieJar(f.auth.ID) })
@@ -389,5 +389,37 @@ func TestCodexBorrowAlreadySelectedGenerationSurvivesConcurrentRenewal(t *testin
 	}
 	if f.acquire(t) != next {
 		t.Fatal("old generation revoked the replacement")
+	}
+}
+
+func TestCodexBorrowOriginalEndpointRejectsIncompleteAndMismatchedEnvelope(t *testing.T) {
+	for _, kind := range []string{"unavailable", "cookie-only", "unwrapped-ticket", "mismatched-cookie"} {
+		t.Run(kind, func(t *testing.T) {
+			now := time.Now().Truncate(time.Second)
+			route := borrowTestRoute()
+			ticket := CodexTurnStateTicket{AccountID: "donor", Model: "model", State: borrowTestState(now, 1), Length: 780, CapturedAt: now, ExpiresAt: now.Add(time.Hour), Route: &route}
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v0/management/codex/oailb/borrow" {
+					t.Errorf("unexpected source endpoint: %s", r.URL.Path)
+				}
+				switch kind {
+				case "unavailable":
+					_, _ = io.WriteString(w, `{"available":false}`)
+				case "cookie-only":
+					_, _ = io.WriteString(w, `{"available":true,"value":"source-oai","cflb":"source-cf"}`)
+				case "unwrapped-ticket":
+					_ = json.NewEncoder(w).Encode(ticket)
+				case "mismatched-cookie":
+					response := NewCodexOaiLBBorrowResponse(ticket, now)
+					response.CFLB = "another-version"
+					_ = json.NewEncoder(w).Encode(response)
+				}
+			}))
+			defer source.Close()
+			cfg := &config.Config{CodexHeaderDefaults: config.CodexHeaderDefaults{OaiLBBorrow: &config.CodexOaiLBBorrowConfig{SourceURL: source.URL, SourceAuthID: "donor", SourceManagementKey: "key"}}}
+			if _, err := fetchCodexSourceBundle(t.Context(), cfg, "model"); err == nil {
+				t.Fatal("incomplete or mixed-version source accepted")
+			}
+		})
 	}
 }

@@ -51,7 +51,7 @@ func TestCodexSSEBorrowOverridesSameTurnWithoutPersistingTarget(t *testing.T) {
 				if input["auth_id"] != "donor" || input["model"] != "gpt-5.6-sol" {
 					t.Error("source did not use final overridden model")
 				}
-				_ = json.NewEncoder(w).Encode(helps.CodexTurnStateTicket{AccountID: "donor", Model: input["model"], State: sourceState, Length: 780, CapturedAt: now.Add(-50 * time.Minute), ExpiresAt: now.Add(10 * time.Minute), Route: &route})
+				_ = json.NewEncoder(w).Encode(helps.NewCodexOaiLBBorrowResponse(helps.CodexTurnStateTicket{AccountID: "donor", Model: input["model"], State: sourceState, Length: 780, CapturedAt: now.Add(-50 * time.Minute), ExpiresAt: now.Add(10 * time.Minute), Route: &route}, time.Now()))
 			}))
 			defer source.Close()
 			cfg, err := config.ParseConfigBytes([]byte(`codex:

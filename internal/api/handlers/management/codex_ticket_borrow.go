@@ -9,8 +9,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 )
 
-// BorrowCodexTicket exports one prepared source snapshot without upstream I/O.
-func (h *Handler) BorrowCodexTicket(c *gin.Context) {
+// BorrowCodexOaiLB extends the original borrowing operation with a complete
+// model-scoped snapshot, without performing upstream I/O.
+func (h *Handler) BorrowCodexOaiLB(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	var request struct {
 		AuthID string `json:"auth_id"`
@@ -25,18 +26,23 @@ func (h *Handler) BorrowCodexTicket(c *gin.Context) {
 	enabled := h.cfg != nil && h.cfg.Codex.EffectiveTurnStateTicket().Enabled && h.cfg.CodexHeaderDefaults.OaiLBBorrow == nil
 	h.mu.Unlock()
 	if !enabled || h.authManager == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "source_ticket_unavailable"})
+		c.JSON(http.StatusOK, helps.CodexOaiLBBorrowResponse{})
 		return
 	}
 	auth, ok := h.authManager.GetByID(strings.TrimSpace(request.AuthID))
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "source_credential_not_found"})
+		c.JSON(http.StatusOK, helps.CodexOaiLBBorrowResponse{})
 		return
 	}
 	ticket, err := helps.ExportCodexSourceTicket(auth, strings.TrimSpace(request.Model), time.Now())
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "source_ticket_unavailable"})
+		c.JSON(http.StatusOK, helps.CodexOaiLBBorrowResponse{})
 		return
 	}
-	c.JSON(http.StatusOK, ticket)
+	latest, exists := h.authManager.GetByID(auth.ID)
+	if !exists || latest.Disabled || latest.RegistrationEpoch != auth.RegistrationEpoch || helps.CodexOwnerFingerprint(latest) != helps.CodexOwnerFingerprint(auth) {
+		c.JSON(http.StatusOK, helps.CodexOaiLBBorrowResponse{})
+		return
+	}
+	c.JSON(http.StatusOK, helps.NewCodexOaiLBBorrowResponse(ticket, time.Now()))
 }

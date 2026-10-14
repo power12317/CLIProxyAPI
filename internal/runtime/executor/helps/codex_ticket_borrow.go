@@ -18,7 +18,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const CodexTicketBorrowPath = "/v8/management/credentials/codex/ticket-borrow"
+const CodexTicketBorrowPath = "/v0/management/codex/oailb/borrow"
 const codexBorrowLifetime = 240 * time.Second
 const codexBorrowRefresh = 60 * time.Second
 const codexBorrowRetry = 30 * time.Second
@@ -177,8 +177,16 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 		return bundle, borrowError(fmt.Sprintf("source instance returned HTTP %d", resp.StatusCode))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16385))
-	if err != nil || len(raw) > 16384 || json.Unmarshal(raw, &bundle) != nil {
+	var result CodexOaiLBBorrowResponse
+	if err != nil || len(raw) > 16384 || json.Unmarshal(raw, &result) != nil {
 		return bundle, borrowError("invalid source bundle response")
+	}
+	if !result.Available || result.CodexTurnStateTicket == nil {
+		return bundle, borrowError("source ticket bundle is unavailable")
+	}
+	bundle = *result.CodexTurnStateTicket
+	if bundle.Route == nil || result.Value != bundle.Route.OaiLB.Value || result.CFLB != bundle.Route.CFLB.Value {
+		return bundle, borrowError("source response cookie pair is inconsistent")
 	}
 	now := time.Now()
 	issued, err := CodexTicketIssuedAt(bundle.State, now)

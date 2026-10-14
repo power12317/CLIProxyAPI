@@ -34,24 +34,24 @@ func TestCodexTicketBorrowEndpointReadOnlySnapshot(t *testing.T) {
 	}
 	h := &Handler{authManager: manager, cfg: &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{Enabled: true}}}}
 	router := gin.New()
-	router.POST(helps.CodexTicketBorrowPath, h.BorrowCodexTicket)
+	router.POST(helps.CodexTicketBorrowPath, h.BorrowCodexOaiLB)
 	for range 2 {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, helps.CodexTicketBorrowPath, strings.NewReader(`{"auth_id":"donor","model":"model"}`)))
 		if rec.Code != 200 || rec.Header().Get("Cache-Control") != "no-store" || strings.Contains(rec.Body.String(), "oauth-secret") {
 			t.Fatalf("bad source export: %d", rec.Code)
 		}
-		var got helps.CodexTurnStateTicket
+		var got helps.CodexOaiLBBorrowResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.State != state || !got.ExpiresAt.Equal(now.Add(10*time.Minute)) || got.Route.CFLB.Value != "cf" {
+		if !got.Available || got.CodexTurnStateTicket == nil || got.Value != "oai" || got.CFLB != "cf" || got.State != state || !got.ExpiresAt.Equal(now.Add(10*time.Minute)) || got.Route.CFLB.Value != "cf" {
 			t.Fatal("export renewed or changed source material")
 		}
 	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, helps.CodexTicketBorrowPath, strings.NewReader(`{"auth_id":"donor","model":"unavailable"}`)))
-	if rec.Code != 503 {
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"available":false}` {
 		t.Fatal("missing model was not reported")
 	}
 }
