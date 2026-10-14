@@ -56,13 +56,15 @@ func notifyCodexTurnStateTicketRecorder(auth *cliproxyauth.Auth, ticket CodexTur
 // CodexTurnStateTicket is the persisted, credential/model-scoped ticket summary.
 // The state value is intentionally kept out of logs and management responses.
 type CodexTurnStateTicket struct {
-	AccountID  string    `json:"account_id,omitempty"`
-	Model      string    `json:"model"`
-	State      string    `json:"state"`
-	Length     int       `json:"length"`
-	CapturedAt time.Time `json:"captured_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Attempts   int       `json:"attempts,omitempty"`
+	Owner      string            `json:"owner,omitempty"`
+	Route      *CodexTicketRoute `json:"route,omitempty"`
+	AccountID  string            `json:"account_id,omitempty"`
+	Model      string            `json:"model"`
+	State      string            `json:"state"`
+	Length     int               `json:"length"`
+	CapturedAt time.Time         `json:"captured_at"`
+	ExpiresAt  time.Time         `json:"expires_at"`
+	Attempts   int               `json:"attempts,omitempty"`
 }
 
 // CodexTurnStateTicketStatus is safe to expose through the management API.
@@ -117,6 +119,17 @@ func codexTurnStateTicketForAuth(auth *cliproxyauth.Auth, model string) *CodexTu
 	ticket.State = strings.TrimSpace(ticket.State)
 	if ticket.Length == 0 {
 		ticket.Length = len(ticket.State)
+	}
+	// Clamp restored records too; a legacy longer TTL must not survive migration.
+	issued, errIssued := CodexTicketIssuedAt(ticket.State, time.Now())
+	if errIssued != nil {
+		issued = ticket.CapturedAt
+	}
+	if !issued.IsZero() {
+		limit := issued.Add(time.Hour)
+		if ticket.ExpiresAt.After(limit) {
+			ticket.ExpiresAt = limit
+		}
 	}
 	return &ticket
 }
@@ -235,7 +248,7 @@ func RecordCodexTurnStateTicketOnResponse(auth *cliproxyauth.Auth, cfg config.Co
 		return false
 	}
 	value := strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader))
-	return recordCodexTurnStateTicketValue(auth, cfg, model, value)
+	return recordCodexTurnStateTicketValue(auth, cfg, model, value, resp)
 }
 
 // RecordCodexTurnStateTicketOnEvent is the WebSocket equivalent. Only
@@ -260,24 +273,16 @@ func RecordCodexTurnStateTicketOnEvent(auth *cliproxyauth.Auth, cfg config.Codex
 	return recordCodexTurnStateTicketValue(auth, cfg, model, value)
 }
 
-func recordCodexTurnStateTicketValue(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model, value string) bool {
+func recordCodexTurnStateTicketValue(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, model, value string, responses ...*http.Response) bool {
 	targetLength := config.DefaultCodexTurnStateTicketTargetLength
 	if len(value) != targetLength {
 		return false
 	}
-	now := time.Now()
-	ticket := CodexTurnStateTicket{
-		AccountID:  auth.ID,
-		Model:      strings.TrimSpace(model),
-		State:      value,
-		Length:     len(value),
-		CapturedAt: now,
-		ExpiresAt:  now.Add(time.Duration(cfg.TTLSeconds) * time.Second),
-		Attempts:   1,
+	var resp *http.Response
+	if len(responses) > 0 {
+		resp = responses[0]
 	}
-	if cfg.TTLSeconds <= 0 {
-		ticket.ExpiresAt = now.Add(time.Duration(config.DefaultCodexTurnStateTicketTTLSeconds) * time.Second)
-	}
+	ticket := newCodexSourceTicket(auth, model, value, resp, time.Now())
 	// Keep the request snapshot unchanged until persistence computes its delta.
 	notifyCodexTurnStateTicketRecorder(auth, ticket)
 	StoreCodexTurnStateTicket(auth, ticket)
@@ -346,59 +351,10 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 	defer cancel()
 	probeAuth := auth.Clone()
 	probeAuth.ProxyURL = harvestProxyURL
-	sessionID := uuid.NewString()
-	turnID := uuid.NewString()
-	turnMetadataFields := map[string]string{"turn_id": turnID, "session_id": sessionID}
-	clientMetadata := map[string]string{"session_id": sessionID}
-	if cfg == nil || cfg.Codex.DeviceConvergenceEnabled() {
-		installationID := codexInstallationUUID(CodexInstallationAccountID(auth), CodexOAuthClientSystem(auth))
-		turnMetadataFields["installation_id"] = installationID
-		clientMetadata["x-codex-installation-id"] = installationID
-	}
-	turnMetadata, _ := json.Marshal(turnMetadataFields)
-	clientMetadata["x-codex-turn-metadata"] = string(turnMetadata)
-	probeDocument := map[string]any{
-		"model":        model,
-		"store":        false,
-		"stream":       true,
-		"instructions": "Reply with exactly: pong",
-		"input": []map[string]any{{
-			"role": "user",
-			"content": []map[string]string{{
-				"type": "input_text",
-				"text": "ping",
-			}},
-		}},
-		"client_metadata": clientMetadata,
-	}
-	body, errMarshalBody := json.Marshal(probeDocument)
-	if errMarshalBody != nil {
-		return CodexTurnStateTicket{}, 0, errMarshalBody
-	}
-	req, errRequest := http.NewRequestWithContext(attemptCtx, http.MethodPost, codexTurnStateTicketProbeURL, bytes.NewReader(body))
+	req, sessionID, turnID, errRequest := newCodexTicketProbeRequest(attemptCtx, cfg, auth, model)
 	if errRequest != nil {
 		return CodexTurnStateTicket{}, 0, errRequest
 	}
-	req.Host = "chatgpt.com"
-	req.Close = true
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Session-Id", sessionID)
-	req.Header.Set("X-Codex-Turn-Metadata", string(turnMetadata))
-	if accountID, ok := auth.Metadata["account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
-		req.Header.Set("Chatgpt-Account-Id", strings.TrimSpace(accountID))
-	}
-	// Keep the probe headers aligned with the normal Codex OAuth client identity.
-	req.Header.Set("Originator", "codex-tui")
-	req.Header.Set("Version", CodexClientVersion)
-	req.Header.Set("User-Agent", CodexSystemUserAgent(CodexOAuthClientSystem(auth)))
-	req.Header.Set("X-Codex-Beta-Features", "remote_compaction_v2")
-	req.Header.Set("X-Codex-Routing-Hint", "model="+model)
-	req.Header.Set("X-Codex-Window-Id", uuid.NewString())
-	req.Header.Set("X-Client-Request-Id", uuid.NewString())
-	req.Header.Set("Thread-Id", sessionID)
 	client := NewUtlsHTTPClient(attemptCtx, cfg, probeAuth, timeout)
 	started := time.Now()
 	resp, errDo := client.Do(req)
@@ -420,7 +376,7 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 		return CodexTurnStateTicket{}, resp.StatusCode, nil
 	}
 	now := time.Now()
-	return CodexTurnStateTicket{AccountID: auth.ID, Model: model, State: state, Length: len(state), CapturedAt: now, ExpiresAt: now.Add(time.Duration(effective.TTLSeconds) * time.Second), Attempts: 1}, resp.StatusCode, nil
+	return newCodexSourceTicket(auth, model, state, resp, now), resp.StatusCode, nil
 }
 
 // CodexTurnStateTicketHarvester continuously refreshes tickets in the
@@ -431,6 +387,7 @@ type CodexTurnStateTicketHarvester struct {
 	listFn   func() []*cliproxyauth.Auth
 	updateFn func(context.Context, *cliproxyauth.Auth, *cliproxyauth.Auth) error
 
+	recordMu         sync.Mutex
 	lifecycleMu      sync.Mutex
 	cancel           context.CancelFunc
 	done             chan struct{}
@@ -573,7 +530,7 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 		return
 	}
 	policy := cfg.Codex.EffectiveTurnStateTicket()
-	if !policy.Enabled {
+	if !policy.Enabled || cfg.CodexHeaderDefaults.OaiLBBorrow != nil {
 		return
 	}
 	if strings.TrimSpace(policy.HarvestProxyURL) != "" {
@@ -600,7 +557,7 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 			}
 			// Recheck configuration and credential state after each preceding network request.
 			cfg = h.currentConfig()
-			if ctx.Err() != nil || cfg == nil || !cfg.Codex.EffectiveTurnStateTicket().Enabled {
+			if ctx.Err() != nil || cfg == nil || !cfg.Codex.EffectiveTurnStateTicket().Enabled || cfg.CodexHeaderDefaults.OaiLBBorrow != nil {
 				return
 			}
 			currentPolicy := cfg.Codex.EffectiveTurnStateTicket()
@@ -612,7 +569,7 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 				break
 			}
 			now := time.Now()
-			if ticket := codexTurnStateTicketForAuth(current, model); ticket.valid(now) && !ticket.needsRefresh(now, time.Duration(currentPolicy.RefreshBeforeSeconds)*time.Second) {
+			if ticket := codexTurnStateTicketForAuth(current, model); ticket.valid(now) && ticket.Owner == CodexOwnerFingerprint(current) && ticket.Route != nil && ticket.Route.valid(now) && !ticket.needsRefresh(now, time.Duration(currentPolicy.RefreshBeforeSeconds)*time.Second) {
 				continue
 			}
 			h.probe(ctx, cfg, current, model, currentPolicy.HarvestProxyURL)
@@ -634,11 +591,10 @@ func (h *CodexTurnStateTicketHarvester) Record(auth *cliproxyauth.Auth, ticket C
 	if h == nil || auth == nil || h.updateFn == nil || strings.TrimSpace(ticket.Model) == "" {
 		return
 	}
-	updated := auth.Clone()
-	StoreCodexTurnStateTicket(updated, ticket)
-	if errUpdate := h.updateFn(context.Background(), auth, updated); errUpdate != nil {
+	if errUpdate := h.persist(context.Background(), auth, ticket); errUpdate != nil {
 		log.WithFields(log.Fields{"auth_id": auth.ID, "model": ticket.Model}).Warnf("codex turn-state ticket response persistence failed: %v", errUpdate)
 	}
+
 }
 
 func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, proxyURL string) {
@@ -646,11 +602,10 @@ func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.C
 	if errHarvest != nil || status != http.StatusOK || strings.TrimSpace(ticket.State) == "" {
 		return
 	}
-	updated := auth.Clone()
-	StoreCodexTurnStateTicket(updated, ticket)
-	if errUpdate := h.updateFn(ctx, auth, updated); errUpdate != nil {
+	if errUpdate := h.persist(ctx, auth, ticket); errUpdate != nil {
 		log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Warnf("codex turn-state ticket persistence failed: %v", errUpdate)
 	}
+
 }
 
 // ValidateCodexTurnStateTicketHarvestProxyURL validates syntax without making
@@ -715,4 +670,99 @@ func RedactCodexTurnStateTicketMetadata(metadata map[string]any) map[string]any 
 		}
 	}
 	return redacted
+}
+
+func newCodexTicketProbeRequest(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model string) (*http.Request, string, string, error) {
+	token := CodexOAuthAccessToken(auth)
+	if token == "" {
+		return nil, "", "", errors.New("codex OAuth access token is unavailable")
+	}
+	sessionID := uuid.NewString()
+	turnID := uuid.NewString()
+	turnMetadataFields := map[string]string{"turn_id": turnID, "session_id": sessionID}
+	clientMetadata := map[string]string{"session_id": sessionID}
+	if cfg == nil || cfg.Codex.DeviceConvergenceEnabled() {
+		installationID := codexInstallationUUID(CodexInstallationAccountID(auth), CodexOAuthClientSystem(auth))
+		turnMetadataFields["installation_id"] = installationID
+		clientMetadata["x-codex-installation-id"] = installationID
+	}
+	turnMetadata, _ := json.Marshal(turnMetadataFields)
+	clientMetadata["x-codex-turn-metadata"] = string(turnMetadata)
+	probeDocument := map[string]any{
+		"model":        model,
+		"store":        false,
+		"stream":       true,
+		"instructions": "Reply with exactly: pong",
+		"input": []map[string]any{{
+			"role": "user",
+			"content": []map[string]string{{
+				"type": "input_text",
+				"text": "ping",
+			}},
+		}},
+		"client_metadata": clientMetadata,
+	}
+	body, errMarshalBody := json.Marshal(probeDocument)
+	if errMarshalBody != nil {
+		return nil, "", "", errMarshalBody
+	}
+	body = ApplyPayloadConfigWithRequestForExecutor(cfg, "codex", model, "codex", "codex", "", body, body, model, "/v1/responses", nil)
+	if gjson.GetBytes(body, "model").String() != model || !gjson.GetBytes(body, "stream").Bool() || gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
+		return nil, "", "", errors.New("ticket probe payload rules conflict with model, stream or ticket")
+	}
+	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, codexTurnStateTicketProbeURL, bytes.NewReader(body))
+	if errRequest != nil {
+		return nil, "", "", errRequest
+	}
+	req.Host = "chatgpt.com"
+	req.Close = true
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	req.Header.Set("Session-Id", sessionID)
+	req.Header.Set("X-Codex-Turn-Metadata", string(turnMetadata))
+	if accountID, ok := auth.Metadata["account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
+		req.Header.Set("Chatgpt-Account-Id", strings.TrimSpace(accountID))
+	}
+	// Keep the probe headers aligned with the normal Codex OAuth client identity.
+	req.Header.Set("Originator", "codex-tui")
+	req.Header.Set("Version", CodexClientVersion)
+	req.Header.Set("User-Agent", CodexSystemUserAgent(CodexOAuthClientSystem(auth)))
+	req.Header.Set("X-Codex-Beta-Features", "remote_compaction_v2")
+	req.Header.Set("X-Codex-Routing-Hint", "model="+model)
+	req.Header.Set("X-Codex-Window-Id", uuid.NewString())
+	req.Header.Set("X-Client-Request-Id", uuid.NewString())
+	req.Header.Set("Thread-Id", sessionID)
+	return req, sessionID, turnID, nil
+}
+
+// Serialize source updates against the latest credential, retaining the original
+// generation when concurrent exchanges observe the same token.
+func (h *CodexTurnStateTicketHarvester) persist(ctx context.Context, auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) error {
+	h.recordMu.Lock()
+	defer h.recordMu.Unlock()
+	if h.listFn != nil {
+		current := h.findAuth(auth.ID)
+		if current == nil || current.Disabled || CodexOwnerFingerprint(current) != CodexOwnerFingerprint(auth) || current.RegistrationEpoch != auth.RegistrationEpoch {
+			return nil
+		}
+		auth = current
+	}
+	if previous := codexTurnStateTicketForAuth(auth, ticket.Model); previous != nil {
+		if previous.CapturedAt.After(ticket.CapturedAt) {
+			return nil
+		}
+		if previous.State == ticket.State {
+			ticket.CapturedAt, ticket.ExpiresAt = previous.CapturedAt, previous.ExpiresAt
+			if previous.Route != nil && (previous.Route.valid(time.Now()) || ticket.Route == nil || previous.Route.sameValues(*ticket.Route)) {
+				ticket.Route = previous.Route
+			}
+		} else if ticket.Route == nil && previous.valid(time.Now()) && previous.Route != nil && previous.Route.valid(time.Now()) {
+			return nil
+		}
+	}
+	updated := auth.Clone()
+	StoreCodexTurnStateTicket(updated, ticket)
+	return h.updateFn(ctx, auth, updated)
 }

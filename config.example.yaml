@@ -1037,6 +1037,13 @@ oauth:
       #   user-agent: "codex_cli_rs/0.114.0 (Mac OS 14.2.0; x86_64) vscode/1.111.0"
       #   beta-features: "multi_agent"
       #   fast-mode: "auto" # auto, default, fast, or ultrafast
+      #   oailb-borrow: # Optional request-driven SSE ticket borrowing; requires turn-state-ticket.enabled.
+      #     source-url: "http://127.0.0.1:8318"
+      #     source-auth-id: "stable-donor-credential-id"
+      #     source-management-key: "donor-management-key" # Encrypted locally on save/load.
+      #     source-instance-id: "donor-a" # Optional display metadata.
+      #     source-auth-file: "codex-donor.json" # Optional display metadata.
+      # Use null or remove oailb-borrow to disable. See docs/codex-sse-ticket-borrow_CN.md.
 
       # Optional Basispoints interface for Codex models.
       basispoints:
@@ -1057,8 +1064,10 @@ oauth:
         # Capture and reuse normal-response tickets for all models (default true).
         # Only models listed below are actively probed or blocked by fail-closed.
         cache-all-models: true
-        # All account plans use 780-byte tickets. A new response ticket replaces
-        # the saved value and restarts this retention period; other lengths never invalidate it.
+        # All plans use 780-byte tickets. Source snapshots retain the original one-hour
+        # deadline; observing the same token never extends it. The source TTL is fixed
+        # at 3600 seconds; the existing early refresh window defaults to 600 seconds.
+        # Borrowed target tickets use 240 seconds and request-driven renewal at 60 seconds.
         ttl-seconds: 3600
         refresh-before-seconds: 600
         harvest-proxy-url: ""

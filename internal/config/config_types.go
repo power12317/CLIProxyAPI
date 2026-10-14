@@ -139,8 +139,9 @@ type ClaudeHeaderDefaults struct {
 // UserAgent applies to HTTP and websocket requests; BetaFeatures only applies to websockets.
 // FastMode applies to native Codex and Basispoints Responses request bodies.
 type CodexHeaderDefaults struct {
-	UserAgent    string `yaml:"user-agent" json:"user-agent"`
-	BetaFeatures string `yaml:"beta-features" json:"beta-features"`
+	OaiLBBorrow  *CodexOaiLBBorrowConfig `yaml:"oailb-borrow,omitempty" json:"oailb-borrow,omitempty"`
+	UserAgent    string                  `yaml:"user-agent" json:"user-agent"`
+	BetaFeatures string                  `yaml:"beta-features" json:"beta-features"`
 	// FastMode optionally overrides the service_tier in Codex request bodies.
 	// Empty or auto preserves existing behavior; default removes the field.
 	FastMode string `yaml:"fast-mode,omitempty" json:"fast-mode,omitempty"`
@@ -282,9 +283,8 @@ func (c *CodexConfig) EffectiveTurnStateTicket() CodexTurnStateTicketConfig {
 	}
 	// TargetLength is retained for older config files; all plans use one shape.
 	out.TargetLength = DefaultCodexTurnStateTicketTargetLength
-	if out.TTLSeconds <= 0 {
-		out.TTLSeconds = DefaultCodexTurnStateTicketTTLSeconds
-	}
+	// Source snapshots have fixed lifetimes; the early refresh policy is preserved.
+	out.TTLSeconds = DefaultCodexTurnStateTicketTTLSeconds
 	if out.RefreshBeforeSeconds <= 0 {
 		out.RefreshBeforeSeconds = DefaultCodexTurnStateTicketRefreshBeforeSeconds
 	}

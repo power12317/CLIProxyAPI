@@ -177,6 +177,16 @@ func (h *Handler) ConfigV8(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_config", "message": err.Error()})
 		return
 	}
+	data, _, err = config.ProtectCodexOaiLBConfigData(data)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "oailb_secret_protection_failed"})
+		return
+	}
+	next, err = config.ParseConfigBytes(data)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid_config"})
+		return
+	}
 	// Save the validated canonical tree directly: projecting runtime defaults
 	// back onto it loses explicit nulls, empty maps, and opaque plugin settings.
 	// WriteConfig retains the inode of a mounted configuration file.

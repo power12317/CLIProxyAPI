@@ -94,7 +94,12 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if err != nil {
 		return resp, err
 	}
-	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
+	borrowing := e.runtime == nil && helps.CodexTicketBorrowEnabled(e.cfg, auth)
+	if borrowing {
+		upstreamBody = helps.PrepareCodexBorrowBody(upstreamBody)
+	} else {
+		upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
+	}
 	var turnStateBody []byte
 	if !officialOAuthRequest {
 		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
@@ -132,9 +137,23 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 	ensureCodexResponsesLiteHeader(httpReq.Header, turnStateBody)
 	turnState := helps.NewCodexTurnState(ctx, auth, url, turnStateBody, httpReq.Header, baseModel, opts.Headers)
-	turnState.ApplyHeaders(httpReq.Header)
-	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
-		return resp, errTicket
+	var borrowed *helps.CodexBorrowedTicket
+	if borrowing {
+		turnState.DisableCache()
+		httpReq.Header.Set("Authorization", "Bearer "+helps.CodexOAuthAccessToken(auth))
+		httpReq.Header.Set("Chatgpt-Account-Id", helps.CodexOAuthAccountID(auth))
+		borrowed, err = helps.AcquireCodexBorrowedTicket(ctx, e.cfg, auth, gjson.GetBytes(turnStateBody, "model").String())
+		if err != nil {
+			return resp, err
+		}
+		if errApply := borrowed.Apply(httpReq, turnStateBody); errApply != nil {
+			return resp, errApply
+		}
+	} else {
+		turnState.ApplyHeaders(httpReq.Header)
+		if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
+			return resp, errTicket
+		}
 	}
 	if e.runtime != nil {
 		return e.runtime.executeViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, replayScope)
@@ -158,6 +177,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		AuthValue: authValue,
 	})
 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+	borrowed.ConfigureClient(httpClient)
 	httpClient = reporter.TrackHTTPClient(httpClient)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -171,7 +191,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}()
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	turnState.ObserveResponse(httpResp)
-	helps.RecordCodexTurnStateTicketOnResponse(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpResp)
+	if borrowing {
+		borrowed.ObserveResponse(httpResp)
+	} else {
+		helps.RecordCodexTurnStateTicketOnResponse(auth, e.cfg.Codex.EffectiveTurnStateTicket(), gjson.GetBytes(turnStateBody, "model").String(), httpResp)
+	}
 	turnState.LogResponse(ctx, e.cfg, false)
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)

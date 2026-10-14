@@ -58,6 +58,8 @@ func ticketProbeTestRequest(t *testing.T, req *http.Request) string {
 
 func ticketProbeTestResponse(req *http.Request, status, length int) *http.Response {
 	headers := make(http.Header)
+	headers.Add("Set-Cookie", "__cflb=test-cf; Path=/; Secure")
+	headers.Add("Set-Cookie", "__oailb=test-oai; Path=/; Secure")
 	if length > 0 {
 		headers.Set(CodexTurnStateTicketHeader, testTicketState(length))
 	}
@@ -225,7 +227,9 @@ func TestCodexTicketHarvesterRefreshFollowsLatestResponseExpiry(t *testing.T) {
 		var calls ticketProbeTestCalls
 		rt := codexRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls.record(ticketProbeTestRequest(t, req))
-			return ticketProbeTestResponse(req, 200, 780), nil
+			resp := ticketProbeTestResponse(req, 200, 780)
+			resp.Header.Set(CodexTurnStateTicketHeader, strings.Repeat(string(rune(65+len(calls.snapshot()))), 780))
+			return resp, nil
 		})
 		h, manager, _ := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{ticketProbeTestAuth("mac", "same@example.com", "account")}, rt)
 		SetCodexTurnStateTicketRecorder(h.Record)
@@ -382,8 +386,10 @@ func TestCodexTicketCacheAllModelsNeverExpandsProbes(t *testing.T) {
 			if !strings.HasSuffix(key, "/gpt-6-astra") && !strings.HasSuffix(key, "/gpt-5.6-sol") {
 				t.Errorf("normal-response model was proactively probed: %s", key)
 			}
-			calls.Add(1)
-			return ticketProbeTestResponse(req, 200, 780), nil
+			n := calls.Add(1)
+			resp := ticketProbeTestResponse(req, 200, 780)
+			resp.Header.Set(CodexTurnStateTicketHeader, strings.Repeat(string(rune(65+n)), 780))
+			return resp, nil
 		})
 		h, manager, _ := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{
 			ticketProbeTestAuth("mac", "same@example.com", "account"),

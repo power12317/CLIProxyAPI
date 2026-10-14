@@ -32,6 +32,7 @@ auths/*
 docs/*
 !docs/basispoints-integration-design_CN.md
 !docs/management-api-v8.md
+!docs/codex-sse-ticket-borrow_CN.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md

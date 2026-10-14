@@ -92,10 +92,13 @@ func TestCodexRuntimeUpstreamLogsForSuccessAndStream(t *testing.T) {
 			if got := logging.CodexOaiLBNode(c); got != "gateway-a" {
 				t.Fatalf("access-log node = %q, want response node gateway-a", got)
 			}
-			for _, want := range []string{"Status: 200", "actual-request-id", "response-state", "future_extension", "response.completed", "oailb_node: gateway-a", "auth_file: \"shared-account.json\""} {
+			for _, want := range []string{"Status: 200", "actual-request-id", "[REDACTED]", "future_extension", "response.completed", "oailb_node: gateway-a", "auth_file: \"shared-account.json\""} {
 				if !strings.Contains(responseLog, want) {
 					t.Errorf("response log missing %q: %s", want, responseLog)
 				}
+			}
+			if strings.Contains(requestLog, "request-state") || strings.Contains(responseLog, "response-state") {
+				t.Error("ticket values leaked into request logs")
 			}
 			fields, ok := logging.CodexTurnStateLogFieldsForContext(c)
 			if !ok || fields.AuthFile != a.FileName || fields.SessionID != "session-actual" || fields.TurnID != "turn-actual" || fields.RequestedModel != "runtime-model" || fields.ResponseModel != "runtime-model" || fields.RequestTurnStateLen != len("request-state") || fields.ResponseTurnStateLen != len("response-state") {

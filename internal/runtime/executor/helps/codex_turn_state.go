@@ -514,3 +514,11 @@ func StartCodexTurnStateCleanup(ctx context.Context) {
 		}
 	}()
 }
+
+// DisableCache keeps wire statistics while bypassing passive per-turn storage.
+// Call before observing a request managed by an externally verified bundle.
+func (s *CodexTurnState) DisableCache() {
+	if s != nil {
+		s.bucket = nil
+	}
+}

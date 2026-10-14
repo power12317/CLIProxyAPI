@@ -14,7 +14,15 @@ import (
 // Existing v8 documents are saved in the latest layout. Successful migration
 // also synchronizes cfg's OAuth scope for runtime snapshots.
 func SaveConfigPreserveComments(configFile string, cfg *Config, migrateV8 ...bool) error {
-	persistCfg := cfg
+	copyCfg := *cfg
+	if c := cfg.CodexHeaderDefaults.OaiLBBorrow; c != nil {
+		copyBorrow := *c
+		copyCfg.CodexHeaderDefaults.OaiLBBorrow = &copyBorrow
+	}
+	persistCfg := &copyCfg
+	if errProtect := ProtectCodexOaiLBSecret(persistCfg); errProtect != nil {
+		return errProtect
+	}
 	migrating := len(migrateV8) > 0 && migrateV8[0]
 	// Load original YAML as a node tree to preserve comments and ordering.
 	data, err := os.ReadFile(configFile)
@@ -65,6 +73,11 @@ func SaveConfigPreserveComments(configFile string, cfg *Config, migrateV8 ...boo
 	}
 	removeLegacyOpenAICompatAPIKeys(original.Content[0])
 
+	if persistCfg.CodexHeaderDefaults.OaiLBBorrow == nil {
+		deleteYAMLPath(original.Content[0], "codex-header-defaults.oailb-borrow")
+		deleteYAMLPath(layout, "codex-header-defaults.oailb-borrow")
+		deleteYAMLPath(layout, "oauth.providers.codex.header-defaults.oailb-borrow")
+	}
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-excluded-models")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-model-alias")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-request-scoped-errors")

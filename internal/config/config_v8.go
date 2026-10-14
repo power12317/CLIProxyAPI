@@ -253,6 +253,9 @@ func (cfg *Config) UnmarshalYAML(node *yaml.Node) error {
 	if errValidate := decoded.Models.Validate(); errValidate != nil {
 		return errValidate
 	}
+	if errValidate := decoded.CodexHeaderDefaults.OaiLBBorrow.Validate(); errValidate != nil {
+		return errValidate
+	}
 	*cfg = Config(decoded)
 	cfg.OAuthOnlyFields = nil
 	source := expandConfigAliases(node)

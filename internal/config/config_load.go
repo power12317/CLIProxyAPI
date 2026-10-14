@@ -117,6 +117,21 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		return nil, errValidate
 	}
 
+	protected, changedSecret, errProtect := ProtectCodexOaiLBConfigData(data)
+	if errProtect != nil {
+		return nil, fmt.Errorf("protect oailb configuration: %w", errProtect)
+	}
+	if changedSecret {
+		if errWrite := os.WriteFile(configFile, protected, 0600); errWrite != nil {
+			return nil, errWrite
+		}
+		data = protected
+		var protectedCfg Config
+		if errProtect = yaml.Unmarshal(protected, &protectedCfg); errProtect != nil {
+			return nil, errProtect
+		}
+		cfg.CodexHeaderDefaults.OaiLBBorrow = protectedCfg.CodexHeaderDefaults.OaiLBBorrow
+	}
 	// Hash remote management key if plaintext is detected (nested)
 	// We consider a value to be already hashed if it looks like a bcrypt hash ($2a$, $2b$, or $2y$ prefix).
 	if cfg.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(cfg.RemoteManagement.SecretKey) {

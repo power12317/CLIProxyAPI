@@ -1,0 +1,230 @@
+# 跨实例 SSE 借票：第一阶段实现与测试
+
+本分支为 `codex/sse-ticket-borrow`，基于 CPA 主线 `e50b3414`。
+实现参考 `ranxi2001/sub2api` 的借种子票、两次探针验证及路由 Cookie 配对方法；参考代码为
+`production` 提交 `0d1f0359`（相关借票代码与 `v2.10.7` 一致）。
+跨实例配置和管理密钥加密沿用 CPA `codex/oailb-borrow` 的方案。
+
+本次只需要升级 **CLIProxyAPI**：A 与 B 均部署本分支版本。没有新增前端页面，也不需要改动其他项目。
+这是用户确认的一小时来源票实验：A 的来源票按一小时判断，B 换出的目标票按四分钟判断，
+并未照搬参考项目对来源票也使用四分钟的规则。
+
+## 1. 适用范围
+
+- A 是正常来源账号所在的 CPA；B 是需要借票的账号所在的 CPA。
+- 支持 Go 直接连接 `https://chatgpt.com/backend-api/codex/responses` 的 SSE 路径。
+  下游请求流式或非流式均可，两者向上游使用 SSE。
+- 使用前按约定关闭 WebSocket、Codex Server/runtime、Basispoints 等其他上游通道。
+  本轮不适配这些通道，也不适配 compact、独立图片接口或自定义 Responses 上游地址。
+- 不引入中央票据池、自动寻找来源账号、主票/备用票双池或自动更换出口。
+- B 的两次探针和业务请求使用 B 自己的 OAuth 身份、凭据出口及固定设备标识。
+  A 的 OAuth token 不会借给 B。
+
+## 2. A 的一小时来源快照
+
+每份快照按“凭据 ID + 实际模型”保存，包含 `x-codex-turn-state`、`__cflb`、`__oailb`、
+所属凭据指纹、票据原始时间、到期时间，以及 Cookie 可解析的期限。
+
+1. 票据总开关打开时，启动或从关闭切换为开启会立即检查并补采必要快照。
+2. 配置模型依次采集，有完整有效且尚未进入续期窗口的快照就跳过。保留原来的到期前十分钟主动续期。
+3. 来源票正常期限固定为原始签发时间加 3600 秒。解析不了签发时间的历史不透明票仍可按原机制本地保持，
+   但不能导出为本轮可借组合。可解析的历史记录会受原始签发时间加一小时上限约束。
+4. 同一张票再次出现、读取、借出、保存、配置重载和重启都不能延长原期限。
+5. 不同的新票与本次交换对应的 Cookie 一起形成新快照。不会在 B 取票时临时从最新 Jar 拼接。
+6. 票据响应缺少 Cookie 时，可以继承该次请求实际发送的 Cookie；明确删除、缺失或过期的 Cookie 不可借。
+7. 如果新响应无法形成完整组合，已有完整且有效的来源快照继续提供。
+8. Cookie 更早失效时，会在定时检查中补采；旧版仅有票据而没有 Cookie 快照的记录也需要补采。
+9. `cache-all-models` 的正常响应采集仍保留，主动采集列表不会因此扩大。
+
+因此，A 在 10:00 生成的快照只要票与两枚 Cookie 仍有效，且 A 尚未更换这份快照，10:50 仍可重复借出。
+如果 A 提前续期已经取得新组合，B 下次读取的是新的当前快照。
+借出不消费票据，不记录“B 已用过此 A 票”，也不会触发 A 额外探测。
+
+来源有效期固定为 **3600 秒**，旧 `ttl-seconds` 输入保留兼容，但不会再改变这个期限。
+`refresh-before-seconds` 保留原有含义和配置，默认 **600 秒**：到期前十分钟进入主动续期窗口。
+后台扫描/失败重试间隔仍由 `probe-interval-seconds` 控制，默认 60 秒。
+在续期窗口中取得不同新票与配套 Cookie 后立即替换；返回同一张票不会延长它的原始一小时期限，
+续期失败也保留尚未过期的旧票。到期后不再导出旧快照，等待下一次采集成功。
+例如 10:00 签发的 A 票原定 11:00 到期，10:50 起按原来的定时检查主动续期；B 的借票动作不会额外触发 A 打票。
+
+## 3. B 的请求触发流程
+
+```mermaid
+flowchart TD
+    R[业务请求到达 B] --> C{当前 B 组合已验证且剩余大于 60 秒?}
+    C -->|是| U[注入 B 票和对应两枚 Cookie]
+    C -->|否| A[读取 A 当前模型的一小时快照]
+    A --> P1[B 自己的身份 + A 票 + A Cookie：第一次探针]
+    P1 --> N[取得不同于 A 种子的 B 新票及完整 Cookie 对]
+    N --> P2[携带 B 新票和 Cookie 对：第二次续接探针]
+    P2 --> V{HTTP 成功、SSE 完整、票及路由未变化?}
+    V -->|是| S[缓存 B 组合：签发时间 + 240 秒]
+    S --> U
+    V -->|否| F{旧 B 组合仍有效且未被撤销?}
+    A -->|获取失败| F
+    P1 -->|取票失败| F
+    F -->|是| U
+    F -->|否| E[返回 503 借票不可用，后续请求可重试]
+    U --> B[发送原业务请求一次]
+    B --> O{响应是否返回不同票据或改变 Cookie 对?}
+    O -->|否| K[继续保留原期限]
+    O -->|是| I[撤销当前验证状态，下次业务请求再借票]
+```
+
+B 的缓存按“来源配置 + B 凭据身份 + 实际模型 + 出口”隔离。
+Mac 与 Windows 两份凭据分别缓存，模型不同也分别缓存。
+
+| 状态 | 当前业务请求的行为 |
+|---|---|
+| 剩余时间 > 60 秒 | 直接复用，不访问 A，不发探针 |
+| 剩余 0～60 秒但未过期 | 先尝试续借；成功立即切换，失败可使用仍有效的旧组合 |
+| 没有票、已到期、被撤销 | 先借票并验证；失败返回可重试错误，不使用旧 turn 缓存或一小时普通票 |
+| 没有业务请求 | 不借票、不验证、不后台续借 |
+
+一小时总开关和 `oailb-borrow` 同时启用时，B 不运行原本的后台模型打票。
+既有独立的 usage/Cookie 预热功能不属于借票任务，仍保持原行为；它更新 Jar 也不能替换选定的借票 Cookie 对。
+
+B 的期限从 **B 新票自身的签发时间** 开始计 240 秒；两次验证耗时包含在这四分钟中。
+Cookie 如果更早到期，使用更早的期限。验证完成时还必须留有超过 60 秒的可用窗口。
+相同 `turn_id` 也重新检查期限，过期后不会恢复被动缓存中的旧票。
+已经发出的 SSE 继续正常输出，不会因为本地四分钟到期被中断或重放。
+
+获取失败后约 30 秒内，后续请求不重复发起获取；这是请求触发的节流，没有后台重试。
+同一凭据、模型的并发请求共用一轮获取和两次验证。
+
+## 4. 两次探针的判断
+
+探针仍为 `ping` / `Reply with exactly: pong`，使用既有固定设备 ID 规则。
+请求体完成内建设置后才应用用户 payload 规则，之后不再恢复被过滤字段。
+如果探针规则改变了所需模型、SSE 设置或加入冲突票据，会明确失败。
+
+- 第一发使用 A 的种子票和配套 Cookie；必须返回一张新的 780 长度 B 票，不能仅回显 A 票。
+- 检查 B 票的结构与签发时间。这是格式和时间校验，不声称能够验证上游签名。
+- 两次探针均要求 HTTP 200，SSE 有完成事件，且没有错误或不完整事件。
+- 第二发携带 B 新票；响应可以不返回票，或返回相同票。不同票意味着续接未通过。
+- 第二发的 Cookie 值必须与第一发取得的配对一致；删除、过期、只更新半对或更换路由均不通过。
+- A 票的来源有效性使用一小时规则；绝不会因为它已经生成 50 分钟，就用 B 的四分钟规则提前拒绝。
+
+业务响应没有新票或回同一张票时，不续期。业务响应返回不同票或路由对改变时，撤销该代组合，
+当前业务仍正常完成，下次业务请求重新获取。旧并发请求的迟到响应不会撤销已经更换的新一代组合。
+
+## 5. A 的配置示例（v8）
+
+把下面的内容合入 A 的现有配置。管理端口、密钥、来源凭据和出口沿用现有部署。
+
+```yaml
+config-version: 8
+oauth:
+  providers:
+    codex:
+      runtime:
+        enabled: false
+      force-websocket: false
+      basispoints:
+        enabled: false
+      header-defaults:
+        oailb-borrow: null
+      turn-state-ticket:
+        enabled: true
+        cache-all-models: true
+        refresh-before-seconds: 600
+        probe-interval-seconds: 60
+        models:
+          - gpt-6-astra
+          - gpt-5.6-sol
+```
+
+来源凭据 ID 使用 A 的凭据列表返回的稳定 ID。文件名和邮箱只用于识别，不作为取票主键。
+如果 B 要请求的模型在 A 尚无快照，接口会返回不可借；不会偷偷用其他模型的票，也不会扩大 A 的主动探测列表。
+
+## 6. B 的配置示例（v8）
+
+```yaml
+config-version: 8
+oauth:
+  providers:
+    codex:
+      runtime:
+        enabled: false
+      force-websocket: false
+      basispoints:
+        enabled: false
+      header-defaults:
+        oailb-borrow:
+          source-url: "http://127.0.0.1:8318"
+          source-auth-id: "A的稳定凭据ID"
+          source-management-key: "A的管理密钥"
+          source-instance-id: "A实例"
+          source-auth-file: "codex-source.json"
+      turn-state-ticket:
+        enabled: true
+```
+
+- `source-url` 是 A 的实例地址，可以包含反向代理路径前缀；不要填写具体取票接口。
+- `source-auth-id` 和 `source-management-key` 必填。
+- `source-instance-id`、`source-auth-file` 是可选展示元数据，不参与来源账号选择。
+- 本分支使用 v8 配置路径；旧分支的 `codex-header-defaults.oailb-borrow` 拼写仍可读取。
+- 删除 `oailb-borrow` 或设为 `null` 关闭借票；空对象不是关闭方式，会报缺少必填配置。
+- B 的普通 `models` 探测列表不限制借票模型；按本次请求最终 payload 中的实际模型向 A 取快照。
+- B 的实验失败策略固定为“无有效票就报错”，不受普通 `fail-closed: false` 的放行策略影响。
+- B 的已验证缓存仅在内存中；重启后由第一个业务请求重新获取和验证，不启动后台借票。
+
+保存或加载明文来源管理密钥时，会将它加密成 `enc:v1:...` 写回配置。
+加密方式兼容原 `oailb-borrow` 分支，数据密钥为当前 `oauth.auth-dir` 下的 `.oailb-data-key`，权限 0600。
+配置 GET 返回保存的密文。迁移旧分支的密文配置时保留对应数据密钥；不能拿另一个实例的数据密钥解密。
+
+## 7. 内部取票接口与日志
+
+A 新增：
+
+```text
+POST /v8/management/credentials/codex/ticket-borrow
+Authorization: Bearer <A的管理密钥>
+Content-Type: application/json
+
+{"auth_id":"A的稳定凭据ID","model":"gpt-6-astra"}
+```
+
+接口使用现有 v8 管理鉴权，返回 `Cache-Control: no-store`。
+HTTP 200 的响应为一份完整来源快照，包括 `state`、`route.__cflb`、`route.__oailb` 和原始期限。
+每枚 Cookie 由 `value` 与可选 `expires_at` 构成；Cookie 未给明确期限时仍受所属票据期限限制。
+来源缺失、不完整、已过期或禁用返回不可借错误，接口不会启动模型调用。
+旧 `/v0/management` 接口没有扩展，A、B 需要同时升级以使用完整快照协议。
+普通凭据列表和凭据下载继续隐藏票据及 Cookie 内容。
+
+探针沿用原 `[TICKET-PROBE]` 日志格式，记录实际请求与响应长度，不输出原始票据和 Cookie。
+B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时也可能为 `780/780`。
+日志长度本身不代替上述续接验证。
+
+```text
+[2026-10-14 12:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-PROBE] 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "/backend-api/codex/responses"
+[2026-10-14 12:00:02] [a1b2c3d5] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-PROBE] 200 | 1.100s | gpt-6-astra/- | 780/0 | POST "/backend-api/codex/responses"
+```
+
+本轮不新增前端显示。原凭据页面的普通一小时票据摘要不代表 B 的四分钟已验证缓存；
+判断 B 实验是否走通应结合探针日志和业务请求结果。
+
+## 8. 回归测试
+
+使用本地模拟 A 接口和模拟 ChatGPT 传输，不使用真实账号探测：
+
+- A 保留到期前十分钟主动续期；A 票生成 50 分钟仍能重复借出；同票重存、JSON 恢复不延长期限；一小时及 Cookie 更早到期时不可借。
+- 快照使用本次请求实际发出的 Cookie，usage 等其他请求更新 Jar 不会污染保存的配对。
+- B 空闲不借票；61 秒复用、60 秒续借、到期拒用旧票；续借失败且旧票未到期时按原期限使用。
+- 并发请求只获取一次、验证两次；凭据与实际模型分别隔离。
+- 回显种子、过期票、结构异常、流错误、不完整流、换票、换路由、半对 Cookie、Cookie 删除均不通过。
+- 业务返回新票只撤销当前代；迟到响应不撤销新代；已开始的 SSE 不因到期被中断。
+- 两条 SSE 执行路径同 turn 强制替换，实际模型取最终 payload，过滤字段不会被恢复，失败不裸发。
+- v8 管理密钥加密保存、配置往返与关闭、来源导出不包含 OAuth token。
+
+## 9. 本次本地验证结果（2026-10-14）
+
+- 借票、来源快照、两条 SSE 执行路径、配置加密与管理接口相关回归测试及 `-race` 检查通过。
+- A 默认提前十分钟续期已保留，原有对应调度测试通过。
+- `go build -o test-output ./cmd/server` 通过，临时构建产物已删除。
+- `go test ./...` 存在一项主线已有失败：
+  `TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile/completed`，
+  完成态测试凭据缺少邮箱，收到“completed Codex OAuth credential is missing email or access token”。
+  在未修改的主线基线 `e50b3414` 上单独执行同一测试也失败；本轮没有改动该 OAuth 测试或功能。
+- 排除该已复现的基线测试后，`go test ./... -skip '^TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile$'` 全部通过。
+- 验证使用模拟来源接口和模拟上游，没有调用真实账号，也没有部署、推送或打标签。

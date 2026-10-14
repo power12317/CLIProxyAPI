@@ -41,6 +41,8 @@ type codexCookieJar struct {
 	inner         http.CookieJar
 	preserveOaiLB bool
 	owner         string
+	routeMu       sync.Mutex
+	routes        map[string]CodexRouteCookie
 }
 
 func (j *codexCookieJar) Cookies(u *url.URL) []*http.Cookie {
@@ -58,6 +60,23 @@ func (j *codexCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	for _, cookie := range cookies {
 		if cookie == nil || !isAllowedCodexCookieName(cookie.Name, j.preserveOaiLB) {
 			continue
+		}
+		if cookie.Name == "__cflb" || cookie.Name == "__oailb" {
+			j.routeMu.Lock()
+			if j.routes == nil {
+				j.routes = make(map[string]CodexRouteCookie)
+			}
+			now := time.Now()
+			for key, value := range j.routes {
+				if !value.ExpiresAt.IsZero() && !now.Before(value.ExpiresAt) {
+					delete(j.routes, key)
+				}
+			}
+			if len(j.routes) > 512 {
+				clear(j.routes)
+			}
+			j.routes[cookie.Name+"\x00"+cookie.Value] = codexRouteCookie(cookie, now)
+			j.routeMu.Unlock()
 		}
 		filtered = append(filtered, cookie)
 	}
@@ -361,4 +380,13 @@ func codexWebsocketCookieURL(rawURL string) *url.URL {
 		return nil
 	}
 	return target
+}
+
+func (j *codexCookieJar) routeCookie(c *http.Cookie) CodexRouteCookie {
+	j.routeMu.Lock()
+	defer j.routeMu.Unlock()
+	if value, ok := j.routes[c.Name+"\x00"+c.Value]; ok {
+		return value
+	}
+	return codexRouteCookie(c, time.Now())
 }

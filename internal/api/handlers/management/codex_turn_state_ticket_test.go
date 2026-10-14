@@ -105,7 +105,7 @@ func TestCodexTicketManagementIndependentOfBasispoints(t *testing.T) {
 			t.Fatalf("ticket enabled must remain independent of Basispoints: %s", body)
 		}
 		if gjson.GetBytes(body, "probe_interval_seconds").Int() != wantInterval ||
-			gjson.GetBytes(body, "ttl_seconds").Int() != 1800 ||
+			gjson.GetBytes(body, "ttl_seconds").Int() != 3600 ||
 			gjson.GetBytes(body, "models.0").String() != "gpt-6-astra" ||
 			!gjson.GetBytes(body, "accounts").IsArray() {
 			t.Fatalf("ticket settings or status missing: %s", body)
