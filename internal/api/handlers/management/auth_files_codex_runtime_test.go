@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -23,7 +24,9 @@ func TestCodexRuntimeSharedFileAllowsNormalManagement(t *testing.T) {
 	if err := codexshared.Write(path, metadata); err != nil {
 		t.Fatal(err)
 	}
-	m := coreauth.NewManager(nil, nil, nil)
+	store := sdkAuth.NewFileTokenStore()
+	store.SetBaseDir(dir)
+	m := coreauth.NewManager(store, nil, nil)
 	a := &coreauth.Auth{ID: "original.json", FileName: "original.json", Provider: "codex", Status: coreauth.StatusActive, Metadata: metadata, Attributes: map[string]string{coreauth.AttributePath: path}}
 	if _, err := m.Register(context.Background(), a); err != nil {
 		t.Fatal(err)
@@ -37,6 +40,7 @@ func TestCodexRuntimeSharedFileAllowsNormalManagement(t *testing.T) {
 		{"refresh", http.MethodPost, "/auth-files/refresh?name=" + url.QueryEscape(a.ID), "", h.RefreshAuthFiles, http.StatusConflict},
 		{"fields", http.MethodPatch, "/auth-files/fields", `{"name":"original.json","prefix":"new"}`, h.PatchAuthFileFields, http.StatusOK},
 		{"disable", http.MethodPatch, "/auth-files/status", `{"name":"original.json","disabled":true}`, h.PatchAuthFileStatus, http.StatusOK},
+		{"enable", http.MethodPatch, "/v8/management/credentials/status", `{"name":"original.json","disabled":false}`, h.PatchAuthFileStatus, http.StatusOK},
 		{"delete", http.MethodDelete, "/auth-files?name=" + url.QueryEscape(a.ID), "", h.DeleteAuthFile, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,10 +52,18 @@ func TestCodexRuntimeSharedFileAllowsNormalManagement(t *testing.T) {
 			if rec.Code != tc.status {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
 			}
-			if tc.name == "fields" || tc.name == "disable" {
+			if tc.name == "fields" || tc.name == "disable" || tc.name == "enable" {
 				got, err := codexshared.Read(path)
 				if err != nil || got["access_token"] != "latest" || got["extension"] != true {
 					t.Fatal(got, err)
+				}
+				if tc.name == "disable" || tc.name == "enable" {
+					if got["disabled"] != (tc.name == "disable") {
+						t.Fatalf("successful %s did not persist disabled: %v", tc.name, got["disabled"])
+					}
+					if state, ok := codexshared.Get(got); !ok || !state.Enabled {
+						t.Fatal("credential toggle changed worker ownership")
+					}
 				}
 			}
 		})

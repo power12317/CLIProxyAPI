@@ -40,6 +40,11 @@ func TestCodexRuntimeSharedCredentialRefreshFollowsGlobalMode(t *testing.T) {
 	if _, err := m.Update(ctx, a); err != nil {
 		t.Fatal(err)
 	}
+	// Management metadata still persists; refresh ownership only governs token refresh.
+	metadataSaves := store.saveCount.Load()
+	if metadataSaves != 2 {
+		t.Fatalf("register/update metadata was not persisted: saves=%d", metadataSaves)
+	}
 	if _, scheduled := m.nextRefreshCheckAt(time.Now(), a, time.Minute); scheduled || m.shouldRefresh(a, time.Now()) {
 		t.Fatal("enabled shared credential entered CPA refresh scheduling")
 	}
@@ -53,9 +58,12 @@ func TestCodexRuntimeSharedCredentialRefreshFollowsGlobalMode(t *testing.T) {
 		t.Fatal("request refresh was accepted while Codex maintained the credential")
 	}
 	m.refreshAuth(ctx, a.ID)
+	if executor.refreshCalls.Load() != 0 || store.saveCount.Load() != metadataSaves {
+		t.Fatal("CPA refresh paths refreshed or persisted enabled shared credential tokens")
+	}
 	m.MarkResult(ctx, Result{AuthID: a.ID, Provider: "codex", Model: "model", Success: true})
-	if executor.refreshCalls.Load() != 0 || store.saveCount.Load() != 0 {
-		t.Fatal("CPA refreshed or persisted enabled shared credential tokens")
+	if executor.refreshCalls.Load() != 0 {
+		t.Fatal("recording a request result refreshed a runtime-owned credential")
 	}
 
 	// The same original file becomes CPA-managed after the global mode changes.
