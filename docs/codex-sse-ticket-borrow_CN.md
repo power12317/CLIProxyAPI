@@ -1,6 +1,7 @@
 # 跨实例 SSE 借票：第一阶段实现与测试
 
-本分支为 `codex/sse-ticket-borrow`，基于 CPA 主线 `e50b3414`。
+本功能已合并到 `codex/oailb-borrow`，覆盖该分支的旧借票实现。实现最初在
+`codex/sse-ticket-borrow` 开发，基于 CPA 主线 `e50b3414`。旧分支历史作为合并父提交保留。
 实现参考 `ranxi2001/sub2api` 的借种子票、两次探针验证及路由 Cookie 配对方法；参考代码为
 `production` 提交 `0d1f0359`（相关借票代码与 `v2.10.7` 一致）。
 跨实例配置和管理密钥加密沿用 CPA `codex/oailb-borrow` 的方案。
@@ -228,3 +229,24 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
   在未修改的主线基线 `e50b3414` 上单独执行同一测试也失败；本轮没有改动该 OAuth 测试或功能。
 - 排除该已复现的基线测试后，`go test ./... -skip '^TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile$'` 全部通过。
 - 验证使用模拟来源接口和模拟上游，没有调用真实账号，也没有部署、推送或打标签。
+
+## 10. 借票分支发布
+
+- 发布分支：`codex/oailb-borrow`。
+- 分支标签格式：`oailb-borrow/vYYYY.MM.DD-N`。
+- 本次准备的标签：`oailb-borrow/v2026.10.14-1`。
+- 独立镜像仓库：`ghcr.io/power12317/cliproxyapi-oailb-borrow`。
+- 本次镜像标签：`v2026.10.14-1`；完整地址为
+  `ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.14-1`。
+- 推送分支标签后由 `docker-oailb-borrow` 工作流构建 `linux/amd64` 和 `linux/arm64`，再发布多架构镜像。
+- 工作流仅写入借票专用镜像仓库，不更新正式镜像的 `latest`。
+- 通用 Release 工作流明确排除 `oailb-borrow/**`，不会为实验标签运行正式版出包流程。
+- 镜像构建使用主线同款 Dockerfile，并在构建前刷新模型目录。
+
+镜像发布成功后，A、B 均使用：
+
+```bash
+docker pull ghcr.io/power12317/cliproxyapi-oailb-borrow:v2026.10.14-1
+```
+
+分支提交和标签推送成功只代表已经触发构建；镜像是否可拉取以工作流发布结果为准。
