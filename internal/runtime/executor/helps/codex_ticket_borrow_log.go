@@ -16,11 +16,14 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // This value is request-local. Cached tickets must not retain request contexts.
 type codexBorrowLog struct {
 	requestID, authFile, sessionID, turnID, model string
+	responseModel, node                           string
+	responseModelFinal                            bool
 }
 
 func newCodexBorrowLog(ctx context.Context, auth *cliproxyauth.Auth, model string) codexBorrowLog {
@@ -82,9 +85,42 @@ func (l codexBorrowLog) request(stage string, req *http.Request, resp *http.Resp
 		}
 		detail += " | " + codexBorrowFailureReason(err)
 	}
-	l.entry().Logf(level, "%s %s | %.3fs | %s/- | %d/%d | %s %q%s",
-		stage, status, elapsed.Truncate(time.Millisecond).Seconds(), borrowLogText(l.model),
+	l.entry().Logf(level, "%s %s | %.3fs | %s | %s/%s | %d/%d | %s %q%s",
+		stage, status, elapsed.Truncate(time.Millisecond).Seconds(), codexBorrowLogValue(l.node), borrowLogText(l.model), codexBorrowLogValue(l.responseModel),
 		requestLength, responseLength, method, target, detail)
+}
+
+func codexBorrowLogValue(value string) string {
+	if value = strings.TrimSpace(value); value == "" {
+		return "-"
+	}
+	return borrowLogText(value)
+}
+
+// Observe only authoritative response metadata; generated output is not a model.
+// Keep this local to the probe so business usage/access-log fields stay untouched.
+func (l *codexBorrowLog) observeResponseModel(payload []byte, secrets []string) {
+	if l == nil || l.responseModelFinal {
+		return
+	}
+	model, terminal := extractResponseModelEvent(payload, "codex")
+	if model == "" && gjson.ValidBytes(payload) {
+		kind := gjson.GetBytes(payload, "type").String()
+		if kind == "error" || kind == "response.failed" || kind == "" {
+			value := gjson.GetBytes(payload, "response.model")
+			if value.Type != gjson.String {
+				value = gjson.GetBytes(payload, "model")
+			}
+			if value.Type == gjson.String && len(strings.TrimSpace(value.String())) <= maxResponseModelLength {
+				model = strings.TrimSpace(value.String())
+			}
+			terminal = kind == "error" || kind == "response.failed" || model != ""
+		}
+	}
+	if model != "" {
+		l.responseModel = codexBorrowRedactErrorText(model, secrets)
+	}
+	l.responseModelFinal = terminal
 }
 
 func codexBorrowLogURL(u *url.URL) string {
@@ -146,8 +182,8 @@ func codexBorrowRetryReason(retryAt, now time.Time, reason, requestID string) st
 }
 
 func codexBorrowTicketDetail(ticket *CodexBorrowedTicket) string {
-	return fmt.Sprintf("ticket=%d | remaining=%ds",
-		len(ticket.State),
+	return fmt.Sprintf("node=%s | ticket=%d | remaining=%ds",
+		codexBorrowLogValue(CodexOaiLBNode(ticket.Route.OaiLB.Value)), len(ticket.State),
 		max(int64(ticket.Route.deadline(ticket.ExpiresAt).Sub(time.Now())/time.Second), 0))
 }
 

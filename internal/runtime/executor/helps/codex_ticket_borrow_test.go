@@ -85,7 +85,7 @@ func newBorrowFixture(t *testing.T) *borrowFixture {
 		}
 		cf, errCF := req.Cookie("__cflb")
 		oai, errOAI := req.Cookie("__oailb")
-		if errCF != nil || errOAI != nil || cf.Value != "source-cf" || oai.Value != "source-oai" {
+		if errCF != nil || errOAI != nil || cf.Value != f.seed.Route.CFLB.Value || oai.Value != f.seed.Route.OaiLB.Value {
 			t.Error("probe mixed route cookies")
 		}
 		raw, _ := io.ReadAll(req.Body)

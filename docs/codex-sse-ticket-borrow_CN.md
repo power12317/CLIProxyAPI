@@ -271,8 +271,8 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
 日志同时显示值是否相同，长度本身不代替上述续接验证。票据和 Cookie 原值不会写入日志。
 
 ```text
-[2026-10-15 16:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
-[2026-10-15 16:00:02] [a1b2c3d4] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/0 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=absent
+[2026-10-15 16:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | unified-86 | gpt-6-astra/gpt-6-astra | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
+[2026-10-15 16:00:02] [a1b2c3d4] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | unified-86 | gpt-6-astra/gpt-6-astra | 780/0 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=absent
 ```
 
 本轮不新增前端显示。原凭据页面的普通一小时票据摘要不代表 B 的四分钟已验证缓存；
@@ -499,7 +499,7 @@ A 的一小时期限、提前十分钟续期，B 的 240 秒期限、提前 60 �
 `ACQUIRE` 和 `SOURCE` 均不再输出 `credential` 字段。
 两次探针前缀的 session/turn 是实际探针自己的标识，不再为每条日志另造无关联的请求 ID。
 
-请求行保留状态、秒数、模型、请求/响应票长、方法与地址。来源接口的 `0/780`
+请求行保留状态、秒数、节点、请求模型/实际响应模型、请求/响应票长、方法与地址。来源接口的 `0/780`
 表示从响应 JSON 快照取到了长 780 的来源票；上游请求行的长度来自实际请求/响应头。
 地址记录实例主机及路径，移除用户名、密码、查询串及片段。
 
@@ -521,9 +521,9 @@ HTTP 200 后读流失败时，仍显示真实 HTTP 200，同时使用 `warn` 并
 以下是“第二次响应仍长 780，但实际返回另一张票”的示意，**不是对用户旧日志原因的认定**：
 
 ```text
-[2026-10-15 16:00:00] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [info ] [TICKET-BORROW] SOURCE 200 | 0.010s | gpt-6-astra/- | 0/780 | POST "http://instance8:8317/v0/management/codex/oailb/borrow" | remaining=599s
-[2026-10-15 16:00:02] [a1b2c3d4] [codex-b.json] [probe001] [probe002] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
-[2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [probe003] [probe004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
+[2026-10-15 16:00:00] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [info ] [TICKET-BORROW] SOURCE 200 | 0.010s | unified-86 | gpt-6-astra/gpt-6-astra | 0/780 | POST "http://instance8:8317/v0/management/codex/oailb/borrow" | remaining=599s
+[2026-10-15 16:00:02] [a1b2c3d4] [codex-b.json] [probe001] [probe002] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | unified-86 | gpt-6-astra/gpt-6-astra | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
+[2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [probe003] [probe004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | unified-86 | gpt-6-astra/gpt-6-astra | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
 [2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [warn ] [TICKET-BORROW] ACQUIRE | gpt-6-astra | verify: continuation returned a different ticket (780/780); retry in 30 seconds; business request not sent
 [2026-10-15 16:00:04] [b1b2c3d4] [codex-b.json] [session1] [turn0001] [warn ] [TICKET-BORROW] WAIT | gpt-6-astra | acquisition retry is deferred for 29 seconds; last failure: verify: continuation returned a different ticket (780/780); acquisition request: a1b2c3d4; business request not sent
 ```
@@ -664,7 +664,7 @@ API 相关回归的 `-race` 检查通过，其中包括真实 v3 worker 的来�
 以下仅演示输出结构，不代表已经确认真实上游返回了这个错误：
 
 ```text
-[TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | probe stream reported failure: type=error, code=concurrent_request_limit_exceeded, status=429, message="Too many concurrent requests."
+[TICKET-BORROW] VERIFY 200 | 1.100s | unified-86 | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | probe stream reported failure: type=error, code=concurrent_request_limit_exceeded, status=429, message="Too many concurrent requests."
 ```
 
 日志不再包含 Cookie 长度；如果 Cookie 配对本身导致验证失败，仍会输出具体失败原因。
@@ -673,3 +673,33 @@ API 相关回归的 `-race` 检查通过，其中包括真实 v3 worker 的来�
 验证：HTTP/SSE 错误码与说明能够到达日志、首次失败及等待期错误响应；目标凭据及实际票据/Cookie
 不会出现在错误内容中；Cookie 长度字段与计算代码已删除。相关回归、`-race`、真实 v3 worker 联调、
 格式检查和服务构建通过。整仓回归仅排除此前已确认的 OAuth 基线失败用例后通过。
+
+
+## 2026-10-15：补齐借票响应模型和路由节点
+
+借票请求行采用与正常请求一致的字段顺序：
+
+```text
+[TICKET-BORROW] EXCHANGE 200 | 2.305s | unified-86 | gpt-6-astra/gpt-5.6-sol | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
+[TICKET-BORROW] VERIFY 200 | 1.909s | unified-86 | gpt-6-astra/gpt-6-astra | 780/0 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=absent
+```
+
+这些是格式示例，不代表实际发生了模型替换。
+
+- `EXCHANGE/VERIFY` 读取本次 SSE 的 `response.model`，复用正常请求的模型解析器。
+  完成事件提供的模型覆盖前期值；只有上游未提供可用模型时才显示 `-`，不使用请求模型填充。
+- 失败事件或 HTTP 错误 JSON 如果带有模型字段，也会记录。已有 `response.created` 模型后
+  再遇到上游错误、SSE 未完成或读流中断，保留已经收到的模型。模型字段只供日志观察，不改变票据的模型隔离规则。
+- 节点复用现有 `CodexOaiLBNodeForExchange`：优先解码响应中的 `__oailb`，没有该响应 Cookie
+  时解码实际发出的 Cookie。响应显式删除或返回无法解码的 Cookie 时显示 `-`，不回填旧节点。
+- `SOURCE` 展示来源快照中的模型和 Cookie 节点。它代表取回的快照，不表示 A 为这次借票又发了一次推理请求。
+- `READY/REUSE` 补充当前缓存组合的 `node=…`，用于对照后续请求。
+- 只展示 `unified-86` 这类短节点，不输出 Cookie、完整内部主机名或 Cookie 长度统计。
+  目标凭据名称和原始 ID 继续隐藏。
+- 观察字段只保存在单次探针内部，不污染业务请求的模型、节点或用量记录，也不增加上游请求。
+
+测试覆盖最终模型替换、未返回模型、错误事件、HTTP 错误、部分流读取失败、CRLF 多行 SSE、
+响应节点优先/请求节点回退、失效节点不回退、来源/缓存节点、业务日志隔离以及凭据脱敏。
+
+验证结果：新增模型/节点测试与借票回归、`-race`、真实 v3 worker 联调、格式检查和服务构建通过；
+整仓回归仅排除此前已确认的 OAuth 基线失败用例后通过。

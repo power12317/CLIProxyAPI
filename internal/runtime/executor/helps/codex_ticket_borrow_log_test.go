@@ -69,7 +69,7 @@ func TestCodexBorrowLogsCorrelateCompleteFlowAndRevocation(t *testing.T) {
 			t.Fatalf("uncorrelated stage %s: %+v", stage, entries[i])
 		}
 	}
-	for _, want := range []string{"SOURCE 200", "0/780", "EXCHANGE 200", "780/780", "ticket=changed", "VERIFY 200", "780/0", "ticket=absent", "READY | gpt-6-astra | ticket=780"} {
+	for _, want := range []string{"SOURCE 200", "gpt-6-astra/gpt-6-astra", "0/780", "EXCHANGE 200", "780/780", "ticket=changed", "VERIFY 200", "780/0", "ticket=absent", "READY | gpt-6-astra | node=- | ticket=780"} {
 		if !strings.Contains(formattedBorrowLogs(t, hook), want) {
 			t.Errorf("missing %q", want)
 		}

@@ -93,7 +93,7 @@ func codexBorrowRedactErrorText(value string, secrets []string) string {
 	return value
 }
 
-func codexBorrowHTTPFailure(stage string, resp *http.Response, secrets []string) error {
+func codexBorrowHTTPFailure(stage string, resp *http.Response, secrets []string, trace *codexBorrowLog) error {
 	reason := fmt.Sprintf("%s returned HTTP %d", stage, resp.StatusCode)
 	if resp.Body != nil {
 		const limit = 16 * 1024
@@ -104,6 +104,7 @@ func codexBorrowHTTPFailure(stage string, resp *http.Response, secrets []string)
 		case len(raw) > limit:
 			reason += "; error body exceeds 16384 bytes"
 		case len(strings.TrimSpace(string(raw))) != 0:
+			trace.observeResponseModel(raw, secrets)
 			reason += "; upstream: " + codexBorrowStreamFailure(raw, secrets...)
 		}
 	}

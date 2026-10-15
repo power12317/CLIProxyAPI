@@ -190,7 +190,10 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	var resp *http.Response
 	defer func() {
 		detail := ""
+		// SOURCE reports the returned snapshot model, not an upstream inference.
+		trace.responseModel = codexBorrowRedactErrorText(bundle.Model, []string{c.SourceAuthID, c.SourceAuthFile, c.SourceManagementKey})
 		if bundle.Route != nil {
+			trace.node = CodexOaiLBNode(bundle.Route.OaiLB.Value)
 			detail = fmt.Sprintf(" | remaining=%ds", max(int64(bundle.Route.deadline(bundle.ExpiresAt).Sub(time.Now())/time.Second), 0))
 		}
 		trace.request("SOURCE", req, resp, len(bundle.State), time.Since(started), detail, errResult)
@@ -215,7 +218,7 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return bundle, codexBorrowHTTPFailure("source instance", resp, codexBorrowErrorSecrets(cfg, nil, req, resp))
+		return bundle, codexBorrowHTTPFailure("source instance", resp, codexBorrowErrorSecrets(cfg, nil, req, resp), nil)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16385))
 	var result CodexOaiLBBorrowResponse
@@ -304,6 +307,9 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 	trace.sessionID, trace.turnID = session, turn
 	defer func() {
 		length := 0
+		if req != nil {
+			trace.node = CodexOaiLBNodeForExchange(req.Header, resp)
+		}
 		if resp != nil {
 			length = len(strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader)))
 		}
@@ -326,10 +332,10 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 	defer func() { _ = resp.Body.Close() }()
 	secrets := codexBorrowErrorSecrets(cfg, auth, req, resp)
 	if resp.StatusCode != http.StatusOK {
-		return "", route, codexBorrowHTTPFailure("probe", resp, secrets)
+		return "", route, codexBorrowHTTPFailure("probe", resp, secrets, &trace)
 	}
 	result, ok := codexResponseRoute(route, resp, time.Now(), true)
-	if err := readCodexBorrowComplete(resp.Body, secrets...); err != nil {
+	if err := readCodexBorrowCompleteObserved(resp.Body, &trace, secrets); err != nil {
 		return "", route, err
 	}
 	if !ok || !result.valid(time.Now()) {
@@ -343,14 +349,24 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 }
 
 func readCodexBorrowComplete(body io.Reader, secrets ...string) error {
+	return readCodexBorrowCompleteObserved(body, nil, secrets)
+}
+
+func readCodexBorrowCompleteObserved(body io.Reader, trace *codexBorrowLog, secrets []string) error {
 	const limit = 1024 * 1024
 	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
-	if err != nil {
-		return borrowError(fmt.Sprintf("probe stream read failed: %s (%d bytes)", codexBorrowIOReason(err), len(raw)))
-	}
 	if len(raw) > limit {
 		return borrowError("probe stream exceeds 1048576 bytes")
 	}
+	// Preserve metadata already received even if the body later fails to read.
+	errComplete := parseCodexBorrowComplete(raw, trace, secrets)
+	if err != nil {
+		return borrowError(fmt.Sprintf("probe stream read failed: %s (%d bytes)", codexBorrowIOReason(err), len(raw)))
+	}
+	return errComplete
+}
+
+func parseCodexBorrowComplete(raw []byte, trace *codexBorrowLog, secrets []string) error {
 	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
 	raw = bytes.ReplaceAll(raw, []byte("\r"), []byte("\n"))
@@ -369,6 +385,7 @@ func readCodexBorrowComplete(body io.Reader, secrets ...string) error {
 		if !gjson.ValidBytes(data) {
 			return borrowError("probe stream contains invalid data")
 		}
+		trace.observeResponseModel(data, secrets)
 		kind := gjson.GetBytes(data, "type").String()
 		status := gjson.GetBytes(data, "response.status").String()
 		if kind == "error" || kind == "response.failed" || kind == "response.incomplete" || status == "failed" || status == "incomplete" || gjson.GetBytes(data, "error").IsObject() || gjson.GetBytes(data, "response.error").IsObject() {
