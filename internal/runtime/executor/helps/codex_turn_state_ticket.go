@@ -135,13 +135,18 @@ func codexTurnStateTicketForAuth(auth *cliproxyauth.Auth, model string) *CodexTu
 }
 
 func isCodexTurnStateTicketAccount(auth *cliproxyauth.Auth) bool {
-	return auth != nil && !cliproxyauth.IsCodexRuntimeOwnedAuth(auth) && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.AuthKind() == cliproxyauth.AuthKindOAuth
+	return isCodexSourceTicketAccount(auth) && !cliproxyauth.IsCodexRuntimeOwnedAuth(auth)
+}
+
+// Source storage accepts runtime credentials without enabling direct HTTP injection.
+func isCodexSourceTicketAccount(auth *cliproxyauth.Auth) bool {
+	return auth != nil && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.AuthKind() == cliproxyauth.AuthKindOAuth
 }
 
 // CodexTurnStateTicketStatuses creates the redacted per-model state shown by
 // management clients. It never returns the ticket blob itself.
 func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnStateTicketConfig, now time.Time) []CodexTurnStateTicketStatus {
-	if !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) {
+	if !cfg.Enabled || !isCodexSourceTicketAccount(auth) {
 		return nil
 	}
 	if now.IsZero() {
@@ -177,16 +182,27 @@ func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnS
 		if ticket != nil {
 			status.Length = ticket.Length
 		}
-		if ticket.valid(now) {
+		ready := ticket.valid(now)
+		if ready && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+			source, err := ExportCodexSourceTicket(auth, model, now)
+			ready = err == nil
+			if ready {
+				ticket = &source
+			}
+		}
+		if ready {
+			expires := ticket.ExpiresAt
+			if cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+				expires = ticket.Route.deadline(expires)
+			}
 			status.Ready = true
-			status.RemainingSeconds = int64(ticket.ExpiresAt.Sub(now) / time.Second)
+			status.RemainingSeconds = int64(expires.Sub(now) / time.Second)
 			if status.RemainingSeconds < 0 {
 				status.RemainingSeconds = 0
 			}
-			expires := ticket.ExpiresAt
 			status.ExpiresAt = &expires
 		}
-		status.Blocked = cfg.FailClosed && codexTurnStateTicketModelConfigured(cfg.Models, model) && !status.Ready
+		status.Blocked = cfg.FailClosed && !cliproxyauth.IsCodexRuntimeOwnedAuth(auth) && codexTurnStateTicketModelConfigured(cfg.Models, model) && !status.Ready
 		out = append(out, status)
 	}
 	return out
@@ -327,6 +343,9 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 		ctx = context.Background()
 	}
 	model = strings.TrimSpace(model)
+	if cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
+		return harvestCodexRuntimeTicket(ctx, cfg, auth, model)
+	}
 	harvestProxyURL = strings.TrimSpace(harvestProxyURL)
 	if !isCodexTurnStateTicketAccount(auth) {
 		return CodexTurnStateTicket{}, 0, nil
@@ -533,12 +552,6 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 	if !policy.Enabled || cfg.CodexHeaderDefaults.OaiLBBorrow != nil {
 		return
 	}
-	if strings.TrimSpace(policy.HarvestProxyURL) != "" {
-		if errProxy := ValidateCodexTurnStateTicketHarvestProxyURL(policy.HarvestProxyURL); errProxy != nil {
-			log.WithError(errProxy).Warn("codex turn-state ticket harvester disabled by invalid harvest proxy")
-			return
-		}
-	}
 	auths := h.listFn()
 	sort.SliceStable(auths, func(i, j int) bool {
 		if auths[i] == nil || auths[j] == nil {
@@ -547,7 +560,7 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 		return auths[i].ID < auths[j].ID
 	})
 	for _, auth := range auths {
-		if ctx.Err() != nil || !isCodexTurnStateTicketAccount(auth) || auth.Disabled || (auth.Status != "" && auth.Status != cliproxyauth.StatusActive) {
+		if ctx.Err() != nil || !isCodexSourceTicketAccount(auth) || auth.Disabled || (auth.Status != "" && auth.Status != cliproxyauth.StatusActive) {
 			continue
 		}
 		for _, model := range policy.Models {
@@ -565,7 +578,7 @@ func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
 				continue
 			}
 			current := h.findAuth(auth.ID)
-			if current == nil || !isCodexTurnStateTicketAccount(current) || current.Disabled || (current.Status != "" && current.Status != cliproxyauth.StatusActive) {
+			if current == nil || !isCodexSourceTicketAccount(current) || current.Disabled || (current.Status != "" && current.Status != cliproxyauth.StatusActive) {
 				break
 			}
 			now := time.Now()
@@ -598,6 +611,12 @@ func (h *CodexTurnStateTicketHarvester) Record(auth *cliproxyauth.Auth, ticket C
 }
 
 func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, proxyURL string) {
+	if !cliproxyauth.IsCodexRuntimeOwnedAuth(auth) && proxyURL != "" {
+		if errProxy := ValidateCodexTurnStateTicketHarvestProxyURL(proxyURL); errProxy != nil {
+			log.WithError(errProxy).Warn("codex turn-state ticket harvester disabled by invalid harvest proxy")
+			return
+		}
+	}
 	ticket, status, errHarvest := HarvestCodexTurnStateTicket(ctx, cfg, auth, model, proxyURL)
 	if errHarvest != nil || status != http.StatusOK || strings.TrimSpace(ticket.State) == "" {
 		return

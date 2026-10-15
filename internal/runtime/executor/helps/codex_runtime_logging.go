@@ -10,6 +10,7 @@ import (
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	"github.com/tidwall/gjson"
 )
 
 // CodexRuntimeLog routes the worker's actual HTTP exchanges into CPA's existing logs.
@@ -21,13 +22,27 @@ type CodexRuntimeLog struct {
 	turn    *CodexTurnState
 	RawBody bool
 	pending []byte
+	ticket  *codexRuntimeTicketCapture
 }
 
 func NewCodexRuntimeLog(ctx context.Context, cfg *config.Config, auth *coreauth.Auth, model string) *CodexRuntimeLog {
 	return &CodexRuntimeLog{ctx: ctx, cfg: cfg, auth: auth, model: model}
 }
 
+// CaptureSourceTickets attaches storage to the existing v3 observation callbacks.
+// The final business payload is read only; no IPC parameter is added.
+func (l *CodexRuntimeLog) CaptureSourceTickets(body []byte) {
+	l.ticket = newCodexRuntimeTicketCapture(l.cfg, l.auth, gjson.GetBytes(body, "model").String())
+	if l.ticket != nil {
+		l.ticket.save = func(ticket CodexTurnStateTicket) {
+			notifyCodexTurnStateTicketRecorder(l.auth, ticket)
+			StoreCodexTurnStateTicket(l.auth, ticket)
+		}
+	}
+}
+
 func (l *CodexRuntimeLog) Record(entry bridge.UpstreamLog) {
+	l.ticket.Record(entry)
 	switch entry.Kind {
 	case "request":
 		l.Flush()
@@ -75,6 +90,7 @@ func (l *CodexRuntimeLog) Record(entry bridge.UpstreamLog) {
 }
 
 func (l *CodexRuntimeLog) Event(event []byte) {
+	l.ticket.Event(event)
 	if !l.RawBody {
 		AppendAPIResponseChunk(l.ctx, l.cfg, append([]byte("data: "), event...))
 	}

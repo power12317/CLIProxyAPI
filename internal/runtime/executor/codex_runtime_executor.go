@@ -131,6 +131,9 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 	if err != nil {
 		return nil, err
 	}
+	if operation == "responses" {
+		upstreamLog.CaptureSourceTickets(body)
+	}
 	client.OnUpstream = upstreamLog.Record
 	upstreamLog.RawBody = true
 	requestID := ""

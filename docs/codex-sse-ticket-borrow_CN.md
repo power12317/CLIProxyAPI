@@ -6,7 +6,7 @@
 `production` 提交 `0d1f0359`（相关借票代码与 `v2.10.7` 一致）。
 跨实例配置和管理密钥加密沿用 CPA `codex/oailb-borrow` 的方案。
 
-本次只需要升级 **CLIProxyAPI**：A 与 B 均部署本分支版本。没有新增前端页面，也不需要改动其他项目。
+本次只修改 **CLIProxyAPI**：A 与 B 均部署本分支版本。A 使用 Codex 模式供票时，需要搭配已经通过现有 v3 通道回传原始头的 codex-server；本次未修改其他项目或新增前端页面。
 这是用户确认的一小时来源票实验：A 的来源票按一小时判断，B 换出的目标票按四分钟判断，
 并未照搬参考项目对来源票也使用四分钟的规则。
 
@@ -15,8 +15,9 @@
 - A 是正常来源账号所在的 CPA；B 是需要借票的账号所在的 CPA。
 - 支持 Go 直接连接 `https://chatgpt.com/backend-api/codex/responses` 的 SSE 路径。
   下游请求流式或非流式均可，两者向上游使用 SSE。
-- 使用前按约定关闭 WebSocket、Codex Server/runtime、Basispoints 等其他上游通道。
-  本轮不适配这些通道，也不适配 compact、独立图片接口或自定义 Responses 上游地址。
+- B 的借票执行继续只支持直连 SSE，参与借票的请求不使用 WebSocket、Codex Server/runtime 或 Basispoints 通道。
+- A 的来源既支持直连 SSE，也支持 Codex Server/runtime v3：后者从正常请求的现有上游通知与 SSE 元数据保存配套票据。
+  compact、独立图片接口不作为来源采集入口。
 - 不引入中央票据池、自动寻找来源账号、主票/备用票双池或自动更换出口。
 - B 的两次探针和业务请求使用 B 自己的 OAuth 身份、凭据出口及固定设备标识。
   A 的 OAuth token 不会借给 B。
@@ -112,6 +113,8 @@ Cookie 如果更早到期，使用更早的期限。验证完成时还必须留�
 ## 5. A 的配置示例（v8）
 
 把下面的内容合入 A 的现有配置。管理端口、密钥、来源凭据和出口沿用现有部署。
+此示例为直连来源；A 已使用 Codex 模式时，保持既有 `runtime.enabled: true` 和 Runtime 地址，
+并开启门票总开关即可，不需要增加接口参数或新的采集开关。
 
 ```yaml
 config-version: 8
@@ -400,3 +403,70 @@ docker compose up -d --pull always --no-build cli-proxy-api
 该 WebSocket 测试单独连续重跑十次通过，随后仅排除已知 OAuth 基线失败的全量复核通过。
 工作流通过 actionlint；执行脚本验证分支/标签版本、双架构合并、过期构建不回退 latest 及拒绝其他分支。
 `docker compose config` 确认默认镜像是借票专用 latest，拉取策略为 always。
+
+
+## 2026-10-15：实例 8 的 Codex 模式作为来源
+
+本节对应本次借票分支镜像的实现。推送 `codex/oailb-borrow` 将触发现有独立镜像工作流；
+镜像是否已构建完成，应核对对应 Actions 和实际运行版本。
+
+实例 8（A）可以同时开启 Codex 模式与门票总开关，不配置 oailb 借用来源；
+实例 3（B）保持直连 SSE、门票开启，来源选实例 8 的指定凭据。A 与 B 均使用
+包含本次 CPA 改动的借票分支版本。
+
+### 复用范围
+
+- 读取现有 `cpa/inference/upstream` 请求和响应通知。票据来自响应头，或原有
+  v3 正文中的 `response.metadata` / `codex.response.metadata`。
+- Cookie 按同次实际请求 Cookie 与响应 Set-Cookie 配对，复用已有配对函数、
+  票据结构、recorder、凭据持久化和原借票接口。
+- 普通响应采集不额外请求上游。不发送 `captureTicketSnapshot`，不依赖
+  `ticketSnapshots` 能力或 `cpa/inference/ticket` 通知。
+- 保持协议 v3，未引入 v5，未修改任何 HTTP/IPC 接口结构或 CPAMP 配置。
+
+A 启动或打开总开关时立即检查来源票；到期前十分钟继续按原有定时器续期。
+Runtime 凭据的补采通过已有 `cpa/inference/start` 调用执行现有 ping/pong
+探针，仍由 worker 使用自己的身份、出口和设备设置；CPA 不直连上游替它打票。
+采到需要的有效来源后即可结束获取，不要求 A 再做 B 的两次验证。
+
+A 的普通对话票据仍由 codex-server 管理；CPA 不向 Runtime 普通业务请求注入
+一小时票，也不会把 Runtime Cookie 灌入 CPA 的普通 OAuth Jar。
+
+### 来源状态与期限
+
+- Runtime 凭据可在既有凭据页面看到门票状态，只有票及配套 Cookie 可借时显示就绪。
+- A 来源票保留原始签发时间加一小时，Cookie 已知更早到期时以更早期限为准。
+- 相同票据重复出现不会续命；请求的 Cookie 沿用已知的相同值期限；SSE 元数据
+  后到达时不会重新计算响应 Max-Age。
+- Windows/macOS、凭据和实际模型独立；新上游尝试会清空当前交换配对，避免重试混票。
+- B 的 240 秒期限、提前 60 秒按业务触发续借和 30 秒失败节流保持原有实现。
+  B 界面填入普通门票的 3600 秒，不会改变借票缓存的 240 秒。
+
+### 服务端前提
+
+真实联调使用 codex-server main `024ada83c8a2aa2966cf49db4f0e36dc1adfd36c`
+对应的 v3 产物，官方身份为 `codex-app-server 0.162.1`。
+必须使用现有 IPC 返回 Cookie 原值的服务端；旧版只返回 `[REDACTED]` 时无法组成
+完整来源。本文不代表远端镜像已经更新，应以实际部署版本为准。
+
+### 本地验证
+
+1. 响应头及两种 SSE 元数据事件采集、响应更新与请求 Cookie 继承、删除、期限、
+   并发凭据隔离、旧脱敏数据拒绝、模型范围及门票开关均有回归覆盖。
+2. v3 探针验证实际 RPC 字段没有增加，payload 规则只在最终请求上应用一次；
+   被规则过滤的字段不会在发送前恢复。Runtime 不使用 CPA 的探测代理覆盖 worker。
+3. 真实 worker 发起四次普通模型请求（含流式、非流式、响应头票及元数据票），
+   A 保存成功，CPA 直连来源请求为 0；凭据页面原接口显示就绪，磁盘重新读取仍可导出。
+4. B 经 A 的原管理路由读取一次，发两次验证探针、两次业务请求，后续复用成功。
+   B 读来源没有额外触发 A 打票。
+5. 把 A 票置于提前十分钟窗口，启动现有采集器，真实 worker 完成一次续期；
+   A 合计五次上游请求、五次原有 Runtime 推理调用，CPA 直连仍为 0。
+6. 实际 IPC 监测确认没有采集参数或独立 ticket 通知。
+
+端到端测试使用真实 codex-server 和本地模拟上游、合成凭据；未使用用户真实账号。
+
+最终验证结果：相关包与真实 worker 联调的 `-race` 检查通过；`gofmt`、
+`git diff --check` 和服务构建通过。整仓测试唯一失败是此前已在 main 复现的
+`TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile/completed`，
+错误为 `completed Codex OAuth credential is missing email or access token`。
+仅排除该既有用例后，最终代码的 `go test ./...` 全部通过。本次没有修改该 OAuth 用例或登录逻辑。
