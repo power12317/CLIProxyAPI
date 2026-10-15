@@ -147,7 +147,7 @@ func AcquireCodexBorrowedTicket(ctx context.Context, cfg *config.Config, auth *c
 		entry.lastRequestID = trace.requestID
 		codexBorrowedTickets.Unlock()
 
-		trace.event(log.InfoLevel, "ACQUIRE", fmt.Sprintf("source=%q | credential=%q", codexBorrowSourceURL(c.SourceURL), c.SourceAuthID))
+		trace.event(log.InfoLevel, "ACQUIRE", fmt.Sprintf("source=%q", codexBorrowSourceURL(c.SourceURL)))
 		ticket, err := acquireCodexBorrowBundle(ctx, cfg, auth, model, trace)
 		codexBorrowedTickets.Lock()
 		if err == nil {
@@ -189,9 +189,9 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	var req *http.Request
 	var resp *http.Response
 	defer func() {
-		detail := fmt.Sprintf(" | credential=%q", c.SourceAuthID)
+		detail := ""
 		if bundle.Route != nil {
-			detail += fmt.Sprintf(" | __cflb=%d | __oailb=%d | remaining=%ds", len(bundle.Route.CFLB.Value), len(bundle.Route.OaiLB.Value), max(int64(bundle.Route.deadline(bundle.ExpiresAt).Sub(time.Now())/time.Second), 0))
+			detail = fmt.Sprintf(" | remaining=%ds", max(int64(bundle.Route.deadline(bundle.ExpiresAt).Sub(time.Now())/time.Second), 0))
 		}
 		trace.request("SOURCE", req, resp, len(bundle.State), time.Since(started), detail, errResult)
 	}()
@@ -215,7 +215,7 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return bundle, borrowError(fmt.Sprintf("source instance returned HTTP %d", resp.StatusCode))
+		return bundle, codexBorrowHTTPFailure("source instance", resp, codexBorrowErrorSecrets(cfg, nil, req, resp))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16385))
 	var result CodexOaiLBBorrowResponse
@@ -307,7 +307,7 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 		if resp != nil {
 			length = len(strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader)))
 		}
-		trace.request(stage, req, resp, length, time.Since(started), codexBorrowResponseDetail(state, route, resp), errResult)
+		trace.request(stage, req, resp, length, time.Since(started), codexBorrowResponseDetail(state, resp), errResult)
 	}()
 	if err != nil {
 		return "", route, borrowError("probe request could not be constructed")
@@ -324,11 +324,12 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 		return "", route, borrowError("probe transport failed: " + codexBorrowIOReason(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
+	secrets := codexBorrowErrorSecrets(cfg, auth, req, resp)
 	if resp.StatusCode != http.StatusOK {
-		return "", route, borrowError(fmt.Sprintf("probe returned HTTP %d", resp.StatusCode))
+		return "", route, codexBorrowHTTPFailure("probe", resp, secrets)
 	}
 	result, ok := codexResponseRoute(route, resp, time.Now(), true)
-	if err := readCodexBorrowComplete(resp.Body); err != nil {
+	if err := readCodexBorrowComplete(resp.Body, secrets...); err != nil {
 		return "", route, err
 	}
 	if !ok || !result.valid(time.Now()) {
@@ -341,7 +342,7 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 	return strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader)), result, nil
 }
 
-func readCodexBorrowComplete(body io.Reader) error {
+func readCodexBorrowComplete(body io.Reader, secrets ...string) error {
 	const limit = 1024 * 1024
 	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {
@@ -371,7 +372,7 @@ func readCodexBorrowComplete(body io.Reader) error {
 		kind := gjson.GetBytes(data, "type").String()
 		status := gjson.GetBytes(data, "response.status").String()
 		if kind == "error" || kind == "response.failed" || kind == "response.incomplete" || status == "failed" || status == "incomplete" || gjson.GetBytes(data, "error").IsObject() || gjson.GetBytes(data, "response.error").IsObject() {
-			return borrowError("probe stream reported failure: " + codexBorrowStreamFailure(data))
+			return borrowError("probe stream reported failure: " + codexBorrowStreamFailure(data, secrets...))
 		}
 		if kind == "response.completed" || kind == "response.done" {
 			if status != "" && status != "completed" {
@@ -462,7 +463,7 @@ func (b *CodexBorrowedTicket) ObserveResponse(resp *http.Response) {
 	} else if route.deadline(b.ExpiresAt).Before(b.ExpiresAt) {
 		reason += "; cookie lifetime shortened"
 	}
-	b.businessLog(resp.Request).event(log.WarnLevel, "REVOKE", reason+codexBorrowResponseDetail(b.State, b.Route, resp)+"; next business request must acquire again")
+	b.businessLog(resp.Request).event(log.WarnLevel, "REVOKE", reason+codexBorrowResponseDetail(b.State, resp)+"; next business request must acquire again")
 }
 
 var _ error = (*CodexTicketBorrowError)(nil)

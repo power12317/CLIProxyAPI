@@ -16,7 +16,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 // This value is request-local. Cached tickets must not retain request contexts.
@@ -147,12 +146,12 @@ func codexBorrowRetryReason(retryAt, now time.Time, reason, requestID string) st
 }
 
 func codexBorrowTicketDetail(ticket *CodexBorrowedTicket) string {
-	return fmt.Sprintf("ticket=%d | __cflb=%d | __oailb=%d | remaining=%ds",
-		len(ticket.State), len(ticket.Route.CFLB.Value), len(ticket.Route.OaiLB.Value),
+	return fmt.Sprintf("ticket=%d | remaining=%ds",
+		len(ticket.State),
 		max(int64(ticket.Route.deadline(ticket.ExpiresAt).Sub(time.Now())/time.Second), 0))
 }
 
-func codexBorrowResponseDetail(state string, route CodexTicketRoute, resp *http.Response) string {
+func codexBorrowResponseDetail(state string, resp *http.Response) string {
 	if resp == nil {
 		return ""
 	}
@@ -164,24 +163,7 @@ func codexBorrowResponseDetail(state string, route CodexTicketRoute, resp *http.
 			comparison = "changed"
 		}
 	}
-	detail := " | ticket=" + comparison
-	for _, pair := range []struct{ name, value string }{{"__cflb", route.CFLB.Value}, {"__oailb", route.OaiLB.Value}} {
-		length, change := 0, "absent"
-		for _, cookie := range resp.Cookies() {
-			if cookie.Name != pair.name {
-				continue
-			}
-			length, change = len(cookie.Value), "same"
-			if cookie.Value != pair.value {
-				change = "changed"
-			}
-			if cookie.MaxAge < 0 {
-				change = "deleted"
-			}
-		}
-		detail += fmt.Sprintf(" | %s=%d/%d %s", pair.name, len(pair.value), length, change)
-	}
-	return detail
+	return " | ticket=" + comparison
 }
 
 func codexBorrowRouteFailure(route CodexTicketRoute, now time.Time) string {
@@ -200,25 +182,6 @@ func codexBorrowRouteFailure(route CodexTicketRoute, now time.Time) string {
 		}
 	}
 	return ""
-}
-
-func codexBorrowStreamFailure(data []byte) string {
-	// Only known protocol values are safe to log; upstream messages can echo secrets.
-	parts := []string{}
-	for _, path := range []string{"type", "response.status", "error.code", "response.error.code"} {
-		value := gjson.GetBytes(data, path).String()
-		switch value {
-		case "error", "response.failed", "response.incomplete", "failed", "incomplete",
-			"rate_limit_exceeded", "usage_limit_reached", "insufficient_quota", "server_error",
-			"invalid_request_error", "invalid_api_key", "invalid_prompt", "context_length_exceeded",
-			"model_not_found", "account_deactivated", "token_expired", "overloaded_error":
-			parts = append(parts, path+"="+value)
-		}
-	}
-	if len(parts) == 0 {
-		return "upstream error object"
-	}
-	return strings.Join(parts, ", ")
 }
 
 func (b *CodexBorrowedTicket) businessLog(req *http.Request) codexBorrowLog {

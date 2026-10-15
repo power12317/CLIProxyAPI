@@ -3,6 +3,7 @@ package cliproxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -331,6 +332,61 @@ func TestCodexTicketAllModelsMemorySurvivesReloadAndReportsStatus(t *testing.T) 
 			if strings.Contains(recorder.Body.String(), state) {
 				t.Fatal("management response exposed ticket contents")
 			}
+		}
+	}
+}
+
+func TestCodexTicketMemorySurvivesGenericResultPersistence(t *testing.T) {
+	service, store, auth := newTicketTestService(t, false)
+	t.Cleanup(func() { helps.InvalidateCodexTurnStateTickets(auth.ID) })
+	state := strings.Repeat("memory-ticket", 60)
+	state += strings.Repeat("m", 780-len(state))
+	helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: "gpt-6-astra", State: state, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)})
+	if len(store.saved) != 0 {
+		t.Fatal("ticket caching called the credential store")
+	}
+	path := auth.Attributes[coreauth.AttributePath]
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata["codex_turn_ticket:legacy"] = map[string]any{"state": "old-file-ticket"}
+	legacy, _ := json.Marshal(metadata)
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, success := range []bool{true, false} {
+		result := coreauth.Result{AuthID: auth.ID, Provider: "codex", Model: "gpt-6-astra", Success: success, RegistrationEpoch: auth.RegistrationEpoch, CredentialVersion: auth.CredentialVersion}
+		if !success {
+			result.Error = &coreauth.Error{Code: coreauth.ErrorCodeRequestScoped, HTTPStatus: 503, Message: "codex ticket borrowing unavailable"}
+		}
+		service.coreManager.MarkResult(t.Context(), result)
+		if len(store.saved) != 1 {
+			t.Fatal("generic result path did not call the existing credential save")
+		}
+		<-store.saved
+		saved, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(saved, []byte("codex_turn_ticket:")) || bytes.Contains(saved, []byte(state)) || bytes.Contains(saved, []byte("old-file-ticket")) {
+			t.Fatal("generic result persistence wrote a ticket")
+		}
+		if !success && !bytes.Equal(saved, raw) {
+			t.Fatal("request-scoped failure changed unchanged credential JSON")
+		}
+		raw = saved
+		current, _ := service.coreManager.GetByID(auth.ID)
+		headers := make(http.Header)
+		if err := helps.ApplyCodexTurnStateTicket(current, service.cfg.Codex.EffectiveTurnStateTicket(), "gpt-6-astra", headers); err != nil || headers.Get(helps.CodexTurnStateTicketHeader) != state {
+			t.Fatalf("generic persistence lost the memory ticket: %v", err)
+		}
+		if !success && current.Unavailable {
+			t.Fatal("request-scoped borrowing error disabled the credential")
 		}
 	}
 }

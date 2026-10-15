@@ -66,7 +66,7 @@ func newBorrowFixture(t *testing.T) *borrowFixture {
 			AuthID string `json:"auth_id"`
 			Model  string `json:"model"`
 		}
-		if json.NewDecoder(r.Body).Decode(&request) != nil || request.AuthID != "source-auth" {
+		if json.NewDecoder(r.Body).Decode(&request) != nil || request.AuthID != f.seed.AccountID {
 			t.Error("incorrect donor selection")
 			w.WriteHeader(400)
 			return

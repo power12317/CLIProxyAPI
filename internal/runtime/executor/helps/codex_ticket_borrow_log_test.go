@@ -52,6 +52,8 @@ func TestCodexBorrowLogsCorrelateCompleteFlowAndRevocation(t *testing.T) {
 	hook := captureBorrowLogs(t)
 	f := newBorrowFixture(t)
 	f.auth.FileName = "codex-b-windows.json"
+	f.seed.AccountID = "private-donor@example.invalid-windows.json"
+	f.cfg.CodexHeaderDefaults.OaiLBBorrow.SourceAuthID = f.seed.AccountID
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	logging.SetGinRequestID(c, "a1b2c3d4")
 	logging.SetCodexTurnStateLogFields(c, logging.CodexTurnStateLogFields{SessionID: "session-business", TurnID: "turn-business"})
@@ -67,7 +69,7 @@ func TestCodexBorrowLogsCorrelateCompleteFlowAndRevocation(t *testing.T) {
 			t.Fatalf("uncorrelated stage %s: %+v", stage, entries[i])
 		}
 	}
-	for _, want := range []string{"SOURCE 200", `credential="source-auth"`, "0/780", "EXCHANGE 200", "780/780", "ticket=changed", "VERIFY 200", "780/0", "ticket=absent", "__cflb=9/0 absent", "READY | gpt-6-astra | ticket=780"} {
+	for _, want := range []string{"SOURCE 200", "0/780", "EXCHANGE 200", "780/780", "ticket=changed", "VERIFY 200", "780/0", "ticket=absent", "READY | gpt-6-astra | ticket=780"} {
 		if !strings.Contains(formattedBorrowLogs(t, hook), want) {
 			t.Errorf("missing %q", want)
 		}
@@ -84,10 +86,31 @@ func TestCodexBorrowLogsCorrelateCompleteFlowAndRevocation(t *testing.T) {
 	if !strings.Contains(lines, "[b1b2c3d4] [codex-b-windows.json] [session] [turn] [info ] [TICKET-BORROW] REUSE") || strings.Count(lines, "[TICKET-BORROW] REVOKE") != 1 {
 		t.Fatalf("missing reuse/revocation correlation: %s", lines)
 	}
-	for _, secret := range []string{f.seed.State, ticket.State, "source-cf", "source-oai", "management-secret", f.auth.Metadata["access_token"].(string), "[TICKET-PROBE]", "result=", ".go:"} {
+	for _, secret := range []string{f.cfg.CodexHeaderDefaults.OaiLBBorrow.SourceAuthID, "credential=", "__cflb=", "__oailb=", f.seed.State, ticket.State, "source-cf", "source-oai", "management-secret", f.auth.Metadata["access_token"].(string), "[TICKET-PROBE]", "result=", ".go:"} {
 		if strings.Contains(lines, secret) {
 			t.Errorf("log disclosed %q", secret)
 		}
+	}
+	for _, entry := range hook.AllEntries() {
+		if strings.Contains(entry.Message+fmt.Sprint(entry.Data), f.cfg.CodexHeaderDefaults.OaiLBBorrow.SourceAuthID) {
+			t.Fatal("source credential identifier leaked through a structured log field")
+		}
+	}
+}
+
+func TestCodexBorrowStreamFailureIncludesFlatErrorCodeWithoutPrivateMessage(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"error","code":"rate_limit_exceeded","message":"private-source.json private-ticket"}`,
+		`{"type":"error","error":{"code":"rate_limit_exceeded","message":"private-source.json private-ticket"}}`,
+	} {
+		err := readCodexBorrowComplete(strings.NewReader("data: "+raw+"\n\n"), "private-ticket")
+		if err == nil || !strings.Contains(err.Error(), "code=rate_limit_exceeded") || strings.Contains(err.Error(), "private-") {
+			t.Fatalf("missing safe upstream error code: %v", err)
+		}
+	}
+	err := readCodexBorrowComplete(strings.NewReader("data: "+`{"type":"error","code":"private-source.json","error":{"type":"private-ticket"},"message":"private-token"}`+"\n\n"), "private-ticket", "private-token")
+	if err == nil || strings.Contains(err.Error(), "private-") {
+		t.Fatalf("unrecognized error fields must not leak raw values: %v", err)
 	}
 }
 
@@ -216,7 +239,7 @@ func TestCodexBorrowLogsSpecificFailuresWithoutSecrets(t *testing.T) {
 				case "incomplete":
 					body = "data: [DONE]\n\n"
 				case "sse":
-					body = `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"rate_limit_exceeded","message":"secret-body-value"}}}` + "\n\n"
+					body = `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"rate_limit_exceeded","message":"request rejected for source-auth"}}}` + "\n\n"
 				case "partial-cookie":
 					h.Add("Set-Cookie", "__cflb=secret-cookie-value; Path=/")
 				case "changed-cookie":
@@ -237,7 +260,7 @@ func TestCodexBorrowLogsSpecificFailuresWithoutSecrets(t *testing.T) {
 			if !strings.Contains(lines, tc.reason) {
 				t.Fatalf("failure missing in log: %s", lines)
 			}
-			for _, secret := range []string{"secret-body-value", "secret-cookie-value", "secret-transport-value", f.seed.State, "management-secret"} {
+			for _, secret := range []string{f.cfg.CodexHeaderDefaults.OaiLBBorrow.SourceAuthID, "credential=", "secret-body-value", "secret-cookie-value", "secret-transport-value", f.seed.State, "management-secret"} {
 				if strings.Contains(lines, secret) || strings.Contains(err.Error(), secret) {
 					t.Fatalf("secret leaked: %s", secret)
 				}

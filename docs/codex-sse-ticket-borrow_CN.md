@@ -271,8 +271,8 @@ B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时�
 日志同时显示值是否相同，长度本身不代替上述续接验证。票据和 Cookie 原值不会写入日志。
 
 ```text
-[2026-10-15 16:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | __cflb=9/0 absent | __oailb=10/0 absent
-[2026-10-15 16:00:02] [a1b2c3d4] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/0 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=absent | __cflb=9/0 absent | __oailb=10/0 absent
+[2026-10-15 16:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
+[2026-10-15 16:00:02] [a1b2c3d4] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/0 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=absent
 ```
 
 本轮不新增前端显示。原凭据页面的普通一小时票据摘要不代表 B 的四分钟已验证缓存；
@@ -483,11 +483,11 @@ A 的一小时期限、提前十分钟续期，B 的 240 秒期限、提前 60 �
 
 | 标记后的阶段 | 含义及记录内容 |
 | --- | --- |
-| `ACQUIRE` | 开始本轮借票：来源实例地址、来源凭据；失败时记录具体阶段、原因及是否保留未过期旧票 |
-| `SOURCE` | B 请求现有来源接口：HTTP 状态、完整耗时、模型、来源快照票据长度、两枚 Cookie 长度及组合剩余秒数 |
+| `ACQUIRE` | 开始本轮借票：来源实例地址；失败时记录具体阶段、原因及是否保留未过期旧票，不输出借票目标凭据名称或原始 ID |
+| `SOURCE` | B 请求现有来源接口：HTTP 状态、完整耗时、模型、来源快照票据长度及组合剩余秒数 |
 | `EXCHANGE` | 第一发上游请求：携带 A 的票和 Cookie 换取 B 票 |
 | `VERIFY` | 第二发上游请求：携带 B 票验证是否可继续使用 |
-| `READY` | 两次验证通过，记录保存的票长、两枚 Cookie 长度及组合剩余秒数 |
+| `READY` | 两次验证通过，记录保存的票长及组合剩余秒数 |
 | `REUSE` | 本次业务选用了已验证的本地组合，记录其剩余秒数；续借失败保留旧票时也明确记录 |
 | `WAIT` | 等待并发请求正在进行的借票，或处于失败后的节流期；显示首次失败原因及获取请求 ID |
 | `SEND` | 实际发送前发现所选票已过期或被撤销，明确记录本次业务尚未发往上游 |
@@ -495,7 +495,8 @@ A 的一小时期限、提前十分钟续期，B 的 240 秒期限、提前 60 �
 
 这些记录统一带 `[TICKET-BORROW]`。`SOURCE`、`EXCHANGE`、`VERIFY` 和最终 `ACQUIRE/READY`
 使用同一个业务请求 ID；后续业务有自己的 ID，`WAIT` 会引用首次失败的 ID。
-前缀中的凭据文件是 B 本次使用的凭据；`SOURCE` 的 `credential` 是配置选择的 A 凭据。
+前缀中的凭据文件是 B 本次使用的本机凭据；借票目标 A 的凭据名称及原始 ID 不写入日志，
+`ACQUIRE` 和 `SOURCE` 均不再输出 `credential` 字段。
 两次探针前缀的 session/turn 是实际探针自己的标识，不再为每条日志另造无关联的请求 ID。
 
 请求行保留状态、秒数、模型、请求/响应票长、方法与地址。来源接口的 `0/780`
@@ -511,19 +512,18 @@ HTTP 200 后读流失败时，仍显示真实 HTTP 200，同时使用 `warn` 并
 
 - `ticket=absent`：响应头没有票；`ticket=same`：响应票与发送票完全相同；
   `ticket=changed`：值不同，即使两边都长 780。
-- `__cflb=9/0 absent`：请求带了长 9 的 Cookie，响应未设置该 Cookie，继续沿用发出的值。
-  这里的 `0` 不代表本地没有 Cookie。`__oailb` 同理。
-- Cookie 标记 `same/changed/deleted` 分别表示响应设置相同值、设置不同值或要求删除。
+- 日志不输出 Cookie 长度，也不计算日志用的 Cookie 长度或逐枚比较统计。
 - `READY/REUSE` 的 `remaining` 取票据与两枚 Cookie 的较早期限。
 - 原始票据、Cookie、Authorization、管理密钥及来源 JSON 正文不写入日志。
-  SSE 只提取已知事件、状态和错误码，例如 `rate_limit_exceeded`；不输出可能回显凭据的原始错误正文。
+  HTTP/SSE 错误会提取 `type`、`code`、状态码和 `message`，兼容顶层及嵌套错误对象；
+  输出前移除已知凭据、票据、Cookie 等敏感值，不输出完整响应对象。
 
 以下是“第二次响应仍长 780，但实际返回另一张票”的示意，**不是对用户旧日志原因的认定**：
 
 ```text
-[2026-10-15 16:00:00] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [info ] [TICKET-BORROW] SOURCE 200 | 0.010s | gpt-6-astra/- | 0/780 | POST "http://instance8:8317/v0/management/codex/oailb/borrow" | credential="codex-a.json" | __cflb=9 | __oailb=10 | remaining=599s
-[2026-10-15 16:00:02] [a1b2c3d4] [codex-b.json] [probe001] [probe002] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | __cflb=9/0 absent | __oailb=10/0 absent
-[2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [probe003] [probe004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | __cflb=9/0 absent | __oailb=10/0 absent
+[2026-10-15 16:00:00] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [info ] [TICKET-BORROW] SOURCE 200 | 0.010s | gpt-6-astra/- | 0/780 | POST "http://instance8:8317/v0/management/codex/oailb/borrow" | remaining=599s
+[2026-10-15 16:00:02] [a1b2c3d4] [codex-b.json] [probe001] [probe002] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
+[2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [probe003] [probe004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed
 [2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [warn ] [TICKET-BORROW] ACQUIRE | gpt-6-astra | verify: continuation returned a different ticket (780/780); retry in 30 seconds; business request not sent
 [2026-10-15 16:00:04] [b1b2c3d4] [codex-b.json] [session1] [turn0001] [warn ] [TICKET-BORROW] WAIT | gpt-6-astra | acquisition retry is deferred for 29 seconds; last failure: verify: continuation returned a different ticket (780/780); acquisition request: a1b2c3d4; business request not sent
 ```
@@ -588,3 +588,88 @@ API 相关回归的 `-race` 检查通过，其中包括真实 v3 worker 的来�
 原有来源接口供票、B 两次验证及复用、A 续期通过，确认不调用凭据保存且磁盘无新票据字段。
 `gofmt -w .`、`git diff --check` 和服务构建通过；仅排除前文已有主线 OAuth 基线失败用例后，
 最终代码的整仓测试全部通过。
+
+## 2026-10-15：目标凭据名称移除与 16:42～16:48 日志分析
+
+### 目标凭据名称
+
+删除借票开始和来源响应日志中的 `credential=...`，不输出借票目标 A 的文件名、邮箱或原始凭据 ID，
+也不将这些值放进日志的结构化字段。来源配置和实际请求中的凭据选择仍按原方式工作。
+原请求日志前缀中的本机执行凭据 B 沿用原格式。回归测试同时检查日志正文、格式化结果和结构化字段。
+
+### 本地 auth JSON 的 WRITE
+
+门票缓存与凭据保存是两条路径。A 门票/配套 Cookie 缓存、B 的四分钟借票缓存都不调用文件保存，
+也不进入 `auth.Metadata`。但通用请求结果处理 `Manager.MarkResult` 仍会走
+`persistLocked → persist → Store.Save`，成功请求和请求级 503 都可能触发这条路径。
+此外，OAuth 刷新、管理操作和旧字段清理仍可正常保存凭据。
+
+`FileTokenStore` 对普通 JSON 内容相同的保存会跳过写入；共享凭据写入和具体 TokenStorage 的行为
+还取决于使用的保存分支。升级后旧 `codex_turn_ticket:*` 被剔除，也可能使首次普通保存改变文件内容。
+文件 watcher 的 `WRITE` 行只说明检测到文件变更，没有记录具体写入调用栈或字段差异。
+因此该行不能证明门票仍然写盘，也不能单凭时间顺序断言每一次都是 OAuth 刷新。
+
+本次补充生产保存路径回归：先在内存保存票，再报告业务成功和请求级 503；确认两次结果处理都调用
+通用凭据保存，但不会写入内存票；旧门票字段在正常保存时被清除，内存票仍可复用。
+本次没有停止正常凭据保存，也没有改动请求结果统计或凭据冷却规则。
+
+### 日志中的实际借票结果
+
+以下时间沿用用户日志原文，不做时区换算；不会在文档中复制真实凭据名称。
+
+| 时间/请求 ID | 事实 | 结论 |
+| --- | --- | --- |
+| 16:42:18～16:42:24，`e2af66fe` | `EXCHANGE 780/780 changed`，随后 `VERIFY 780/0`，最后 `READY remaining=221s` | 第一轮换票与验证成功 |
+| 16:42:35、16:42:57 | 两次业务请求均为 HTTP 200、`780/0` | 新 B 票确实成功用于业务，后续复用也有效 |
+| 16:42:58，`801c4f64` | 使用缓存，剩余 187 秒；16:48:22 才结束，HTTP 200、`780/0` | 发出时票未过期；已经开始的长 SSE 没有因本地票过期而被中断 |
+| 16:46:53，`88c0a910`，`gpt-6-luna` | `source ticket bundle is unavailable` | A 对这个实际模型未提供可借完整组合；没有执行上游换票 |
+| 16:46:53～16:46:59，`26b1a7d5`，`gpt-6-astra` | 第一发换票成功；第二发 `VERIFY 780/780 changed` 且 SSE `type=error` | 第二轮得到的新 B 票没有通过续接验证，业务尚未发送 |
+| 16:47:31、16:48:23、16:48:55 开始的三轮 | 第一发 `EXCHANGE` 就返回 SSE `type=error` | 后续失败发生得更早；不能将所有 503 都归结为第二次验证 |
+
+第一轮的三个剩余时间都指向约 **16:46:05** 的本地组合期限。16:46:53 再次借票时旧组合已经过期，
+重新取票符合既定规则，不是 CPA 持续把过期 B 票发给上游。重复 `WAIT` 行只执行本地失败节流，
+不会每条都触发一次来源取票或上游换票。
+
+对 `gpt-6-luna`，确定的是来源接口返回“无可用组合”。未采集这个模型、票/Cookie 到期或快照不完整
+都可能产生同一结果；不能把它解释为已有 B 票失效，也不能拿 Astra 的票在本地跨模型替代。
+
+对 Astra，确定的是第二轮新票的验证请求失败，之后换票请求也失败。日志不足以证明
+“同一张 A 票只能借一次”：没有记录各轮 A 票是否相同，Cookie 相同长度也不等于值相同；
+而 `type=error` 本身不是“票据无效”的专用错误码。第二轮探针还与上一条长 SSE 重叠，
+账号并发限制、上游错误或借用路由限制都不能仅凭这些行排除。
+
+本次同时补齐了已有错误码提取的一个缺口：`{"type":"error","code":"rate_limit_exceeded"}`
+这类顶层错误码此前没有输出，现在会保留 `code` 及嵌套 `error.type`；测试版同时补充经过敏感值清理的 `message`。
+已有日志没有原始 SSE 错误对象，不能回溯恢复被省略的码，因此本次不声称已确定具体上游拒绝原因，
+也不擅自修改一小时 A 票、240 秒 B 票、续期或验证策略。
+
+本次验证：目标名称/原始 ID 不出现在日志正文或结构化字段、顶层错误码提取、请求结果保存与
+内存票隔离的回归及 `-race` 检查通过；相关借票、SSE、门票、普通探针格式和文件迁移测试通过。
+`gofmt -w .`、`git diff --check` 和服务构建通过。
+
+
+## 2026-10-15：精简 Cookie 日志并发布诊断测试版
+
+- 删除 `SOURCE`、`EXCHANGE`、`VERIFY`、`READY`、`REUSE` 等日志中的 Cookie 长度字段，
+  同时移除相应长度计算与仅供日志展示的逐枚 Cookie 比较循环。
+- 保留票据的请求/响应长度、票值是否相同、剩余时间、请求阶段与接口地址。
+- 上游 HTTP 非 200 时读取有界错误响应，输出实际 HTTP 状态、JSON 错误码及错误说明。
+- SSE 的 `type=error`、`response.failed` 等错误同时提取顶层及嵌套的错误码、类型、状态和说明。
+  不再因为错误码不在预设名单中，就只留下 `type=error`。
+- 原始 `message` 先清理本轮已知的目标凭据、管理密钥、OAuth token、票据和 Cookie；
+  再转义换行并限制长度。只提取错误相关字段，不打印完整响应、来源快照或请求正文。
+- 这些错误详情进入同一轮日志、首次 503 和后续等待期 503，继续保留请求 ID 和失败阶段。
+- 上一轮的借票目标名称移除一同发布。接口地址、参数、借票验证和时间规则不变。
+
+以下仅演示输出结构，不代表已经确认真实上游返回了这个错误：
+
+```text
+[TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | probe stream reported failure: type=error, code=concurrent_request_limit_exceeded, status=429, message="Too many concurrent requests."
+```
+
+日志不再包含 Cookie 长度；如果 Cookie 配对本身导致验证失败，仍会输出具体失败原因。
+测试版沿用 `ghcr.io/power12317/cliproxyapi-oailb-borrow:latest`，同时由构建流程提供对应提交的 `sha-…` 镜像。
+
+验证：HTTP/SSE 错误码与说明能够到达日志、首次失败及等待期错误响应；目标凭据及实际票据/Cookie
+不会出现在错误内容中；Cookie 长度字段与计算代码已删除。相关回归、`-race`、真实 v3 worker 联调、
+格式检查和服务构建通过。整仓回归仅排除此前已确认的 OAuth 基线失败用例后通过。
