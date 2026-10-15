@@ -14,6 +14,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -54,6 +55,8 @@ type CodexBorrowedTicket struct {
 	Route     CodexTicketRoute
 	ExpiresAt time.Time
 	key       string
+	authFile  string
+	model     string
 	revoked   atomic.Bool
 }
 
@@ -62,10 +65,12 @@ func (b *CodexBorrowedTicket) valid(now time.Time) bool {
 }
 
 type codexBorrowEntry struct {
-	ticket   *CodexBorrowedTicket
-	pending  chan struct{}
-	retryAt  time.Time
-	lastUsed time.Time
+	ticket        *CodexBorrowedTicket
+	pending       chan struct{}
+	retryAt       time.Time
+	lastUsed      time.Time
+	lastFailure   string
+	lastRequestID string
 }
 type codexBorrowCache struct {
 	sync.Mutex
@@ -80,11 +85,14 @@ func AcquireCodexBorrowedTicket(ctx context.Context, cfg *config.Config, auth *c
 	if !CodexTicketBorrowEnabled(cfg, auth) {
 		return nil, nil
 	}
+	trace := newCodexBorrowLog(ctx, auth, model)
 	if strings.TrimSpace(model) == "" {
+		trace.event(log.WarnLevel, "ACQUIRE", "final upstream model is missing; business request not sent")
 		return nil, borrowError("final upstream model is missing")
 	}
 	c := cfg.CodexHeaderDefaults.OaiLBBorrow
 	if err := c.Validate(); err != nil {
+		trace.event(log.WarnLevel, "ACQUIRE", "invalid source configuration; business request not sent")
 		return nil, borrowError("invalid source configuration")
 	}
 	key := codexIdentityDigest([]any{c, auth.ID, CodexOwnerFingerprint(auth), CodexOAuthAccessToken(auth), model, effectiveProxyURL(ctx, cfg, auth)})
@@ -108,52 +116,85 @@ func AcquireCodexBorrowedTicket(ctx context.Context, cfg *config.Config, auth *c
 		if entry.ticket.valid(now.Add(codexBorrowRefresh)) {
 			ticket := entry.ticket
 			codexBorrowedTickets.Unlock()
+			trace.event(log.InfoLevel, "REUSE", codexBorrowTicketDetail(ticket))
 			return ticket, nil
 		}
 		if pending := entry.pending; pending != nil {
+			requestID := entry.lastRequestID
 			codexBorrowedTickets.Unlock()
+			trace.event(log.InfoLevel, "WAIT", "sharing acquisition request: "+requestID)
 			select {
 			case <-pending:
 				continue
 			case <-ctx.Done():
+				trace.event(log.WarnLevel, "WAIT", codexBorrowIOReason(ctx.Err())+"; business request not sent")
 				return nil, ctx.Err()
 			}
 		}
 		if now.Before(entry.retryAt) {
 			ticket := entry.ticket
 			usable := ticket.valid(now)
+			reason := codexBorrowRetryReason(entry.retryAt, now, entry.lastFailure, entry.lastRequestID)
 			codexBorrowedTickets.Unlock()
 			if usable {
+				trace.event(log.InfoLevel, "REUSE", codexBorrowTicketDetail(ticket)+" | "+reason)
 				return ticket, nil
 			}
-			return nil, borrowError("acquisition retry is deferred for 30 seconds")
+			trace.event(log.WarnLevel, "WAIT", reason+"; business request not sent")
+			return nil, borrowError(reason)
 		}
 		entry.pending = make(chan struct{})
+		entry.lastRequestID = trace.requestID
 		codexBorrowedTickets.Unlock()
 
-		ticket, err := acquireCodexBorrowBundle(ctx, cfg, auth, model)
+		trace.event(log.InfoLevel, "ACQUIRE", fmt.Sprintf("source=%q | credential=%q", codexBorrowSourceURL(c.SourceURL), c.SourceAuthID))
+		ticket, err := acquireCodexBorrowBundle(ctx, cfg, auth, model, trace)
 		codexBorrowedTickets.Lock()
 		if err == nil {
 			ticket.key = key
+			ticket.authFile, ticket.model = trace.authFile, model
 			entry.ticket, entry.retryAt = ticket, time.Time{}
+			entry.lastFailure = ""
 		} else {
 			entry.retryAt = time.Now().Add(codexBorrowRetry)
+			entry.lastFailure = codexBorrowFailureReason(err)
 		}
 		close(entry.pending)
 		entry.pending = nil
 		usable := entry.ticket.valid(time.Now())
 		ticket = entry.ticket
 		codexBorrowedTickets.Unlock()
+		if err != nil {
+			disposition := "business request not sent"
+			if usable {
+				disposition = "retaining unexpired verified ticket"
+			}
+			trace.event(log.WarnLevel, "ACQUIRE", codexBorrowFailureReason(err)+"; retry in 30 seconds; "+disposition)
+		} else {
+			trace.event(log.InfoLevel, "READY", codexBorrowTicketDetail(ticket))
+		}
 		if usable {
+			if err != nil {
+				trace.event(log.InfoLevel, "REUSE", codexBorrowTicketDetail(ticket))
+			}
 			return ticket, nil
 		}
 		return nil, err
 	}
 }
 
-func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model string) (CodexTurnStateTicket, error) {
-	var bundle CodexTurnStateTicket
+func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model string, trace codexBorrowLog) (bundle CodexTurnStateTicket, errResult error) {
 	c := cfg.CodexHeaderDefaults.OaiLBBorrow
+	started := time.Now()
+	var req *http.Request
+	var resp *http.Response
+	defer func() {
+		detail := fmt.Sprintf(" | credential=%q", c.SourceAuthID)
+		if bundle.Route != nil {
+			detail += fmt.Sprintf(" | __cflb=%d | __oailb=%d | remaining=%ds", len(bundle.Route.CFLB.Value), len(bundle.Route.OaiLB.Value), max(int64(bundle.Route.deadline(bundle.ExpiresAt).Sub(time.Now())/time.Second), 0))
+		}
+		trace.request("SOURCE", req, resp, len(bundle.State), time.Since(started), detail, errResult)
+	}()
 	secret, err := config.CodexOaiLBManagementKey(cfg)
 	if err != nil {
 		return bundle, borrowError("source management key unavailable")
@@ -161,16 +202,16 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	data, _ := json.Marshal(map[string]string{"auth_id": c.SourceAuthID, "model": model})
 	fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(fetchCtx, http.MethodPost, strings.TrimRight(c.SourceURL, "/")+CodexTicketBorrowPath, bytes.NewReader(data))
+	req, err = http.NewRequestWithContext(fetchCtx, http.MethodPost, strings.TrimRight(c.SourceURL, "/")+CodexTicketBorrowPath, bytes.NewReader(data))
 	if err != nil {
 		return bundle, borrowError("invalid source URL")
 	}
 	req.Header.Set("Authorization", "Bearer "+secret)
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
+	resp, err = client.Do(req)
 	if err != nil {
-		return bundle, borrowError("source instance request failed")
+		return bundle, borrowError("source instance request failed: " + codexBorrowIOReason(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -178,11 +219,17 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16385))
 	var result CodexOaiLBBorrowResponse
-	if err != nil || len(raw) > 16384 || json.Unmarshal(raw, &result) != nil {
+	if err != nil {
+		return bundle, borrowError("source response read failed: " + codexBorrowIOReason(err))
+	}
+	if len(raw) > 16384 || json.Unmarshal(raw, &result) != nil {
 		return bundle, borrowError("invalid source bundle response")
 	}
-	if !result.Available || result.CodexTurnStateTicket == nil {
+	if !result.Available {
 		return bundle, borrowError("source ticket bundle is unavailable")
+	}
+	if result.CodexTurnStateTicket == nil {
+		return bundle, borrowError("source response has no ticket snapshot")
 	}
 	bundle = *result.CodexTurnStateTicket
 	if bundle.Route == nil || result.Value != bundle.Route.OaiLB.Value || result.CFLB != bundle.Route.CFLB.Value {
@@ -190,47 +237,78 @@ func fetchCodexSourceBundle(ctx context.Context, cfg *config.Config, model strin
 	}
 	now := time.Now()
 	issued, err := CodexTicketIssuedAt(bundle.State, now)
-	if err != nil || bundle.AccountID != c.SourceAuthID || bundle.Model != model || bundle.Route == nil || !bundle.Route.valid(now) || !bundle.valid(now) || !now.Before(issued.Add(time.Hour)) || bundle.ExpiresAt.After(issued.Add(time.Hour)) {
-		return bundle, borrowError("source bundle is incomplete or expired")
+	if err != nil {
+		return bundle, borrowError("source " + err.Error())
+	}
+	if bundle.AccountID != c.SourceAuthID || bundle.Model != model {
+		return bundle, borrowError("source credential or model does not match the request")
+	}
+	if !bundle.Route.valid(now) {
+		return bundle, borrowError("source " + codexBorrowRouteFailure(*bundle.Route, now))
+	}
+	if !bundle.valid(now) || !now.Before(issued.Add(time.Hour)) || bundle.ExpiresAt.After(issued.Add(time.Hour)) {
+		return bundle, borrowError("source ticket expired or has invalid length/lifetime metadata")
 	}
 	return bundle, nil
 }
 
-func acquireCodexBorrowBundle(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model string) (*CodexBorrowedTicket, error) {
-	source, err := fetchCodexSourceBundle(ctx, cfg, model)
+func acquireCodexBorrowBundle(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model string, trace codexBorrowLog) (*CodexBorrowedTicket, error) {
+	source, err := fetchCodexSourceBundle(ctx, cfg, model, trace)
 	if err != nil {
-		return nil, err
+		return nil, codexBorrowStageError("source", err)
 	}
-	first, route, err := probeCodexBorrow(ctx, cfg, auth, model, source.State, *source.Route)
+	first, route, err := probeCodexBorrow(ctx, cfg, auth, model, source.State, *source.Route, trace, "EXCHANGE")
 	if err != nil {
-		return nil, err
+		return nil, codexBorrowStageError("exchange", err)
 	}
 	now := time.Now()
 	issued, err := CodexTicketIssuedAt(first, now)
-	if err != nil || first == source.State || !now.Before(issued.Add(codexBorrowLifetime)) {
-		return nil, borrowError("first probe did not issue a fresh target ticket")
+	if first == "" {
+		return nil, borrowError("exchange: response has no target ticket")
+	}
+	if err != nil {
+		return nil, borrowError("exchange: " + err.Error())
+	}
+	if first == source.State {
+		return nil, borrowError("exchange: response repeated the source ticket")
+	}
+	if !now.Before(issued.Add(codexBorrowLifetime)) {
+		return nil, borrowError(fmt.Sprintf("exchange: target ticket is already expired (age=%ds, limit=240s)", int64(now.Sub(issued)/time.Second)))
 	}
 	expires := route.deadline(issued.Add(codexBorrowLifetime))
-	second, verifiedRoute, err := probeCodexBorrow(ctx, cfg, auth, model, first, route)
+	second, verifiedRoute, err := probeCodexBorrow(ctx, cfg, auth, model, first, route, trace, "VERIFY")
 	if err != nil {
-		return nil, err
+		return nil, codexBorrowStageError("verify", err)
 	}
-	if (second != "" && second != first) || !route.sameValues(verifiedRoute) {
-		return nil, borrowError("continuation changed the ticket or cookie pair")
+	if second != "" && second != first {
+		return nil, borrowError(fmt.Sprintf("verify: continuation returned a different ticket (%d/%d)", len(first), len(second)))
+	}
+	if !route.sameValues(verifiedRoute) {
+		return nil, borrowError(fmt.Sprintf("verify: continuation changed cookie values (__cflb=%t, __oailb=%t)", route.CFLB.Value != verifiedRoute.CFLB.Value, route.OaiLB.Value != verifiedRoute.OaiLB.Value))
 	}
 	expires = verifiedRoute.deadline(expires)
 	ticket := &CodexBorrowedTicket{State: first, Route: verifiedRoute, ExpiresAt: expires}
 	if !ticket.valid(time.Now().Add(codexBorrowRefresh)) {
-		return nil, borrowError("verified ticket has too little remaining lifetime")
+		return nil, borrowError(fmt.Sprintf("verify: ticket has too little remaining lifetime (remaining=%ds, required>60s)", max(int64(expires.Sub(time.Now())/time.Second), 0)))
 	}
 	return ticket, nil
 }
 
-func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, state string, route CodexTicketRoute) (string, CodexTicketRoute, error) {
+func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, state string, route CodexTicketRoute, trace codexBorrowLog, stage string) (outState string, outRoute CodexTicketRoute, errResult error) {
+	started := time.Now()
+	var resp *http.Response
 	timeout := time.Duration(cfg.Codex.EffectiveTurnStateTicket().AttemptTimeoutSeconds) * time.Second
 	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, session, turn, err := newCodexTicketProbeRequest(attemptCtx, cfg, auth, model)
+	trace.sessionID, trace.turnID = session, turn
+	defer func() {
+		length := 0
+		if resp != nil {
+			length = len(strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader)))
+		}
+		trace.request(stage, req, resp, length, time.Since(started), codexBorrowResponseDetail(state, route, resp), errResult)
+	}()
 	if err != nil {
 		return "", route, borrowError("probe request could not be constructed")
 	}
@@ -241,11 +319,9 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 	// Each probe carries an explicit versioned pair, independent of the live jar.
 	client.Jar = nil
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	started := time.Now()
-	resp, err := client.Do(req)
-	logCodexTurnStateTicketProbe(auth, req, model, session, turn, resp, time.Since(started), err)
+	resp, err = client.Do(req)
 	if err != nil {
-		return "", route, borrowError("probe transport failed")
+		return "", route, borrowError("probe transport failed: " + codexBorrowIOReason(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -256,7 +332,11 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 		return "", route, err
 	}
 	if !ok || !result.valid(time.Now()) {
-		return "", route, borrowError("probe cookie pair is incomplete or expired")
+		reason := codexBorrowRouteFailure(result, time.Now())
+		if reason == "" {
+			reason = "response updated only one routing cookie; both __cflb and __oailb are required together"
+		}
+		return "", route, borrowError("probe " + reason)
 	}
 	return strings.TrimSpace(resp.Header.Get(CodexTurnStateTicketHeader)), result, nil
 }
@@ -264,8 +344,11 @@ func probeCodexBorrow(ctx context.Context, cfg *config.Config, auth *cliproxyaut
 func readCodexBorrowComplete(body io.Reader) error {
 	const limit = 1024 * 1024
 	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
-	if err != nil || len(raw) > limit {
-		return borrowError("probe stream read failed")
+	if err != nil {
+		return borrowError(fmt.Sprintf("probe stream read failed: %s (%d bytes)", codexBorrowIOReason(err), len(raw)))
+	}
+	if len(raw) > limit {
+		return borrowError("probe stream exceeds 1048576 bytes")
 	}
 	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
@@ -288,7 +371,7 @@ func readCodexBorrowComplete(body io.Reader) error {
 		kind := gjson.GetBytes(data, "type").String()
 		status := gjson.GetBytes(data, "response.status").String()
 		if kind == "error" || kind == "response.failed" || kind == "response.incomplete" || status == "failed" || status == "incomplete" || gjson.GetBytes(data, "error").IsObject() || gjson.GetBytes(data, "response.error").IsObject() {
-			return borrowError("probe stream reported failure")
+			return borrowError("probe stream reported failure: " + codexBorrowStreamFailure(data))
 		}
 		if kind == "response.completed" || kind == "response.done" {
 			if status != "" && status != "completed" {
@@ -341,6 +424,7 @@ type codexBorrowTransport struct {
 func (t *codexBorrowTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// A concurrent renewal does not invalidate an already selected, still valid generation.
 	if !t.ticket.valid(time.Now()) {
+		t.ticket.businessLog(req).event(log.WarnLevel, "SEND", "selected ticket expired or was revoked; business request not sent")
 		return nil, borrowError("selected ticket expired or was revoked before send")
 	}
 	copy := req.Clone(req.Context())
@@ -367,7 +451,18 @@ func (b *CodexBorrowedTicket) ObserveResponse(resp *http.Response) {
 	if !changed {
 		return
 	}
-	b.revoked.Store(true)
+	if b.revoked.Swap(true) {
+		return
+	}
+	reason := "business response revoked the selected ticket"
+	if cookieFailure := codexBorrowRouteFailure(route, time.Now()); cookieFailure != "" {
+		reason += "; " + cookieFailure
+	} else if !ok {
+		reason += "; response updated only one routing cookie"
+	} else if route.deadline(b.ExpiresAt).Before(b.ExpiresAt) {
+		reason += "; cookie lifetime shortened"
+	}
+	b.businessLog(resp.Request).event(log.WarnLevel, "REVOKE", reason+codexBorrowResponseDetail(b.State, b.Route, resp)+"; next business request must acquire again")
 }
 
 var _ error = (*CodexTicketBorrowError)(nil)

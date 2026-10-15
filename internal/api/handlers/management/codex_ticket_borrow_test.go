@@ -27,11 +27,12 @@ func TestCodexTicketBorrowEndpointReadOnlySnapshot(t *testing.T) {
 	state := base64.URLEncoding.EncodeToString(raw)
 	auth := &cliproxyauth.Auth{ID: "donor", Provider: "codex", Metadata: map[string]any{"access_token": "oauth-secret", "account_id": "account"}}
 	route := helps.CodexTicketRoute{CFLB: helps.CodexRouteCookie{Value: "cf"}, OaiLB: helps.CodexRouteCookie{Value: "oai"}}
-	helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: "model", Owner: helps.CodexOwnerFingerprint(auth), State: state, Route: &route, CapturedAt: now.Add(-50 * time.Minute), ExpiresAt: now.Add(10 * time.Minute)})
 	manager := cliproxyauth.NewManager(nil, nil, nil)
 	if _, err := manager.Register(t.Context(), auth); err != nil {
 		t.Fatal(err)
 	}
+	helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: "model", Owner: helps.CodexOwnerFingerprint(auth), State: state, Route: &route, CapturedAt: now.Add(-50 * time.Minute), ExpiresAt: now.Add(10 * time.Minute)})
+	t.Cleanup(func() { helps.InvalidateCodexTurnStateTickets(auth.ID) })
 	h := &Handler{authManager: manager, cfg: &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{Enabled: true}}}}
 	router := gin.New()
 	router.POST(helps.CodexTicketBorrowPath, h.BorrowCodexOaiLB)

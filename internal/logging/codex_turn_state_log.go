@@ -35,6 +35,9 @@ func CodexOaiLBNode(c *gin.Context) string {
 // CodexTicketProbeLogField selects the ticket probe marker instead of a source location.
 const CodexTicketProbeLogField = "codex_ticket_probe"
 
+// CodexTicketBorrowLogField identifies request-driven borrowing diagnostics.
+const CodexTicketBorrowLogField = "codex_ticket_borrow"
+
 // CodexTurnStateLogFields contains the fields appended to the Gin access log
 // for a Codex request. The request ID remains in the access log's standard ID
 // column.

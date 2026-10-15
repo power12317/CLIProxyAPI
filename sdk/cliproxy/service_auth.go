@@ -392,6 +392,7 @@ func (s *Service) prepareCoreAuthForModelRegistration(ctx context.Context, auth 
 		if err == nil && strings.EqualFold(auth.Provider, "codex") {
 			if helps.CodexOwnerFingerprint(existing) != helps.CodexOwnerFingerprint(auth) || coreauth.IsCodexRuntimeOwnedAuth(existing) != coreauth.IsCodexRuntimeOwnedAuth(auth) {
 				helps.InvalidateCodexCookieJar(auth.ID)
+				helps.InvalidateCodexTurnStateTickets(auth.ID)
 				helps.InvalidateCodexTurnStates(auth.ID)
 				executor.CloseCodexWebsocketSessionsForAuthID(auth.ID, "auth_owner_changed")
 			}
@@ -554,6 +555,7 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 	// republish its cached models after the registry has been cleared.
 	s.coreManager.Remove(ctx, id)
 	helps.InvalidateCodexCookieJar(id)
+	helps.InvalidateCodexTurnStateTickets(id)
 	helps.InvalidateCodexTurnStates(id)
 	GlobalModelRegistry().UnregisterClient(id)
 	s.cancelStaleAntigravityProbes(id)

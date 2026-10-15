@@ -27,7 +27,8 @@ func TestCodexSourceBundleOriginalHourAndSnapshot(t *testing.T) {
 		t.Fatal("same ticket extended original deadlines")
 	}
 	StoreCodexTurnStateTicket(auth, again)
-	// Simulate disk persistence and an unrelated usage response mutating the jar.
+	// Reload credential metadata and let an unrelated response mutate the jar.
+	// Neither operation changes the independent process-local ticket snapshot.
 	raw, _ := json.Marshal(auth.Metadata)
 	if err := json.Unmarshal(raw, &auth.Metadata); err != nil {
 		t.Fatal(err)
@@ -48,7 +49,7 @@ func TestCodexSourceBundleOriginalHourAndSnapshot(t *testing.T) {
 	copied := auth.Clone()
 	copied.Metadata["codex_client_system"] = "windows"
 	if _, err := ExportCodexSourceTicket(copied, "gpt-6-astra", now); err == nil {
-		t.Fatal("another owner reused persisted snapshot")
+		t.Fatal("another owner reused the memory snapshot")
 	}
 }
 

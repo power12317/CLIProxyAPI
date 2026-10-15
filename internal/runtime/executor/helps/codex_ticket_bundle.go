@@ -176,7 +176,7 @@ func newCodexSourceTicket(auth *cliproxyauth.Auth, model, state string, resp *ht
 	return ticket
 }
 
-// ExportCodexSourceTicket reads a persisted snapshot and never probes upstream.
+// ExportCodexSourceTicket reads a memory snapshot and never probes upstream.
 func ExportCodexSourceTicket(auth *cliproxyauth.Auth, model string, now time.Time) (CodexTurnStateTicket, error) {
 	t := codexTurnStateTicketForAuth(auth, model)
 	if auth == nil || auth.Disabled || !isCodexSourceTicketAccount(auth) || (auth.Status != "" && auth.Status != cliproxyauth.StatusActive) || !t.valid(now) || t.Owner != CodexOwnerFingerprint(auth) || t.Route == nil || !t.Route.valid(now) {

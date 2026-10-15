@@ -8,18 +8,19 @@ import (
 
 func TestNormalizeCredentialMetadata(t *testing.T) {
 	metadata := map[string]any{
-		"api-key":               "legacy-key",
-		"base-url":              "https://legacy.example",
-		"disable-cooling":       true,
-		"excluded-models":       []any{"legacy-model"},
-		"fingerprint-profile":   "claude-code-cli",
-		"model-aliases":         []any{map[string]any{"name": "upstream", "alias": "public"}},
-		"proxy-url":             "http://legacy-proxy.example",
-		"request-retry":         3,
-		"request_retry":         0,
-		"request-scoped-errors": []any{map[string]any{"status": 429}},
-		"tool-prefix-disabled":  true,
-		"provider_field":        "preserved",
+		"api-key":                       "legacy-key",
+		"base-url":                      "https://legacy.example",
+		"disable-cooling":               true,
+		"excluded-models":               []any{"legacy-model"},
+		"fingerprint-profile":           "claude-code-cli",
+		"model-aliases":                 []any{map[string]any{"name": "upstream", "alias": "public"}},
+		"proxy-url":                     "http://legacy-proxy.example",
+		"request-retry":                 3,
+		"request_retry":                 0,
+		"request-scoped-errors":         []any{map[string]any{"status": 429}},
+		"tool-prefix-disabled":          true,
+		"provider_field":                "preserved",
+		"codex_turn_ticket:gpt-6-astra": map[string]any{"state": "legacy-ticket", "route": "legacy-cookies"},
 	}
 
 	NormalizeCredentialMetadata(metadata)

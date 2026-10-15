@@ -36,7 +36,6 @@ func (l *CodexRuntimeLog) CaptureSourceTickets(body []byte) {
 	if l.ticket != nil {
 		l.ticket.save = func(ticket CodexTurnStateTicket) {
 			notifyCodexTurnStateTicketRecorder(l.auth, ticket)
-			StoreCodexTurnStateTicket(l.auth, ticket)
 		}
 	}
 }

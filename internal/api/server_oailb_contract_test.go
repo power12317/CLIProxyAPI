@@ -107,10 +107,11 @@ func TestOaiLBOriginalCPAMPContractAndLiveBorrow(t *testing.T) {
 				}
 				auth := &coreauth.Auth{ID: "source-" + system, Provider: "codex", FileName: filename, Attributes: map[string]string{"path": path}, Metadata: map[string]any{"access_token": "source-oauth-never-export", "email": "source@example.test", "account_id": "shared-account", "codex_client_system": system}}
 				route := helps.CodexTicketRoute{CFLB: helps.CodexRouteCookie{Value: system + "-cf"}, OaiLB: helps.CodexRouteCookie{Value: system + "-oai"}}
-				helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: "gpt-6-astra", Owner: helps.CodexOwnerFingerprint(auth), State: seed, CapturedAt: now.Add(-50 * time.Minute), ExpiresAt: now.Add(10 * time.Minute), Route: &route})
 				if _, err := source.manager.Register(t.Context(), auth); err != nil {
 					t.Fatal(err)
 				}
+				helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: "gpt-6-astra", Owner: helps.CodexOwnerFingerprint(auth), State: seed, CapturedAt: now.Add(-50 * time.Minute), ExpiresAt: now.Add(10 * time.Minute), Route: &route})
+				t.Cleanup(func() { helps.InvalidateCodexTurnStateTickets(auth.ID) })
 			}
 			for _, f := range []oailbContractFixture{source, target} {
 				raw := f.request(t, "GET", oailbContractSettings, "", true, 200)

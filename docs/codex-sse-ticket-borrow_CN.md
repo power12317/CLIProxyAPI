@@ -24,14 +24,14 @@
 
 ## 2. A 的一小时来源快照
 
-每份快照按“凭据 ID + 实际模型”保存，包含 `x-codex-turn-state`、`__cflb`、`__oailb`、
+每份快照按“凭据 ID + 所属身份指纹 + 实际模型”仅保存在 CPA 进程内存中，包含 `x-codex-turn-state`、`__cflb`、`__oailb`、
 所属凭据指纹、票据原始时间、到期时间，以及 Cookie 可解析的期限。
 
 1. 票据总开关打开时，启动或从关闭切换为开启会立即检查并补采必要快照。
 2. 配置模型依次采集，有完整有效且尚未进入续期窗口的快照就跳过。保留原来的到期前十分钟主动续期。
 3. 来源票正常期限固定为原始签发时间加 3600 秒。解析不了签发时间的历史不透明票仍可按原机制本地保持，
    但不能导出为本轮可借组合。可解析的历史记录会受原始签发时间加一小时上限约束。
-4. 同一张票再次出现、读取、借出、保存、配置重载和重启都不能延长原期限。
+4. 同一张票再次出现、读取、借出、保存和配置重载都不能延长原期限。进程重启后缓存清空，不从 auth JSON 恢复。
 5. 不同的新票与本次交换对应的 Cookie 一起形成新快照。不会在 B 取票时临时从最新 Jar 拼接。
 6. 票据响应缺少 Cookie 时，可以继承该次请求实际发送的 Cookie；明确删除、缺失或过期的 Cookie 不可借。
 7. 如果新响应无法形成完整组合，已有完整且有效的来源快照继续提供。
@@ -265,13 +265,14 @@ A、B 均需本次修正版。旧版本只返回 Cookie 的响应不具备票据
 `/v8/management/credentials/codex/ticket-borrow` 专用路由已移除，不再保留第二条取票路径。
 CPAMP 只负责配置来源，不请求或接收实际票据和 Cookie。普通凭据列表和下载仍隐藏这些材料。
 
-探针沿用原 `[TICKET-PROBE]` 日志格式，记录实际请求与响应长度，不输出原始票据和 Cookie。
+普通 A 探针继续使用原 `[TICKET-PROBE]` 格式。B 的取票和两次验证改用 `[TICKET-BORROW]`，
+并沿用触发本轮获取的业务请求 ID。两次探针保留各自真实的 session/turn 前缀。
 B 的典型两次探针分别可见 `780/780`、`780/0`；第二发回同票时也可能为 `780/780`。
-日志长度本身不代替上述续接验证。
+日志同时显示值是否相同，长度本身不代替上述续接验证。票据和 Cookie 原值不会写入日志。
 
 ```text
-[2026-10-14 12:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-PROBE] 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "/backend-api/codex/responses"
-[2026-10-14 12:00:02] [a1b2c3d5] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-PROBE] 200 | 1.100s | gpt-6-astra/- | 780/0 | POST "/backend-api/codex/responses"
+[2026-10-15 16:00:00] [a1b2c3d4] [codex-b-windows.json] [7a120003] [8b230003] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | __cflb=9/0 absent | __oailb=10/0 absent
+[2026-10-15 16:00:02] [a1b2c3d4] [codex-b-windows.json] [7a120004] [8b230004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/0 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=absent | __cflb=9/0 absent | __oailb=10/0 absent
 ```
 
 本轮不新增前端显示。原凭据页面的普通一小时票据摘要不代表 B 的四分钟已验证缓存；
@@ -419,7 +420,7 @@ docker compose up -d --pull always --no-build cli-proxy-api
 - 读取现有 `cpa/inference/upstream` 请求和响应通知。票据来自响应头，或原有
   v3 正文中的 `response.metadata` / `codex.response.metadata`。
 - Cookie 按同次实际请求 Cookie 与响应 Set-Cookie 配对，复用已有配对函数、
-  票据结构、recorder、凭据持久化和原借票接口。
+  票据结构、recorder、内存缓存和原借票接口。
 - 普通响应采集不额外请求上游。不发送 `captureTicketSnapshot`，不依赖
   `ticketSnapshots` 能力或 `cpa/inference/ticket` 通知。
 - 保持协议 v3，未引入 v5，未修改任何 HTTP/IPC 接口结构或 CPAMP 配置。
@@ -456,10 +457,10 @@ A 的普通对话票据仍由 codex-server 管理；CPA 不向 Runtime 普通业
 2. v3 探针验证实际 RPC 字段没有增加，payload 规则只在最终请求上应用一次；
    被规则过滤的字段不会在发送前恢复。Runtime 不使用 CPA 的探测代理覆盖 worker。
 3. 真实 worker 发起四次普通模型请求（含流式、非流式、响应头票及元数据票），
-   A 保存成功，CPA 直连来源请求为 0；凭据页面原接口显示就绪，磁盘重新读取仍可导出。
+   A 缓存成功，CPA 直连来源请求为 0；凭据页面原接口显示就绪，同进程重载凭据仍可从内存导出，磁盘不含票据。
 4. B 经 A 的原管理路由读取一次，发两次验证探针、两次业务请求，后续复用成功。
    B 读来源没有额外触发 A 打票。
-5. 把 A 票置于提前十分钟窗口，启动现有采集器，真实 worker 完成一次续期；
+5. 把 A 票置于提前十分钟窗口，调用采集器使用的原有采集函数，真实 worker 完成一次续期；定时触发另由虚拟时钟测试覆盖。
    A 合计五次上游请求、五次原有 Runtime 推理调用，CPA 直连仍为 0。
 6. 实际 IPC 监测确认没有采集参数或独立 ticket 通知。
 
@@ -470,3 +471,120 @@ A 的普通对话票据仍由 codex-server 管理；CPA 不向 Runtime 普通业
 `TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile/completed`，
 错误为 `completed Codex OAuth credential is missing email or access token`。
 仅排除该既有用例后，最终代码的 `go test ./...` 全部通过。本次没有修改该 OAuth 用例或登录逻辑。
+
+## 2026-10-15：补全 B 的借票诊断日志
+
+无需新增配置项，默认 `info` 级别就能看到借票流程。只调整本项目现有借票分支，
+没有新增或修改 HTTP/IPC 接口及请求参数，没有改动 CPAMP、codex-server。
+A 的一小时期限、提前十分钟续期，B 的 240 秒期限、提前 60 秒按业务请求续借，
+两次验证条件与 30 秒失败节流均保持原样。
+
+### 日志阶段
+
+| 标记后的阶段 | 含义及记录内容 |
+| --- | --- |
+| `ACQUIRE` | 开始本轮借票：来源实例地址、来源凭据；失败时记录具体阶段、原因及是否保留未过期旧票 |
+| `SOURCE` | B 请求现有来源接口：HTTP 状态、完整耗时、模型、来源快照票据长度、两枚 Cookie 长度及组合剩余秒数 |
+| `EXCHANGE` | 第一发上游请求：携带 A 的票和 Cookie 换取 B 票 |
+| `VERIFY` | 第二发上游请求：携带 B 票验证是否可继续使用 |
+| `READY` | 两次验证通过，记录保存的票长、两枚 Cookie 长度及组合剩余秒数 |
+| `REUSE` | 本次业务选用了已验证的本地组合，记录其剩余秒数；续借失败保留旧票时也明确记录 |
+| `WAIT` | 等待并发请求正在进行的借票，或处于失败后的节流期；显示首次失败原因及获取请求 ID |
+| `SEND` | 实际发送前发现所选票已过期或被撤销，明确记录本次业务尚未发往上游 |
+| `REVOKE` | 业务响应改变票值、Cookie 值/配对或缩短期限，撤销当前组合；下次业务请求重新借票 |
+
+这些记录统一带 `[TICKET-BORROW]`。`SOURCE`、`EXCHANGE`、`VERIFY` 和最终 `ACQUIRE/READY`
+使用同一个业务请求 ID；后续业务有自己的 ID，`WAIT` 会引用首次失败的 ID。
+前缀中的凭据文件是 B 本次使用的凭据；`SOURCE` 的 `credential` 是配置选择的 A 凭据。
+两次探针前缀的 session/turn 是实际探针自己的标识，不再为每条日志另造无关联的请求 ID。
+
+请求行保留状态、秒数、模型、请求/响应票长、方法与地址。来源接口的 `0/780`
+表示从响应 JSON 快照取到了长 780 的来源票；上游请求行的长度来自实际请求/响应头。
+地址记录实例主机及路径，移除用户名、密码、查询串及片段。
+
+`EXCHANGE/VERIFY` 的耗时覆盖收到响应头、读取 SSE 和检查完成事件、Cookie 的全过程。
+HTTP 200 后读流失败时，仍显示真实 HTTP 200，同时使用 `warn` 并附上读流原因。
+随后完成的票据结构、时间及同值验证如有失败，会在 `ACQUIRE` 中给出具体原因；
+只有看到 `READY` 才表示整轮验证已通过。
+
+### 同为 780 长度时如何区分
+
+- `ticket=absent`：响应头没有票；`ticket=same`：响应票与发送票完全相同；
+  `ticket=changed`：值不同，即使两边都长 780。
+- `__cflb=9/0 absent`：请求带了长 9 的 Cookie，响应未设置该 Cookie，继续沿用发出的值。
+  这里的 `0` 不代表本地没有 Cookie。`__oailb` 同理。
+- Cookie 标记 `same/changed/deleted` 分别表示响应设置相同值、设置不同值或要求删除。
+- `READY/REUSE` 的 `remaining` 取票据与两枚 Cookie 的较早期限。
+- 原始票据、Cookie、Authorization、管理密钥及来源 JSON 正文不写入日志。
+  SSE 只提取已知事件、状态和错误码，例如 `rate_limit_exceeded`；不输出可能回显凭据的原始错误正文。
+
+以下是“第二次响应仍长 780，但实际返回另一张票”的示意，**不是对用户旧日志原因的认定**：
+
+```text
+[2026-10-15 16:00:00] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [info ] [TICKET-BORROW] SOURCE 200 | 0.010s | gpt-6-astra/- | 0/780 | POST "http://instance8:8317/v0/management/codex/oailb/borrow" | credential="codex-a.json" | __cflb=9 | __oailb=10 | remaining=599s
+[2026-10-15 16:00:02] [a1b2c3d4] [codex-b.json] [probe001] [probe002] [info ] [TICKET-BORROW] EXCHANGE 200 | 1.420s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | __cflb=9/0 absent | __oailb=10/0 absent
+[2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [probe003] [probe004] [info ] [TICKET-BORROW] VERIFY 200 | 1.100s | gpt-6-astra/- | 780/780 | POST "https://chatgpt.com/backend-api/codex/responses" | ticket=changed | __cflb=9/0 absent | __oailb=10/0 absent
+[2026-10-15 16:00:03] [a1b2c3d4] [codex-b.json] [session1] [turn0001] [warn ] [TICKET-BORROW] ACQUIRE | gpt-6-astra | verify: continuation returned a different ticket (780/780); retry in 30 seconds; business request not sent
+[2026-10-15 16:00:04] [b1b2c3d4] [codex-b.json] [session1] [turn0001] [warn ] [TICKET-BORROW] WAIT | gpt-6-astra | acquisition retry is deferred for 29 seconds; last failure: verify: continuation returned a different ticket (780/780); acquisition request: a1b2c3d4; business request not sent
+```
+
+后续 503 的 `error.message` 同样保留 `last failure` 和首次请求 ID，并显示当前剩余等待秒数，
+不再一直只显示固定“等待 30 秒”。既有 `RetryAfter()` 策略仍为 30 秒，本次不修改调用方重试策略。
+节流期间不会因此多取一次来源票或多发探针。后续成功会清除旧失败原因。
+
+### 本次用户日志能够确定的范围
+
+用户日志显示运行的是 `fb068f77`。15:49:20、15:49:33 的两条旧 `TICKET-PROBE 780/780`
+来自 B 借票探针；能够携带来源票进入探针，说明来源取票与来源组合校验已经通过。
+但旧日志在收到响应头后立即打印，没有完整响应耗时、票值比较及验证失败原因，
+不能据此判断到底是第二张票变化、Cookie 变化还是后续响应内容失败。
+
+15:49:43 的首次业务 503 耗时 26.343 秒，随后多条短耗时 503 是节流期间的拒绝。
+这些业务行的 `0/0` 不表示一次成功的空票上游请求：获取组合失败时，业务尚未发出。
+本次补齐可观测性，供部署后复测定位具体原因，不宣称已修复尚未确定的上游验证失败原因。
+
+### 新增回归覆盖
+
+- 来源取票、两次验证和最终结果与业务请求 ID 对应；探针保留真实 session/turn。
+- 缓存复用、续借失败保留旧票、业务撤销均有日志，且网络请求次数保持不变。
+- 两张同长不同值的票被拒绝，首次原因在后续节流返回和日志中保留。
+- 用虚拟时钟模拟 HTTP 200 后读流超时，验证日志包含完整耗时及失败原因。
+- 来源 HTTP 503、回显来源票、票结构错误、SSE 未完成/限流、单枚 Cookie 更新、
+  第二次 Cookie 改变及传输错误都有可识别原因。
+- 成功后清除旧原因；剩余等待时间递减；普通 A 探针的原始格式保持不变；日志无原始凭据材料。
+
+本次验证：上述新增测试、原借票测试和普通探针格式测试通过；日志、执行辅助、SSE 执行器及
+API 相关回归的 `-race` 检查通过，其中包括真实 v3 worker 的来源采集到 B 借票联调。
+`gofmt -w .`、`git diff --check`、`go build -o test-output ./cmd/server` 通过。
+排除前文已确认的主线 OAuth 基线用例后，`go test ./...` 全部通过。
+
+## 2026-10-15：门票改为仅保存在内存
+
+本次不增加配置开关，直接将门票存储改为内存模式：
+
+- A 主动探测、普通响应以及 Codex Runtime 现有响应中取得的门票和对应的
+  `__cflb`、`__oailb` 快照，一并存入独立并发安全缓存，不再放进 `auth.Metadata`。
+- 采集门票不再调用凭据管理器的保存方法，不会因为门票更新而写 auth JSON 或触发文件 WRITE 重载。
+  凭据自身的 OAuth 更新、启停等正常保存行为保留。
+- 凭据页面的门票状态、普通请求强制注入以及原有跨实例供票接口都读取同一份内存缓存。
+  CPAMP 配置、页面和接口无需调整。
+- 不同凭据、macOS/Windows 身份、不同模型继续隔离；同邮箱不合并门票。
+  同一身份的 token 刷新及普通文件/配置重载保留内存票。删除凭据或切换身份时清理旧缓存。
+- 缓存保存和读取都会复制 Cookie 快照，避免后续 Jar 更新或调用方修改污染已有票据配对。
+  并发晚到的旧票不会覆盖较新的正常响应票；重复观察相同票不延长原到期时间。
+- A 的一小时有效期、启动/开启时检查采集、提前十分钟主动续期均保持不变。
+  B 的票本来就是内存缓存，继续按 240 秒有效、剩余 60 秒时由业务请求触发续借。
+- 进程重启后 A、B 缓存均为空。A 开启门票时按原流程重新采集；B 仍等业务请求到来再借票。
+  A 的非探测模型等待正常响应再次采集，不会因此加入主动探测列表。
+
+旧版 auth JSON 中的 `codex_turn_ticket:*` 不再加载或用于兜底。升级时不会仅为清理这些字段
+批量改写凭据；后续正常保存凭据时会剔除旧门票字段，包括 Codex 共享凭据合并和 token 刷新写入路径。
+因此旧文件可能暂时仍能看到历史字段，但运行中的门票不会读取它们，也不会再向文件保存新门票。
+
+回归覆盖主动探测与正常采集不写文件、额外模型的状态与注入、同进程重载、清空缓存后
+不恢复旧 JSON、凭据和模型隔离、并发新旧票顺序、Cookie 快照复制及旧文件字段的安全迁移。
+
+验证结果：上述回归与相关包的 `-race` 检查通过；真实 v3 worker 的正常响应采集、
+原有来源接口供票、B 两次验证及复用、A 续期通过，确认不调用凭据保存且磁盘无新票据字段。
+`gofmt -w .`、`git diff --check` 和服务构建通过；仅排除前文已有主线 OAuth 基线失败用例后，
+最终代码的整仓测试全部通过。

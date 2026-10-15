@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
@@ -25,10 +24,6 @@ func (s *Service) startCodexTicketHarvester(ctx context.Context) {
 			return cfg
 		},
 		List: s.coreManager.List,
-		Update: func(updateCtx context.Context, base, updated *coreauth.Auth) error {
-			_, errUpdate := s.coreManager.UpdatePreparedAuth(updateCtx, base, updated)
-			return errUpdate
-		},
 	})
 	s.codexTicketHarvester = harvester
 	helps.SetCodexTurnStateTicketRecorder(harvester.Record)
@@ -46,6 +41,9 @@ func (s *Service) stopCodexTicketHarvester() {
 	}
 	s.codexTicketHarvester.Stop()
 	s.codexTicketHarvester = nil
+	for _, auth := range s.coreManager.List() {
+		helps.InvalidateCodexTurnStateTickets(auth.ID)
+	}
 }
 
 func (s *Service) notifyCodexTicketConfigChanged() {

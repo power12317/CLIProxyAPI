@@ -158,6 +158,8 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 	var formatted string
 	if ticketProbe, _ := entry.Data[CodexTicketProbeLogField].(bool); ticketProbe {
 		formatted = fmt.Sprintf("%s [%s] [TICKET-PROBE] %s\n", prefix, levelStr, message)
+	} else if ticketBorrow, _ := entry.Data[CodexTicketBorrowLogField].(bool); ticketBorrow {
+		formatted = fmt.Sprintf("%s [%s] [TICKET-BORROW] %s\n", prefix, levelStr, message)
 	} else if entry.Caller != nil {
 		formatted = fmt.Sprintf("%s [%s] [%s:%d] %s%s\n", prefix, levelStr, filepath.Base(entry.Caller.File), entry.Caller.Line, message, fieldsStr)
 	} else {

@@ -417,7 +417,7 @@ func TestCodexBorrowOriginalEndpointRejectsIncompleteAndMismatchedEnvelope(t *te
 			}))
 			defer source.Close()
 			cfg := &config.Config{CodexHeaderDefaults: config.CodexHeaderDefaults{OaiLBBorrow: &config.CodexOaiLBBorrowConfig{SourceURL: source.URL, SourceAuthID: "donor", SourceManagementKey: "key"}}}
-			if _, err := fetchCodexSourceBundle(t.Context(), cfg, "model"); err == nil {
+			if _, err := fetchCodexSourceBundle(t.Context(), cfg, "model", newCodexBorrowLog(t.Context(), nil, "model")); err == nil {
 				t.Fatal("incomplete or mixed-version source accepted")
 			}
 		})

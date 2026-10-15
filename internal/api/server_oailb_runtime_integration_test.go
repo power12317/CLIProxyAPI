@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -48,12 +49,11 @@ func TestOailbRuntimeSourceRealWorker(t *testing.T) {
 	if _, err := f.manager.Register(t.Context(), auth); err != nil {
 		t.Fatal(err)
 	}
-	updates := make(chan struct{}, 16)
 	harvester := helps.NewCodexTurnStateTicketHarvester(helps.CodexTurnStateTicketHarvesterOptions{Config: func() *config.Config { return f.cfg }, List: f.manager.List, Update: func(ctx context.Context, base, updated *coreauth.Auth) error {
-		_, err := f.manager.UpdatePreparedAuth(ctx, base, updated)
-		updates <- struct{}{}
-		return err
+		t.Error("runtime source ticket must not update auth JSON")
+		return nil
 	}})
+	t.Cleanup(func() { helps.InvalidateCodexTurnStateTickets(auth.ID) })
 	helps.SetCodexTurnStateTicketRecorder(harvester.Record)
 	t.Cleanup(func() { helps.SetCodexTurnStateTicketRecorder(nil) })
 	var workerCalls, directCalls atomic.Int32
@@ -163,7 +163,7 @@ func TestOailbRuntimeSourceRealWorker(t *testing.T) {
 			current, _ = f.manager.GetByID(auth.ID)
 			ticket, err := helps.ExportCodexSourceTicket(current, model, time.Now())
 			if err != nil || ticket.Route.CFLB.Value != "source-cf" || ticket.Route.OaiLB.Value != "source-oai" {
-				t.Fatalf("runtime response was not persisted for %s: %v", model, err)
+				t.Fatalf("runtime response was not cached for %s: %v", model, err)
 			}
 		}
 	}
@@ -174,12 +174,25 @@ func TestOailbRuntimeSourceRealWorker(t *testing.T) {
 	if !gjson.GetBytes(listing, `files.0.codex_turn_tickets.#(model=="gpt-6-astra").ready`).Bool() {
 		t.Fatal("the existing credential page did not expose runtime source readiness")
 	}
-	// Reload real storage, then expose A through the unchanged production route.
+	// Reload unchanged credentials; the source remains available from memory.
 	loaded, err := store.List(t.Context())
 	if err != nil || len(loaded) != 1 {
-		t.Fatal("source was not retained on disk", err)
+		t.Fatal("credential was not retained on disk", err)
 	}
-	seed, err := helps.ExportCodexSourceTicket(loaded[0], "gpt-6-astra", time.Now())
+	for key := range loaded[0].Metadata {
+		if helps.IsCodexTurnStateTicketMetadataKey(key) {
+			t.Fatal("runtime response persisted ticket material")
+		}
+	}
+	rawAuth, errRead := os.ReadFile(auth.Attributes[coreauth.AttributePath])
+	if errRead != nil || bytes.Contains(rawAuth, []byte("codex_turn_ticket:")) {
+		t.Fatalf("runtime ticket leaked to disk: %v", errRead)
+	}
+	reloaded, err := f.manager.Update(coreauth.WithSkipPersist(t.Context()), loaded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := helps.ExportCodexSourceTicket(reloaded, "gpt-6-astra", time.Now())
 	if err != nil {
 		t.Fatal("reloaded runtime source is not exportable", err)
 	}
@@ -226,27 +239,24 @@ func TestOailbRuntimeSourceRealWorker(t *testing.T) {
 	if shots.Load() != 4 || sourceReads.Load() != 1 || workerCalls.Load() != 4 {
 		t.Fatalf("B did not reuse, or borrowing caused A to probe: B=%d reads=%d A=%d", shots.Load(), sourceReads.Load(), workerCalls.Load())
 	}
-	// The ordinary scheduler renews via runtime without changing its interface.
+	// Exercise the same runtime acquisition used by the scheduler; timer boundaries
+	// are covered with a controlled clock in the harvester tests.
 	current, _ := f.manager.GetByID(auth.ID)
 	seed.ExpiresAt = time.Now().Add(9 * time.Minute)
 	helps.StoreCodexTurnStateTicket(current, seed)
-	if _, err := f.manager.Update(t.Context(), current); err != nil {
-		t.Fatal(err)
+	replacement, status, err := helps.HarvestCodexTurnStateTicket(ctx, f.cfg, current, seed.Model, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("runtime renewal failed: status=%d err=%v", status, err)
 	}
-	for len(updates) > 0 {
-		<-updates
-	}
-	harvester.Start(ctx)
-	select {
-	case <-updates:
-	case <-time.After(15 * time.Second):
-		t.Error("startup check did not renew the source inside the ten-minute window")
-	}
-	harvester.Stop()
+	harvester.Record(current, replacement)
 	current, _ = f.manager.GetByID(auth.ID)
 	renewed, err := helps.ExportCodexSourceTicket(current, "gpt-6-astra", time.Now())
 	if err != nil || renewed.State == seed.State || workerCalls.Load() != 5 || rpcCalls.Load() != 5 || directCalls.Load() != 0 {
 		t.Fatalf("runtime renewal failed: %v worker=%d rpc=%d direct=%d", err, workerCalls.Load(), rpcCalls.Load(), directCalls.Load())
+	}
+	helps.InvalidateCodexTurnStateTickets(auth.ID)
+	if _, err := helps.ExportCodexSourceTicket(reloaded, "gpt-6-astra", time.Now()); err == nil {
+		t.Fatal("cleared memory was restored from the credential file")
 	}
 	t.Log("A: four ordinary v3 requests plus one scheduled renewal; zero CPA direct source calls. B: one source read, two probes, two business requests. No new RPC field or ticket notification.")
 }

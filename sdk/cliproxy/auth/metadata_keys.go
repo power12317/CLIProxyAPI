@@ -1,5 +1,7 @@
 package auth
 
+import "strings"
+
 // CanonicalCredentialMetadataKey returns the canonical snake_case name for
 // credential metadata keys that previously also accepted config-style aliases.
 func CanonicalCredentialMetadataKey(key string) string {
@@ -33,6 +35,12 @@ func CanonicalCredentialMetadataKey(key string) string {
 // canonical snake_case names. An explicitly present canonical value wins.
 func NormalizeCredentialMetadata(metadata map[string]any) {
 	for key, value := range metadata {
+		// Old ticket snapshots are not credentials and must never be restored
+		// or carried into a later token/status save. Live tickets are memory-only.
+		if strings.HasPrefix(strings.TrimSpace(key), "codex_turn_ticket:") {
+			delete(metadata, key)
+			continue
+		}
 		canonical := CanonicalCredentialMetadataKey(key)
 		if canonical == key {
 			continue

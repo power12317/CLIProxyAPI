@@ -27,18 +27,26 @@ func newTicketHarvesterTest(t *testing.T, cfg *config.Config, auths []*cliproxya
 	t.Helper()
 	manager := cliproxyauth.NewManager(nil, nil, nil)
 	for _, auth := range auths {
+		var fixtures []CodexTurnStateTicket
+		for _, model := range codexTurnStateTicketModels(auth) {
+			fixtures = append(fixtures, *codexTurnStateTicketForAuth(auth, model))
+		}
 		if _, errRegister := manager.Register(t.Context(), auth); errRegister != nil {
 			t.Fatal(errRegister)
 		}
+		for _, fixture := range fixtures {
+			StoreCodexTurnStateTicket(auth, fixture)
+		}
 		t.Cleanup(func() { InvalidateCodexCookieJar(auth.ID) })
+		t.Cleanup(func() { InvalidateCodexTurnStateTickets(auth.ID) })
 	}
 	current := &atomic.Pointer[config.Config]{}
 	current.Store(cfg)
 	h := NewCodexTurnStateTicketHarvester(CodexTurnStateTicketHarvesterOptions{
 		Config: current.Load, List: manager.List,
 		Update: func(ctx context.Context, base, updated *cliproxyauth.Auth) error {
-			_, errUpdate := manager.UpdatePreparedAuth(ctx, base, updated)
-			return errUpdate
+			t.Error("ticket observation must not update credentials")
+			return nil
 		},
 	})
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))

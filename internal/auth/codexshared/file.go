@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type State struct {
@@ -48,7 +49,15 @@ func Read(path string) (map[string]any, error) {
 }
 
 func Write(path string, metadata map[string]any) error {
-	raw, err := json.MarshalIndent(metadata, "", "  ")
+	// Shared credential writes may merge legacy on-disk metadata. Ticket and
+	// routing snapshots now live only in CPA memory, never in the shared file.
+	stored := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		if !strings.HasPrefix(strings.TrimSpace(key), "codex_turn_ticket:") {
+			stored[key] = value
+		}
+	}
+	raw, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
 		return err
 	}

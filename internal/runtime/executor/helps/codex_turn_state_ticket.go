@@ -37,7 +37,7 @@ var codexTurnStateTicketRecorder struct {
 }
 
 // SetCodexTurnStateTicketRecorder installs the service-owned callback used to
-// persist a 780-byte value observed on a normal upstream response.
+// validate the current credential before caching a normal response in memory.
 func SetCodexTurnStateTicketRecorder(fn func(*cliproxyauth.Auth, CodexTurnStateTicket)) {
 	codexTurnStateTicketRecorder.Lock()
 	codexTurnStateTicketRecorder.fn = fn
@@ -50,10 +50,12 @@ func notifyCodexTurnStateTicketRecorder(auth *cliproxyauth.Auth, ticket CodexTur
 	codexTurnStateTicketRecorder.RUnlock()
 	if fn != nil {
 		fn(auth, ticket)
+	} else {
+		storeCodexTicketMemory(auth, ticket, true)
 	}
 }
 
-// CodexTurnStateTicket is the persisted, credential/model-scoped ticket summary.
+// CodexTurnStateTicket is the process-local, credential/model-scoped snapshot.
 // The state value is intentionally kept out of logs and management responses.
 type CodexTurnStateTicket struct {
 	Owner      string            `json:"owner,omitempty"`
@@ -99,41 +101,6 @@ func (t *CodexTurnStateTicket) needsRefresh(now time.Time, before time.Duration)
 	return t == nil || t.ExpiresAt.IsZero() || !t.ExpiresAt.After(now.Add(before))
 }
 
-func codexTurnStateTicketForAuth(auth *cliproxyauth.Auth, model string) *CodexTurnStateTicket {
-	if auth == nil || len(auth.Metadata) == 0 || strings.TrimSpace(model) == "" {
-		return nil
-	}
-	raw := auth.Metadata[CodexTurnStateTicketMetadataKey(model)]
-	if raw == nil {
-		return nil
-	}
-	b, errMarshal := json.Marshal(raw)
-	if errMarshal != nil {
-		return nil
-	}
-	var ticket CodexTurnStateTicket
-	if errUnmarshal := json.Unmarshal(b, &ticket); errUnmarshal != nil {
-		return nil
-	}
-	ticket.Model = strings.TrimSpace(model)
-	ticket.State = strings.TrimSpace(ticket.State)
-	if ticket.Length == 0 {
-		ticket.Length = len(ticket.State)
-	}
-	// Clamp restored records too; a legacy longer TTL must not survive migration.
-	issued, errIssued := CodexTicketIssuedAt(ticket.State, time.Now())
-	if errIssued != nil {
-		issued = ticket.CapturedAt
-	}
-	if !issued.IsZero() {
-		limit := issued.Add(time.Hour)
-		if ticket.ExpiresAt.After(limit) {
-			ticket.ExpiresAt = limit
-		}
-	}
-	return &ticket
-}
-
 func isCodexTurnStateTicketAccount(auth *cliproxyauth.Auth) bool {
 	return isCodexSourceTicketAccount(auth) && !cliproxyauth.IsCodexRuntimeOwnedAuth(auth)
 }
@@ -158,11 +125,7 @@ func CodexTurnStateTicketStatuses(auth *cliproxyauth.Auth, cfg config.CodexTurnS
 	models := append([]string(nil), cfg.Models...)
 	if cfg.CacheAllModelsEnabled() {
 		var learned []string
-		for key := range auth.Metadata {
-			if !IsCodexTurnStateTicketMetadataKey(key) {
-				continue
-			}
-			model := strings.TrimSpace(strings.TrimPrefix(key, CodexTurnStateTicketMetadataPrefix))
+		for _, model := range codexTurnStateTicketModels(auth) {
 			if model != "" && !codexTurnStateTicketModelConfigured(models, model) {
 				learned = append(learned, model)
 			}
@@ -299,9 +262,7 @@ func recordCodexTurnStateTicketValue(auth *cliproxyauth.Auth, cfg config.CodexTu
 		resp = responses[0]
 	}
 	ticket := newCodexSourceTicket(auth, model, value, resp, time.Now())
-	// Keep the request snapshot unchanged until persistence computes its delta.
 	notifyCodexTurnStateTicketRecorder(auth, ticket)
-	StoreCodexTurnStateTicket(auth, ticket)
 	return true
 }
 
@@ -317,22 +278,6 @@ func codexTurnStateTicketModelConfigured(models []string, model string) bool {
 		}
 	}
 	return false
-}
-
-// StoreCodexTurnStateTicket updates the in-memory auth and is intentionally
-// separate from persistence so callers can use Manager.Update atomically.
-func StoreCodexTurnStateTicket(auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) {
-	if auth == nil || strings.TrimSpace(ticket.Model) == "" || strings.TrimSpace(ticket.State) == "" {
-		return
-	}
-	if auth.Metadata == nil {
-		auth.Metadata = make(map[string]any)
-	}
-	ticket.AccountID = auth.ID
-	ticket.Model = strings.TrimSpace(ticket.Model)
-	ticket.State = strings.TrimSpace(ticket.State)
-	ticket.Length = len(ticket.State)
-	auth.Metadata[CodexTurnStateTicketMetadataKey(ticket.Model)] = ticket
 }
 
 // HarvestCodexTurnStateTicket performs one bounded probe using the optional
@@ -402,9 +347,8 @@ func HarvestCodexTurnStateTicket(ctx context.Context, cfg *config.Config, auth *
 // background. Callbacks keep this helper independent of the auth manager so it
 // can be used by both the standalone service and the embeddable SDK.
 type CodexTurnStateTicketHarvester struct {
-	cfgFn    func() *config.Config
-	listFn   func() []*cliproxyauth.Auth
-	updateFn func(context.Context, *cliproxyauth.Auth, *cliproxyauth.Auth) error
+	cfgFn  func() *config.Config
+	listFn func() []*cliproxyauth.Auth
 
 	recordMu         sync.Mutex
 	lifecycleMu      sync.Mutex
@@ -419,13 +363,14 @@ type CodexTurnStateTicketHarvester struct {
 type CodexTurnStateTicketHarvesterOptions struct {
 	Config func() *config.Config
 	List   func() []*cliproxyauth.Auth
-	// Update merges changes from base to updated into the latest credential.
+	// Deprecated: tickets are memory-only; Update is retained for SDK source
+	// compatibility and is never called.
 	Update func(ctx context.Context, base, updated *cliproxyauth.Auth) error
 }
 
 func NewCodexTurnStateTicketHarvester(opts CodexTurnStateTicketHarvesterOptions) *CodexTurnStateTicketHarvester {
 	h := &CodexTurnStateTicketHarvester{
-		cfgFn: opts.Config, listFn: opts.List, updateFn: opts.Update,
+		cfgFn: opts.Config, listFn: opts.List,
 		wake: make(chan struct{}, 1),
 	}
 	if cfg := h.currentConfig(); cfg != nil {
@@ -541,7 +486,7 @@ func (h *CodexTurnStateTicketHarvester) currentConfig() *config.Config {
 }
 
 func (h *CodexTurnStateTicketHarvester) refresh(ctx context.Context) {
-	if h == nil || h.listFn == nil || h.updateFn == nil || ctx.Err() != nil {
+	if h == nil || h.listFn == nil || ctx.Err() != nil {
 		return
 	}
 	cfg := h.currentConfig()
@@ -599,15 +544,12 @@ func (h *CodexTurnStateTicketHarvester) findAuth(authID string) *cliproxyauth.Au
 	return nil
 }
 
-// Record persists a valid ticket observed by a normal upstream request.
+// Record caches a ticket only while its original credential is still current.
 func (h *CodexTurnStateTicketHarvester) Record(auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) {
-	if h == nil || auth == nil || h.updateFn == nil || strings.TrimSpace(ticket.Model) == "" {
+	if h == nil || auth == nil || strings.TrimSpace(ticket.Model) == "" {
 		return
 	}
-	if errUpdate := h.persist(context.Background(), auth, ticket); errUpdate != nil {
-		log.WithFields(log.Fields{"auth_id": auth.ID, "model": ticket.Model}).Warnf("codex turn-state ticket response persistence failed: %v", errUpdate)
-	}
-
+	h.remember(auth, ticket)
 }
 
 func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, model, proxyURL string) {
@@ -621,10 +563,7 @@ func (h *CodexTurnStateTicketHarvester) probe(ctx context.Context, cfg *config.C
 	if errHarvest != nil || status != http.StatusOK || strings.TrimSpace(ticket.State) == "" {
 		return
 	}
-	if errUpdate := h.persist(ctx, auth, ticket); errUpdate != nil {
-		log.WithFields(log.Fields{"auth_id": auth.ID, "model": model}).Warnf("codex turn-state ticket persistence failed: %v", errUpdate)
-	}
-
+	h.remember(auth, ticket)
 }
 
 // ValidateCodexTurnStateTicketHarvestProxyURL validates syntax without making
@@ -758,30 +697,15 @@ func newCodexTicketProbeRequest(ctx context.Context, cfg *config.Config, auth *c
 
 // Serialize source updates against the latest credential, retaining the original
 // generation when concurrent exchanges observe the same token.
-func (h *CodexTurnStateTicketHarvester) persist(ctx context.Context, auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) error {
+func (h *CodexTurnStateTicketHarvester) remember(auth *cliproxyauth.Auth, ticket CodexTurnStateTicket) {
 	h.recordMu.Lock()
 	defer h.recordMu.Unlock()
 	if h.listFn != nil {
 		current := h.findAuth(auth.ID)
 		if current == nil || current.Disabled || CodexOwnerFingerprint(current) != CodexOwnerFingerprint(auth) || current.RegistrationEpoch != auth.RegistrationEpoch {
-			return nil
+			return
 		}
 		auth = current
 	}
-	if previous := codexTurnStateTicketForAuth(auth, ticket.Model); previous != nil {
-		if previous.CapturedAt.After(ticket.CapturedAt) {
-			return nil
-		}
-		if previous.State == ticket.State {
-			ticket.CapturedAt, ticket.ExpiresAt = previous.CapturedAt, previous.ExpiresAt
-			if previous.Route != nil && (previous.Route.valid(time.Now()) || ticket.Route == nil || previous.Route.sameValues(*ticket.Route)) {
-				ticket.Route = previous.Route
-			}
-		} else if ticket.Route == nil && previous.valid(time.Now()) && previous.Route != nil && previous.Route.valid(time.Now()) {
-			return nil
-		}
-	}
-	updated := auth.Clone()
-	StoreCodexTurnStateTicket(updated, ticket)
-	return h.updateFn(ctx, auth, updated)
+	storeCodexTicketMemory(auth, ticket, true)
 }

@@ -253,9 +253,10 @@ payload:
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() { InvalidateCodexTurnStateTickets(auth.ID) })
 			h := NewCodexTurnStateTicketHarvester(CodexTurnStateTicketHarvesterOptions{Config: func() *config.Config { return cfg }, List: manager.List, Update: func(ctx context.Context, base, updated *coreauth.Auth) error {
-				_, err := manager.UpdatePreparedAuth(ctx, base, updated)
-				return err
+				t.Error("runtime ticket must not update the credential store")
+				return nil
 			}})
 			ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", codexRoundTripFunc(func(*http.Request) (*http.Response, error) {
 				t.Error("runtime harvester attempted direct HTTP")
