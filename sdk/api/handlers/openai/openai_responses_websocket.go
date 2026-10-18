@@ -41,6 +41,7 @@ const (
 	responsesWebsocketUpstreamModeUnknown = ""
 	responsesWebsocketUpstreamModeWS      = "websocket"
 	responsesWebsocketUpstreamModeHTTP    = "http"
+	responsesWebsocketUpstreamModeRuntime = "codex-runtime"
 
 	codexLocalCompactionSummaryPrefix = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:"
 )
@@ -382,6 +383,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		return auth, ok
 	}
 	upstreamModeForAuth := func(auth *coreauth.Auth) string {
+		if coreauth.IsCodexRuntimeOwnedAuth(auth) {
+			return responsesWebsocketUpstreamModeRuntime
+		}
 		if auth != nil && h.websocketAuthEnabled(auth) {
 			provider := strings.ToLower(strings.TrimSpace(auth.Provider))
 			if provider == "codex" || provider == "xai" {
@@ -509,7 +513,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		)
 		requestRequiresCurrentUpstreamWebsocket := responsesWebsocketRequestRequiresCurrentUpstream(payload)
 		forceBridge := h.responsesWebsocketForceBridge(requestModelName)
-		if forceBridge {
+		runtimeBridge := upstreamMode == responsesWebsocketUpstreamModeRuntime
+		if forceBridge || runtimeBridge {
 			nativeWebsocketPassthrough = false
 		}
 		if upstreamMode == responsesWebsocketUpstreamModeWS && !nativeWebsocketPassthrough {
@@ -621,9 +626,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				// No parent reference means a self-contained replacement, not a delta.
 				requestJSON, updatedLastRequest, errMsg = normalizeResponseCreateRequest(normalizeResponseTranscriptReplacement(payload, lastRequest))
 			}
-		} else if forceBridge && previousResponseID != "" && previousResponseID != lastResponseID {
+		} else if (forceBridge || runtimeBridge) && previousResponseID != "" && previousResponseID != lastResponseID {
 			errMsg = responsesWebsocketPreviousResponseNotFoundError()
-		} else if forceBridge {
+		} else if forceBridge || runtimeBridge {
 			requestJSON, updatedLastRequest, errMsg = normalizeResponsesWebsocketForcedRequest(payload, lastRequest, lastResponseOutput, lastResponseID, lastResponsePendingToolCallIDs, allowCompactionReplayBypass)
 		} else if nativeWebsocketPassthrough {
 			requestJSON, errMsg = normalizeResponsesWebsocketPassthroughRequest(payload, requestModelName)
@@ -705,6 +710,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		selectedAuthObserved := false
 		nativeRequest := util.IsCodexResponsesLiteRequest(payload, c.Request.Header)
 		var preserveNativeOutput atomic.Bool
+		var runtimeAuthSelected atomic.Bool
 		codexDuplexStream.Store(false)
 		pinnedAuthAttempted := false
 		cliCtx, cliCancel := h.GetContextWithCancel(h, c, executionParent)
@@ -725,15 +731,20 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				return
 			}
 			mode := responsesWebsocketUpstreamModeHTTP
-			if websocket {
+			if runtimeAuthSelected.Load() {
+				// The worker owns its native socket. CPA must retain the transcript
+				// for input adaptation, regardless of the worker's actual transport.
+				mode = responsesWebsocketUpstreamModeRuntime
+			} else if websocket {
 				mode = responsesWebsocketUpstreamModeWS
 			}
 			attemptedUpstreamMode.Store(mode)
-			codexDuplexStream.Store(websocket && duplexInput != nil)
+			codexDuplexStream.Store(mode == responsesWebsocketUpstreamModeWS && duplexInput != nil)
 		})
 		cliCtx = handlers.WithSelectedAuthIDCallback(cliCtx, func(authID string) {
 			preserveNativeOutput.Store(false)
 			codexDuplexStream.Store(false)
+			runtimeAuthSelected.Store(false)
 			authID = strings.TrimSpace(authID)
 			if authID == "" || h == nil || h.AuthManager == nil {
 				return
@@ -746,6 +757,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				return
 			}
 			mode := upstreamModeForAuth(selectedAuth)
+			runtimeAuthSelected.Store(mode == responsesWebsocketUpstreamModeRuntime)
 			attemptedUpstreamMode.Store(mode)
 			codexDuplexStream.Store(duplexInput != nil && mode == responsesWebsocketUpstreamModeWS && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 			preserveNativeOutput.Store(nativeRequest && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
@@ -822,6 +834,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		toolCacheTurn.commit()
 		pendingPrewarmID = ""
 		upstreamMode, _ = attemptedUpstreamMode.Load().(string)
+		if upstreamMode == responsesWebsocketUpstreamModeRuntime {
+			rememberPinnedAuth(lastAttemptedAuthID, modelName)
+		}
 		if upstreamMode == responsesWebsocketUpstreamModeWS && !forceBridge {
 			upstreamWebsocketAuthID = lastAttemptedAuthID
 			if lastAttemptedAuthID != "" {
@@ -834,7 +849,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			lastResponseID = ""
 			lastResponsePendingToolCallIDs = nil
 		} else {
-			if forceBridge {
+			if forceBridge && upstreamMode != responsesWebsocketUpstreamModeRuntime {
 				// Full history remains authoritative even when this request used WS.
 				upstreamMode = responsesWebsocketUpstreamModeHTTP
 			}
@@ -881,7 +896,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			}
 			lastResponseID = strings.TrimSpace(completedResponseID)
 			lastResponsePendingToolCallIDs = append([]string(nil), completedPendingToolCallIDs...)
-			if forceBridge && len(lastRequest)+len(lastResponseOutput) > 8<<20 {
+			if forceBridge && upstreamMode != responsesWebsocketUpstreamModeRuntime && len(lastRequest)+len(lastResponseOutput) > 8<<20 {
 				lastRequest = nil
 				lastResponseOutput = nil
 				lastResponseID = ""

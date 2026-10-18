@@ -53,24 +53,26 @@ func TestCodexRuntimeHandshakeFailureRealWorker(t *testing.T) {
 	}
 }
 
+type nativeRuntimeExchange struct {
+	path      string
+	body      []byte
+	headers   http.Header
+	websocket bool
+	node      string
+}
+
 func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	binary := os.Getenv("CODEX_RUNTIME_TEST_BINARY")
 	if binary == "" {
 		t.Skip("set CODEX_RUNTIME_TEST_BINARY to the native-model-runtime codex-app-server")
 	}
 	home := t.TempDir()
-	type exchange struct {
-		path      string
-		body      []byte
-		headers   http.Header
-		websocket bool
-		node      string
-	}
-	requests := make(chan exchange, 32)
+	requests := make(chan nativeRuntimeExchange, 32)
 	cancelled := make(chan struct{}, 4)
 	var workerCalls, cpaCalls, websocketAttempts atomic.Int32
 	var omitWebsocketCookie atomic.Bool
 	var cpaRetryCalls atomic.Int32
+	var continuationResponses atomic.Int32
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = forceWebsocketRoundTripper(func(*http.Request) (*http.Response, error) {
 		cpaCalls.Add(1)
@@ -94,6 +96,13 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	}
 	responseEvents := func(body []byte) ([][]byte, bool) {
 		events := nativeRuntimeResponseEvents(t, home, body)
+		if bytes.Contains(body, []byte("continuation-fixture")) || bytes.Contains(body, []byte("native-continuation-step-")) {
+			sequence := continuationResponses.Add(1)
+			for i, event := range events {
+				event = bytes.ReplaceAll(event, []byte("resp_native"), []byte(fmt.Sprintf("resp_continuation_%d", sequence)))
+				events[i] = bytes.ReplaceAll(event, []byte("msg_native"), []byte(fmt.Sprintf("msg_continuation_%d", sequence)))
+			}
+		}
 		if bytes.Contains(body, []byte("routing-ticket-probe")) {
 			metadata, _ := json.Marshal(map[string]any{"type": "codex.response.metadata", "headers": map[string]string{"x-codex-turn-state": strings.Repeat("T", 780)}})
 			events = append([][]byte{metadata}, events...)
@@ -145,7 +154,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					return
 				}
 				workerCalls.Add(1)
-				requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true, node: node}
+				requests <- nativeRuntimeExchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true, node: node}
 				if bytes.Contains(body, []byte("fail-before-output")) || bytes.Contains(body, []byte("CPA-owned-retry")) && cpaRetryCalls.Add(1) == 1 {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":503,"error":{"message":"controlled native pre-output failure","type":"server_error","code":"server_error"}}`))
 					return
@@ -195,7 +204,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			}
 		}
 		workerCalls.Add(1)
-		requests <- exchange{path: r.URL.Path, body: body, headers: r.Header.Clone()}
+		requests <- nativeRuntimeExchange{path: r.URL.Path, body: body, headers: r.Header.Clone()}
 		if r.Header.Get("Authorization") != "Bearer synthetic-worker-token" {
 			t.Error("worker did not use its shared credential")
 		}
@@ -328,14 +337,14 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			}
 		}
 	}
-	readExchange := func(t *testing.T) exchange {
+	readExchange := func(t *testing.T) nativeRuntimeExchange {
 		t.Helper()
 		select {
 		case request := <-requests:
 			return request
 		case <-time.After(15 * time.Second):
 			t.Fatal("native worker did not issue an upstream model request")
-			return exchange{}
+			return nativeRuntimeExchange{}
 		}
 	}
 	manager := coreauth.NewManager(nil, nil, nil)
@@ -456,6 +465,23 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			readExchange(t)
 			readExchange(t)
 		})
+	}
+	for _, force := range []bool{false, true} {
+		for _, steering := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native_continuation/force=%t/steering=%t", force, steering), func(t *testing.T) {
+				cfg.CodexForceWebsocket, cfg.CodexResponseSteering = force, steering
+				defer func() { cfg.CodexForceWebsocket, cfg.CodexResponseSteering = false, false }()
+				beforeCalls, beforeConnections := workerCalls.Load(), websocketAttempts.Load()
+				testNativeRuntimeContinuation(t, responsesHandler, nativeTransport, readExchange)
+				wantConnections := int32(0)
+				if nativeTransport == "websocket" {
+					wantConnections = 1
+				}
+				if workerCalls.Load()-beforeCalls != 7 || websocketAttempts.Load()-beforeConnections != wantConnections || cpaCalls.Load() != 0 {
+					t.Fatalf("continuation egress: worker=%d sockets=%d CPA=%d", workerCalls.Load()-beforeCalls, websocketAttempts.Load()-beforeConnections, cpaCalls.Load())
+				}
+			})
+		}
 	}
 	if nativeTransport == "websocket" {
 		t.Run("connection_node_reaches_each_request_log", func(t *testing.T) {

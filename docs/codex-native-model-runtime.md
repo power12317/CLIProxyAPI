@@ -24,6 +24,29 @@ namespaces, calls, and subsequent caller-provided results do not register a
 server tool executor. A response containing only tool calls can complete a
 model invocation. It does not start an Agent tool loop.
 
+## Client continuations and native connection ownership
+
+The downstream Responses WebSocket and the worker's upstream WebSocket are
+separate connections. An upstream diagnostic reporting `websocket` does not
+give CPA ownership of the native socket or turn its handler into a duplex
+passthrough. CPA retains the successful input and model output, binds the
+continuation to its selected credential, and materializes a client's
+`previous_response_id` plus delta into the next business request. A new root
+replaces that history; a compacted root replaces the old context window.
+Runtime history does not use the direct force-WebSocket bridge's replay cap.
+
+The worker converts that history to native input types and lets the native
+model session decide which wire request is valid. A compatible prefix can use
+`previous_response_id` and only new input on the existing upstream socket,
+including across turns. Changed instructions, tools, or history may require a
+full native request. Compaction changes the native window without introducing
+an Agent summary loop. HTTP uses native request compression where supported;
+compression does not itself turn a full logical request into a delta.
+
+Actual upstream transport, turn-state and gateway diagnostics retain their
+existing meaning. This lifecycle correction introduces no transport setting,
+worker retry policy, alternate sender, or CPA direct-upstream fallback.
+
 ## IPC boundary
 
 The WebSocket RPC endpoint remains unchanged. Protocol version 5 separates
@@ -163,7 +186,10 @@ Both repositories use branch `codex/native-model-runtime` and separate packages:
 Branch workflows build `linux/amd64` and `linux/arm64` and publish a combined
 manifest. Immutable tags use `sha-<full-commit>`. The experimental workflows
 must never publish into the main `cliproxyapi` or `codex-server` packages.
-No release tag is needed to trigger the branch workflows.
+Branch pushes trigger image builds. CPA tags matching `native-runtime-v*` also
+trigger this isolated workflow and publish the same tag in the experimental
+package. Those tags are excluded from the main binary-release workflow and do
+not match the main image workflow's `v*` trigger.
 
 Use both matching experimental images. The branch's `docker-compose.codex.yml`
 defaults to them. After their image workflows have published successfully:
@@ -270,3 +296,48 @@ ChatGPT model acceptance and long-running production load were not tested.
 Linux amd64/arm64 images are built by the two branch workflows; a triggered run
 is not evidence of a published image. Use the immutable image tags for a recorded
 pair once those workflows have completed successfully.
+
+### Continuation validation, 2026-10-19
+
+The regression uses a real master and child worker against a local mock model
+endpoint. The downstream client sends only a parent response ID and new input.
+The previous worker reproduces a second-request failure on the historical
+message's response-only `status` field; the corrected worker completes all rounds.
+
+| Request | Materialized business input | Native WS business input | Native parent |
+| --- | ---: | ---: | --- |
+| Initial request | 1 | 1 | None |
+| Same-turn continuation | 3 | 1 | Previous response |
+| New-turn continuation | 5 | 1 | Previous response |
+| Changed instructions | 7 | 7 | None |
+| Changed tools | 9 | 9 | None |
+| New compacted root | 2 | 2 | None |
+| Compacted-window continuation | 4 | 1 | Previous response |
+
+Each seven-request WS sequence uses one upstream handshake. Native Responses
+Lite instructions/tool declarations are counted separately from business input.
+The corresponding HTTP tests send full logical input with `Content-Encoding:
+zstd`. The prompt-cache key remains stable and the native window advances from
+`:0` to `:1` for compaction. All model network exchanges originate in the worker;
+CPA's model-egress count remains zero.
+
+The final `-race` matrix passed 105 real-worker leaf cases and the independent
+delayed-diagnostics regression (106 total). It includes both native transports,
+forced-WS/steering combinations, images, client tools, compaction, errors,
+cancellation, and live delivery. First events reached local clients in roughly
+7–95 ms while upstream completion remained blocked; three successive deltas
+arrived before their next generation phases were released.
+
+The linked worker used for this validation has SHA256
+`d5541190215d37e16d9be9035539bff16301278abe9630e50565203afa048fb3`.
+Official identity and IPC remain `0.162.1` and v5. The mock services do not prove
+production prompt-cache hit rates or live ChatGPT acceptance.
+
+Complete OpenAI/API handler and helper package race tests, Codex executor race
+regressions, the 9 MiB retained-history regression, and the required server build
+passed. An initial wider executor race run reported
+`TestClaudeExecutorSharedCredentialMetadataMixedAccess` in unchanged Claude auth
+code. Isolated repeated tests and a full executor run with the original handler
+source passed on recheck; the initial failure is not reported as a passing run.
+No Claude code was changed. The branch-image workflow passed Actionlint; the
+existing main-release script's ShellCheck style findings remain outside scope.

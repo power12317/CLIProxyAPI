@@ -45,6 +45,9 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName stri
 }
 
 func (h *OpenAIResponsesAPIHandler) websocketAuthEnabled(auth *coreauth.Auth) bool {
+	if coreauth.IsCodexRuntimeOwnedAuth(auth) {
+		return false
+	}
 	if h != nil && h.Cfg != nil && h.Cfg.CodexBasispoints && auth != nil && strings.EqualFold(auth.Provider, "codex") {
 		return false
 	}
