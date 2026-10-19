@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/credentialmeta"
 )
 
 type State struct {
@@ -48,7 +50,7 @@ func Read(path string) (map[string]any, error) {
 }
 
 func Write(path string, metadata map[string]any) error {
-	raw, err := json.MarshalIndent(metadata, "", "  ")
+	raw, err := json.MarshalIndent(credentialmeta.WithoutTurnTickets(metadata), "", "  ")
 	if err != nil {
 		return err
 	}

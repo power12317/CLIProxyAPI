@@ -1,8 +1,8 @@
 package cliproxy
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -63,16 +63,19 @@ func newTicketTestService(t *testing.T, expired bool) (*Service, *ticketTestStor
 		Attributes: map[string]string{coreauth.AttributeAuthKind: coreauth.AuthKindOAuth, coreauth.AttributePath: filepath.Join(dir, "codex-ticket-test-pro.json")},
 		Metadata:   map[string]any{"type": "codex", "access_token": "test-token", "plan_type": "pro", "note": "keep"},
 	}
-	if expired {
-		for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
-			helps.StoreCodexTurnStateTicket(auth, helps.CodexTurnStateTicket{Model: model, State: "gAAAAA" + strings.Repeat("e", 774), CapturedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
-		}
-	}
+	helps.InvalidateCodexTurnStateTickets(auth.ID)
+	t.Cleanup(func() { helps.InvalidateCodexTurnStateTickets(auth.ID) })
+
 	registered, errRegister := manager.Register(t.Context(), auth)
 	if errRegister != nil {
 		t.Fatal(errRegister)
 	}
 	ticketTestWait(t, store.saved)
+	if expired {
+		for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+			helps.StoreCodexTurnStateTicket(registered, helps.CodexTurnStateTicket{Model: model, State: "gAAAAA" + strings.Repeat("e", 774), CapturedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Hour)})
+		}
+	}
 	service := &Service{coreManager: manager, cfg: &config.Config{Codex: config.CodexConfig{TurnStateTicket: config.CodexTurnStateTicketConfig{Enabled: true, FailClosed: true, ProbeIntervalSeconds: 3600}}}}
 	return service, store, registered
 }
@@ -98,77 +101,62 @@ func TestCodexTicketSequentialProbesPreserveBothModels(t *testing.T) {
 				name = "expired/" + first
 			}
 			t.Run(name, func(t *testing.T) {
-				service, store, auth := newTicketTestService(t, expired)
-				second := "gpt-6-astra"
-				if first == second {
-					second = "gpt-5.6-sol"
-				}
-				service.cfg.Codex.TurnStateTicket.Models = []string{first, second}
-				releases := map[string]chan struct{}{"gpt-6-astra": make(chan struct{}), "gpt-5.6-sol": make(chan struct{})}
-				started := make(chan string, 2)
-				rt := ticketTestTransport(func(req *http.Request) (*http.Response, error) {
-					body, errRead := io.ReadAll(req.Body)
-					if errRead != nil {
-						return nil, errRead
+				synctest.Test(t, func(t *testing.T) {
+					service, store, auth := newTicketTestService(t, expired)
+					second := "gpt-6-astra"
+					if first == second {
+						second = "gpt-5.6-sol"
 					}
-					model := gjson.GetBytes(body, "model").String()
-					started <- model
-					select {
-					case <-releases[model]:
-					case <-req.Context().Done():
-						return nil, req.Context().Err()
-					}
-					return &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {"gAAAAA" + strings.Repeat("n", 774)}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-				})
-				ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))
-				service.startCodexTicketHarvester(ctx)
-				defer service.stopCodexTicketHarvester()
-				if got := ticketTestWait(t, started); got != first {
-					t.Fatalf("first probe = %s, want %s", got, first)
-				}
-				close(releases[first])
-				ticketTestWait(t, store.saved)
-				if got := ticketTestWait(t, started); got != second {
-					t.Fatalf("second probe = %s, want %s", got, second)
-				}
-				close(releases[second])
-				ticketTestWait(t, store.saved)
-				current, _ := service.coreManager.GetByID(auth.ID)
-				assertTicketModelsReady(t, service, current)
-				path := current.Attributes[coreauth.AttributePath]
-				data, errRead := os.ReadFile(path)
-				if errRead != nil {
-					t.Fatal(errRead)
-				}
-				parsed, errParse := synthesizer.SynthesizeAuthFile(&synthesizer.SynthesisContext{AuthDir: filepath.Dir(path), Config: service.cfg, Now: time.Now()}, path, data)
-				if errParse != nil || len(parsed) != 1 {
-					t.Fatalf("reload parse: %v", errParse)
-				}
-				assertTicketModelsReady(t, service, parsed[0])
-				if _, errUpdate := service.coreManager.Update(coreauth.WithSkipPersist(t.Context()), parsed[0]); errUpdate != nil {
-					t.Fatal(errUpdate)
-				}
-				reloaded, _ := service.coreManager.GetByID(auth.ID)
-				assertTicketModelsReady(t, service, reloaded)
-				handler := management.NewHandler(service.cfg, "", service.coreManager)
-				for _, endpoint := range []struct {
-					handle gin.HandlerFunc
-					path   string
-				}{{handler.GetCodexTurnStateTicket, "accounts.0.tickets"}, {handler.ListAuthFiles, "files.0.codex_turn_tickets"}} {
-					recorder := httptest.NewRecorder()
-					ginCtx, _ := gin.CreateTestContext(recorder)
-					ginCtx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-					endpoint.handle(ginCtx)
-					statuses := gjson.GetBytes(recorder.Body.Bytes(), endpoint.path).Array()
-					if recorder.Code != http.StatusOK || len(statuses) != 2 {
-						t.Fatalf("management ticket response status=%d count=%d", recorder.Code, len(statuses))
-					}
-					for _, status := range statuses {
-						if !status.Get("ready").Bool() || status.Get("blocked").Bool() || status.Get("remaining_seconds").Int() < 3500 {
-							t.Errorf("management API returned an unready model: %s", status.Raw)
+					service.cfg.Codex.TurnStateTicket.Models = []string{first, second}
+					releases := map[string]chan struct{}{"gpt-6-astra": make(chan struct{}), "gpt-5.6-sol": make(chan struct{})}
+					started := make(chan string, 2)
+					rt := ticketTestTransport(func(req *http.Request) (*http.Response, error) {
+						body, errRead := io.ReadAll(req.Body)
+						if errRead != nil {
+							return nil, errRead
 						}
+						model := gjson.GetBytes(body, "model").String()
+						started <- model
+						select {
+						case <-releases[model]:
+						case <-req.Context().Done():
+							return nil, req.Context().Err()
+						}
+						return &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {"gAAAAA" + strings.Repeat("n", 774)}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+					})
+					ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))
+					service.startCodexTicketHarvester(ctx)
+					defer service.stopCodexTicketHarvester()
+					if got := ticketTestWait(t, started); got != first {
+						t.Fatalf("first probe = %s, want %s", got, first)
 					}
-				}
+					close(releases[first])
+					synctest.Wait()
+					if got := ticketTestWait(t, started); got != second {
+						t.Fatalf("second probe = %s, want %s", got, second)
+					}
+					close(releases[second])
+					synctest.Wait()
+					current, _ := service.coreManager.GetByID(auth.ID)
+					assertTicketModelsReady(t, service, current)
+					path := current.Attributes[coreauth.AttributePath]
+					data, errRead := os.ReadFile(path)
+					if errRead != nil {
+						t.Fatal(errRead)
+					}
+					parsed, errParse := synthesizer.SynthesizeAuthFile(&synthesizer.SynthesisContext{AuthDir: filepath.Dir(path), Config: service.cfg, Now: time.Now()}, path, data)
+					if errParse != nil || len(parsed) != 1 {
+						t.Fatalf("reload parse: %v", errParse)
+					}
+					if len(store.saved) != 0 || bytes.Contains(data, []byte("codex_turn_ticket:")) {
+						t.Fatal("probe wrote auth JSON")
+					}
+					if _, errUpdate := service.coreManager.Update(coreauth.WithSkipPersist(t.Context()), parsed[0]); errUpdate != nil {
+						t.Fatal(errUpdate)
+					}
+					reloaded, _ := service.coreManager.GetByID(auth.ID)
+					assertTicketModelsReady(t, service, reloaded)
+				})
 			})
 		}
 	}
@@ -234,22 +222,22 @@ func TestCodexTicketNormalResponsesPreserveOtherModelsAndCredentials(t *testing.
 	if current.Metadata["access_token"] != "refreshed-token" || current.Metadata["note"] != "updated-note" {
 		t.Error("ticket update reverted concurrent credential or note changes")
 	}
-	// Response-local auth values must still receive the observed ticket.
+	// Request snapshots share the process-local cache without changing metadata.
 	for _, pair := range []struct {
 		auth  *coreauth.Auth
 		model string
 	}{{first, "gpt-5.6-sol"}, {second, "gpt-6-astra"}} {
-		raw, errMarshal := json.Marshal(pair.auth.Metadata[helps.CodexTurnStateTicketMetadataKey(pair.model)])
-		if errMarshal != nil {
-			t.Fatal(errMarshal)
+		headers := make(http.Header)
+		if err := helps.ApplyCodexTurnStateTicket(pair.auth, policy, pair.model, headers); err != nil || headers.Get(helps.CodexTurnStateTicketHeader) != resp.Header.Get(helps.CodexTurnStateTicketHeader) {
+			t.Fatal("memory ticket missing")
 		}
-		if gjson.GetBytes(raw, "state").String() != resp.Header.Get(helps.CodexTurnStateTicketHeader) {
-			t.Errorf("request-local ticket missing for %s", pair.model)
+		if _, ok := pair.auth.Metadata[helps.CodexTurnStateTicketMetadataKey(pair.model)]; ok {
+			t.Fatal("response mutated credential metadata")
 		}
 	}
 }
 
-func TestCodexTicketAllModelsPersistsReloadsAndReportsStatus(t *testing.T) {
+func TestCodexTicketAllModelsMemorySurvivesReloadAndReportsStatus(t *testing.T) {
 	service, store, auth := newTicketTestService(t, false)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -261,15 +249,13 @@ func TestCodexTicketAllModelsPersistsReloadsAndReportsStatus(t *testing.T) {
 		"gpt-5.6-terra": "gAAAAA" + strings.Repeat("t", 774),
 	}
 	for model, state := range states {
-		// Use the same original snapshot to also exercise per-model merge persistence.
+		// Use the same original snapshot to also exercise independent in-memory model entries.
 		helps.RecordCodexTurnStateTicketOnResponse(auth.Clone(), policy, model, &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {state}}})
-		ticketTestWait(t, store.saved)
 	}
-	// A later response must replace the same model on disk without losing siblings.
+	// A later response must replace the same model in memory without losing siblings.
 	states["gpt-5.6-luna"] = strings.Repeat("n", 780)
 	current, _ := service.coreManager.GetByID(auth.ID)
 	helps.RecordCodexTurnStateTicketOnResponse(current, policy, "gpt-5.6-luna", &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {states["gpt-5.6-luna"]}}})
-	ticketTestWait(t, store.saved)
 	helps.RecordCodexTurnStateTicketOnResponse(current, policy, "gpt-5.6-luna", &http.Response{StatusCode: 200, Header: http.Header{helps.CodexTurnStateTicketHeader: {strings.Repeat("x", 312)}}})
 	path := auth.Attributes[coreauth.AttributePath]
 	data, errRead := os.ReadFile(path)
@@ -280,9 +266,16 @@ func TestCodexTicketAllModelsPersistsReloadsAndReportsStatus(t *testing.T) {
 	if errParse != nil || len(parsed) != 1 {
 		t.Fatalf("reload parse: %v", errParse)
 	}
+	if len(store.saved) != 0 || bytes.Contains(data, []byte("codex_turn_ticket:")) {
+		t.Fatal("normal response wrote auth JSON")
+	}
+	reloaded, err := service.coreManager.Update(coreauth.WithSkipPersist(t.Context()), parsed[0])
+	if err != nil {
+		t.Fatal(err)
+	}
 	for model, state := range states {
 		headers := make(http.Header)
-		if errApply := helps.ApplyCodexTurnStateTicket(parsed[0], policy, model, headers); errApply != nil || headers.Get(helps.CodexTurnStateTicketHeader) != state {
+		if errApply := helps.ApplyCodexTurnStateTicket(reloaded, policy, model, headers); errApply != nil || headers.Get(helps.CodexTurnStateTicketHeader) != state {
 			t.Fatalf("reloaded %s ticket was not independently reused: %v", model, errApply)
 		}
 	}

@@ -555,6 +555,7 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 	s.coreManager.Remove(ctx, id)
 	helps.InvalidateCodexCookieJar(id)
 	helps.InvalidateCodexTurnStates(id)
+	helps.InvalidateCodexTurnStateTickets(id)
 	GlobalModelRegistry().UnregisterClient(id)
 	s.cancelStaleAntigravityProbes(id)
 	if strings.EqualFold(provider, "codex") {

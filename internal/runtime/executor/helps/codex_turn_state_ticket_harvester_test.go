@@ -27,19 +27,22 @@ func newTicketHarvesterTest(t *testing.T, cfg *config.Config, auths []*cliproxya
 	t.Helper()
 	manager := cliproxyauth.NewManager(nil, nil, nil)
 	for _, auth := range auths {
+		var seeded []CodexTurnStateTicket
+		for _, model := range codexTurnStateTicketModels(auth) {
+			seeded = append(seeded, *codexTurnStateTicketForAuth(auth, model))
+		}
 		if _, errRegister := manager.Register(t.Context(), auth); errRegister != nil {
 			t.Fatal(errRegister)
 		}
-		t.Cleanup(func() { InvalidateCodexCookieJar(auth.ID) })
+		for _, ticket := range seeded {
+			StoreCodexTurnStateTicket(auth, ticket)
+		}
+		t.Cleanup(func() { InvalidateCodexCookieJar(auth.ID); InvalidateCodexTurnStateTickets(auth.ID) })
 	}
 	current := &atomic.Pointer[config.Config]{}
 	current.Store(cfg)
 	h := NewCodexTurnStateTicketHarvester(CodexTurnStateTicketHarvesterOptions{
 		Config: current.Load, List: manager.List,
-		Update: func(ctx context.Context, base, updated *cliproxyauth.Auth) error {
-			_, errUpdate := manager.UpdatePreparedAuth(ctx, base, updated)
-			return errUpdate
-		},
 	})
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(rt))
 	h.Start(ctx)
@@ -184,7 +187,6 @@ func TestCodexTicketHarvester312DoesNotPauseOtherModelsOrCredentials(t *testing.
 					ticketProbeTestAuth("b-windows", "same@example.com", "account-1"),
 				}
 				h, manager, _ := newTicketHarvesterTest(t, cfg, auths, rt)
-				SetCodexTurnStateTicketRecorder(h.Record)
 				synctest.Wait()
 				want := []string{"a-mac/gpt-6-astra", "a-mac/gpt-5.6-sol", "b-windows/gpt-6-astra", "b-windows/gpt-5.6-sol"}
 				if !reflect.DeepEqual(calls.snapshot(), want) {
@@ -228,7 +230,6 @@ func TestCodexTicketHarvesterRefreshFollowsLatestResponseExpiry(t *testing.T) {
 			return ticketProbeTestResponse(req, 200, 780), nil
 		})
 		h, manager, _ := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{ticketProbeTestAuth("mac", "same@example.com", "account")}, rt)
-		SetCodexTurnStateTicketRecorder(h.Record)
 		synctest.Wait()
 		started := time.Now()
 		if len(calls.snapshot()) != 2 {
@@ -243,7 +244,7 @@ func TestCodexTicketHarvesterRefreshFollowsLatestResponseExpiry(t *testing.T) {
 		resp := ticketProbeTestResponse(nil, 200, 780)
 		resp.Header.Set(CodexTurnStateTicketHeader, strings.Repeat("n", 780))
 		RecordCodexTurnStateTicketOnResponse(auth, cfg.Codex.EffectiveTurnStateTicket(), "gpt-6-astra", resp)
-		h.ConfigChanged() // Simulate the auth-save reload callback.
+		h.ConfigChanged() // An unrelated config reload must not trigger another probe.
 		synctest.Wait()
 		if len(calls.snapshot()) != 2 {
 			t.Fatal("new response ticket immediately triggered a probe")
@@ -385,11 +386,10 @@ func TestCodexTicketCacheAllModelsNeverExpandsProbes(t *testing.T) {
 			calls.Add(1)
 			return ticketProbeTestResponse(req, 200, 780), nil
 		})
-		h, manager, _ := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{
+		_, manager, _ := newTicketHarvesterTest(t, cfg, []*cliproxyauth.Auth{
 			ticketProbeTestAuth("mac", "same@example.com", "account"),
 			ticketProbeTestAuth("windows", "same@example.com", "account"),
 		}, rt)
-		SetCodexTurnStateTicketRecorder(h.Record)
 		synctest.Wait()
 		if calls.Load() != 4 {
 			t.Fatalf("startup probes = %d, want exactly 4", calls.Load())

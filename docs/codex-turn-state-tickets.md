@@ -35,9 +35,11 @@ other credentials sharing an account ID or email. The existing HTTP error handli
 remains independent of ticket retention.
 
 Stored tickets override the request state across turn IDs, separately for each
-credential and model. Mac and Windows credentials never share tickets. Persistence
-merges only the changed model into the latest credential, preserving sibling tickets
-and concurrent credential edits.
+credential and model. Mac and Windows credentials never share tickets. Tickets live
+only in process memory, separate from Auth.Metadata and credential persistence.
+Normal credential reloads preserve the cache; process restarts acquire new tickets.
+Startup removes legacy codex_turn_ticket:* fields from auth files once, preserving
+all other credential fields. Files without legacy tickets are not rewritten.
 
 ## Startup and timed renewal
 
