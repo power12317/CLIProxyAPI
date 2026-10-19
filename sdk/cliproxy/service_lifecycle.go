@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/credentialmeta"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -74,6 +75,11 @@ func (s *Service) Run(ctx context.Context) error {
 	if !homeEnabled {
 		if errEnsureAuthDir := s.ensureAuthDir(); errEnsureAuthDir != nil {
 			return errEnsureAuthDir
+		}
+		if cleaned, errClean := credentialmeta.CleanLegacyTurnTicketFiles(s.cfg.AuthDir); errClean != nil {
+			return fmt.Errorf("remove legacy turn-state tickets from auth files: %w", errClean)
+		} else if cleaned > 0 {
+			log.Infof("removed legacy turn-state tickets from %d auth files; tickets now remain in memory", cleaned)
 		}
 		if errRuntime := codexruntime.ApplyConfig(ctx, s.cfg); errRuntime != nil {
 			log.WithError(errRuntime).Warn("could not apply shared Codex credential state at startup")

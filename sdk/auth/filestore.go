@@ -120,6 +120,7 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 			} else {
 				shared = true
 				auth.Metadata = codexshared.MergeMetadata(current, auth.Metadata)
+				cliproxyauth.NormalizeCredentialMetadata(auth.Metadata)
 			}
 		}
 	}

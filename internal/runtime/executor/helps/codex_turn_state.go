@@ -484,6 +484,7 @@ func (c *codexTurnStateCache) invalidate(authID string) {
 }
 
 func (c *codexTurnStateCache) prune() {
+	pruneCodexTurnStateTickets(c.now())
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()

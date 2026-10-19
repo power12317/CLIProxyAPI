@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/credentialmeta"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -57,5 +58,6 @@ func MergeMetadata(source any, metadata map[string]any) (map[string]any, error) 
 		}
 	}
 
+	credentialmeta.StripTurnTickets(data)
 	return data, nil
 }
