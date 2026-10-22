@@ -18,8 +18,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Compare the actual HTTP boundary with the actual bridge boundary, not a second
-// copy of the request-building implementation.
+// Compare shared preprocessing at the HTTP and bridge boundaries. Native input
+// keeps controls and declarations that a direct HTTP wire builder may consume.
 func TestCodexRuntimeUsesFullCPARequestPipeline(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, withPayload := range []bool{false, true} {
@@ -104,7 +104,12 @@ func TestCodexRuntimeUsesFullCPARequestPipeline(t *testing.T) {
 				if request.SessionID == "" {
 					t.Fatal("missing routing scope")
 				}
-				equalRuntimeJSON(t, directBody, request.Request)
+				for _, field := range []string{"input", "model", "client_metadata", "prompt_cache_key"} {
+					equalRuntimeJSON(t, []byte(gjson.GetBytes(directBody, field).Raw), []byte(gjson.GetBytes(request.Request, field).Raw))
+				}
+				if gjson.GetBytes(request.Request, "generate").Type != gjson.False || gjson.GetBytes(request.Request, "previous_response_id").String() != "remove-me" || gjson.GetBytes(request.Request, "prompt_cache_retention").String() != "24h" {
+					t.Fatal("native controls were erased before adaptation")
+				}
 				if strings.Contains(string(request.Request), "Asia/Shanghai") || !strings.Contains(string(request.Request), "Asia/Singapore") {
 					t.Fatalf("CPA timezone processing was skipped: %s", request.Request)
 				}

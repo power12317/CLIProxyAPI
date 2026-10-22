@@ -147,7 +147,7 @@ func TestCodexRuntimeCPARequestAndResponseFidelity(t *testing.T) {
 	if r.RequestID != "native-request-correlation" || r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || gjson.GetBytes(r.Request, "prompt_cache_key").String() != "untrusted-session" || !gjson.GetBytes(r.Request, "stream").Bool() {
 		t.Fatal("incorrect identity/normalization", r)
 	}
-	if gjson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || gjson.GetBytes(r.Request, "tools.1.type").String() != "image_generation" || !gjson.GetBytes(r.Request, "parallel_tool_calls").Bool() || gjson.GetBytes(r.Request, "client_metadata.extension").String() != "client-value" {
+	if gjson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || gjson.GetBytes(r.Request, "tools.#").Int() != 1 || gjson.GetBytes(r.Request, "parallel_tool_calls").Type != gjson.False || gjson.GetBytes(r.Request, "client_metadata.extension").String() != "client-value" {
 		t.Fatalf("normal CPA tool preparation or caller metadata was lost: %s", r.Request)
 	}
 	encoded, _ := json.Marshal(r)
@@ -241,11 +241,11 @@ func TestCodexRuntimeCrossProtocolToolCalls(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeUsesCPACleanupBeforeInference(t *testing.T) {
+func TestCodexRuntimeRetainsControlsForNativeAdaptation(t *testing.T) {
 	w, a := runtimeTestMaster(t, "cleanup", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 		for _, field := range []string{"previous_response_id", "generate", "prompt_cache_retention", "safety_identifier"} {
-			if gjson.GetBytes(req.Request, field).Exists() {
-				t.Errorf("CPA cleanup did not remove %s", field)
+			if !gjson.GetBytes(req.Request, field).Exists() {
+				t.Errorf("CPA erased an unconsumed business control: %s", field)
 			}
 		}
 		runtimeTestAccept(c, m, req)

@@ -51,7 +51,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	originalPayload := originalPayloadSource
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
-	originalTranslated, body, updatesChanged := translateCodexRequestPairWithUpdateIntent(from, to, baseModel, originalPayload, req.Payload, true, opts.Headers, isCompat)
+	originalTranslated, body, updatesChanged := e.translateRequestPair(from, to, baseModel, originalPayload, req.Payload, true, opts.Headers, isCompat)
 
 	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
 	if err != nil {
@@ -59,31 +59,40 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 
 	requestPath := helps.PayloadRequestPath(opts)
-	body = helps.NormalizeCodexServiceTier(body)
+	body = e.normalizeServiceTier(body)
 	body = helps.ApplyCodexFastMode(body, e.cfg)
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts))
-	body, _ = sjson.DeleteBytes(body, "previous_response_id")
-	body, _ = sjson.DeleteBytes(body, "generate")
-	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
-	body, _ = sjson.DeleteBytes(body, "safety_identifier")
-	reasoningSummaryDelivery := gjson.GetBytes(body, "stream_options.reasoning_summary_delivery")
-	body, _ = sjson.DeleteBytes(body, "stream_options")
-	if reasoningSummaryDelivery.Exists() {
-		body, _ = sjson.SetBytes(body, "stream_options.reasoning_summary_delivery", reasoningSummaryDelivery.Value())
+	if e.runtime == nil {
+		body, _ = sjson.DeleteBytes(body, "previous_response_id")
+		body, _ = sjson.DeleteBytes(body, "generate")
+		body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
+		body, _ = sjson.DeleteBytes(body, "safety_identifier")
+		reasoningSummaryDelivery := gjson.GetBytes(body, "stream_options.reasoning_summary_delivery")
+		body, _ = sjson.DeleteBytes(body, "stream_options")
+		if reasoningSummaryDelivery.Exists() {
+			body, _ = sjson.SetBytes(body, "stream_options.reasoning_summary_delivery", reasoningSummaryDelivery.Value())
+		}
 	}
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
+	if e.runtime != nil {
+		body = helps.SetBoolIfDifferent(body, "stream", true)
+	}
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
-	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
-		body = ensureCodexResponsesLiteMirror(body, toolHeaders)
+	if e.runtime != nil {
+		body = helps.ApplyCodexRuntimeImagePolicy(body, codexShouldStripImageGeneration(e.cfg, requestPath))
+	} else {
+		if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
+			body = ensureCodexResponsesLiteMirror(body, toolHeaders)
+		}
+		body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
+		if err != nil {
+			return nil, err
+		}
+		body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex executor", body, isCompat)
+		body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
+		body = helps.NormalizeCodexToolSchemas(body)
 	}
-	body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
-	if err != nil {
-		return nil, err
-	}
-	body = sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx, "codex executor", body, isCompat)
-	body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
-	body = helps.NormalizeCodexToolSchemas(body)
 	body, optimizeMultiAgentV2 := helps.OptimizeCodexMultiAgentV2RequestForAuth(ctx, opts.Headers, body, e.cfg, auth, isCompat)
 	body, replayScope, errReplay := applyCodexReasoningReplayCacheRequired(ctx, from, req, opts, body)
 	if errReplay != nil {

@@ -56,9 +56,6 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 	default:
 		return runtimeError(400, "Unsupported Codex runtime response protocol")
 	}
-	if coreexecutor.RequiredUpstreamWebsocket(ctx) {
-		return runtimeError(400, "Persistent upstream WebSocket steering is not supported by the Codex runtime")
-	}
 	if opts.ProxyURL != "" {
 		return runtimeError(400, "Configure the Codex runtime network instead of per-request proxy overrides")
 	}
@@ -73,6 +70,11 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 	}
 	if !json.Valid(req.Payload) || !gjson.ParseBytes(req.Payload).IsObject() {
 		return runtimeError(400, "Request must be a JSON object")
+	}
+	if opts.SourceFormat == sdktranslator.FormatOpenAI {
+		if err := helps.ValidateCodexRuntimeChatCalls(req.Payload); err != nil {
+			return runtimeError(400, err.Error())
+		}
 	}
 	return nil
 }

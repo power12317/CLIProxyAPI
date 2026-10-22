@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
+	log "github.com/sirupsen/logrus"
 )
 
 const ProtocolVersion = 5
@@ -218,7 +219,7 @@ func (c *Client) call(method string, params, out any) error {
 	if err := c.write(map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		return err
 	}
-	for skipped := 0; skipped < 128; {
+	for {
 		m, err := c.read()
 		if err != nil {
 			return err
@@ -228,7 +229,6 @@ func (c *Client) call(method string, params, out any) error {
 				c.pending = append(c.pending, m)
 				continue
 			}
-			skipped++
 			continue
 		}
 		var got int
@@ -250,7 +250,6 @@ func (c *Client) call(method string, params, out any) error {
 		}
 		return nil
 	}
-	return fail(502, "Excessive unrelated Codex runtime notifications")
 }
 
 func (c *Client) Start(req Request) error {
@@ -298,7 +297,7 @@ func (c *Client) Next() (Frame, error) {
 	if c.requestID == "" {
 		return Frame{}, fail(409, "Codex runtime inference has not started")
 	}
-	for skipped := 0; skipped < 128; {
+	for {
 		if err := c.ctx.Err(); err != nil && !c.finalReceived.Load() {
 			return Frame{}, err
 		}
@@ -312,8 +311,8 @@ func (c *Client) Next() (Frame, error) {
 				return Frame{}, err
 			}
 		}
-		if !strings.HasPrefix(m.Method, "cpa/inference/") {
-			skipped++
+		if m.Method != "cpa/inference/event" && m.Method != "cpa/inference/completed" && m.Method != "cpa/inference/error" {
+			// Optional notifications do not constitute model output or termination.
 			continue
 		}
 		var p struct {
@@ -347,11 +346,8 @@ func (c *Client) Next() (Frame, error) {
 				}
 			}
 			return Frame{}, c.remoteError(status, p.Message, body, p.Headers, p.NativeError)
-		default:
-			return Frame{}, fail(502, "Unknown Codex runtime inference notification")
 		}
 	}
-	return Frame{}, fail(502, "Excessive unrelated Codex runtime notifications")
 }
 
 func (c *Client) observeUpstream(raw json.RawMessage) error {
@@ -409,8 +405,7 @@ func (c *Client) startReceiving(startID int) {
 			}
 			if m.Method == "cpa/inference/upstream" {
 				if err := c.observeUpstream(m.Params); err != nil {
-					c.inbox.push(incoming{err: err})
-					return
+					log.WithField("request_id", c.requestID).Warnf("Codex runtime diagnostic ignored: %v", err)
 				}
 				continue
 			}
@@ -419,8 +414,8 @@ func (c *Client) startReceiving(startID int) {
 					RequestID string `json:"requestId"`
 				}
 				if json.Unmarshal(m.Params, &p) != nil || p.RequestID != c.requestID {
-					c.inbox.push(incoming{err: fail(502, "Codex runtime diagnostics request identity mismatch")})
-					return
+					log.WithField("request_id", c.requestID).Warn("Codex runtime diagnostic completion identity mismatch")
+					continue
 				}
 				diagnosticsFinished = true
 			} else {
@@ -478,7 +473,7 @@ func SafeHeaders(headers http.Header) http.Header {
 	out := make(http.Header)
 	for k, v := range headers {
 		lower := strings.ToLower(k)
-		if lower == "content-type" || lower == "x-request-id" || lower == "openai-model" || lower == "retry-after" || strings.HasPrefix(lower, "x-ratelimit-") {
+		if lower == "content-type" || lower == "x-request-id" || lower == "openai-model" || lower == "retry-after" || strings.HasPrefix(lower, "x-ratelimit-") || strings.HasPrefix(lower, "x-codex-safety-buffering-") {
 			out[http.CanonicalHeaderKey(k)] = append([]string(nil), v...)
 		}
 	}

@@ -85,6 +85,8 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	t.Cleanup(liveWebsocket.close)
 	liveForcedWebsocket := newNativeRuntimeStreamProbe()
 	t.Cleanup(liveForcedWebsocket.close)
+	liveImage := newNativeRuntimeImageProbe()
+	t.Cleanup(liveImage.close)
 	streamProbe := func(body []byte) *nativeRuntimeStreamProbe {
 		if bytes.Contains(body, []byte("live-tool-stream-forced-ws")) {
 			return liveForcedWebsocket
@@ -254,6 +256,10 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				w.(http.Flusher).Flush()
 				<-r.Context().Done()
 			}
+			return
+		}
+		if gjson.GetBytes(body, "stream").Bool() {
+			liveImage.serve(r.Context(), w, r.URL.Path, prompt == "live-image-stream")
 			return
 		}
 		_, _ = io.WriteString(w, `{"created":1,"data":[{"b64_json":"real-worker-image","generation_id":"gen_native"}]}`)
@@ -483,6 +489,17 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			})
 		}
 	}
+	t.Run("nested_HTTP_session_survives_business_changes", func(t *testing.T) {
+		beforeCalls, beforeConnections := workerCalls.Load(), websocketAttempts.Load()
+		testNativeRuntimeNestedHTTPIdentity(t, responsesHandler, nativeTransport, readExchange)
+		wantConnections := int32(0)
+		if nativeTransport == "websocket" {
+			wantConnections = 1
+		}
+		if workerCalls.Load()-beforeCalls != 4 || websocketAttempts.Load()-beforeConnections != wantConnections || cpaCalls.Load() != 0 {
+			t.Fatalf("nested HTTP identity: worker=%d sockets=%d CPA=%d", workerCalls.Load()-beforeCalls, websocketAttempts.Load()-beforeConnections, cpaCalls.Load())
+		}
+	})
 	if nativeTransport == "websocket" {
 		t.Run("connection_node_reaches_each_request_log", func(t *testing.T) {
 			defer omitWebsocketCookie.Store(false)
@@ -587,33 +604,50 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					if received.path != path || gjson.GetBytes(received.body, "prompt").String() != "configured-native-prompt" || gjson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || gjson.GetBytes(received.body, "quality").Exists() {
 						t.Fatalf("native image DTO lost supported business input: path=%s body=%s", received.path, received.body)
 					}
-					if gjson.GetBytes(received.body, "stream").Exists() {
-						t.Fatal("downstream streaming mode changed the native Images DTO")
+					if (!stream && gjson.GetBytes(received.body, "stream").Type != gjson.False) || gjson.GetBytes(received.body, "stream").Bool() != stream || gjson.GetBytes(received.body, "partial_images").Int() != 2 || gjson.GetBytes(received.body, "output_format").String() != "jpeg" || gjson.GetBytes(received.body, "output_compression").Int() != 80 {
+						t.Fatalf("native Images options were lost: %s", received.body)
 					}
 					if path == codexImagesEditsPath && (gjson.GetBytes(received.body, "images.#").Int() != 1 || !strings.HasSuffix(gjson.GetBytes(received.body, "images.0.image_url").String(), "AQID")) {
 						t.Fatal("native image edit lost its input image", string(received.body))
 					}
-					if stream && !strings.Contains(rec.Body.String(), "completed") {
-						t.Fatal("native final image was not adapted to the client event stream")
+					if path == codexImagesEditsPath && !strings.HasSuffix(gjson.GetBytes(received.body, "mask.image_url").String(), "BAUG") {
+						t.Fatalf("native image edit lost its mask: %s", received.body)
+					}
+					if stream && (!strings.Contains(rec.Body.String(), "completed") || !strings.Contains(rec.Body.String(), "native-image-partial-1") || !strings.Contains(rec.Body.String(), "native-image-partial-2")) {
+						t.Fatalf("native image events were not delivered: %s", rec.Body.String())
 					}
 					t.Logf("CPA model requests=0; native worker requests=1; operation=%s", received.path)
 				})
 			}
 		}
 	}
+	t.Run("compatible_business_inputs", func(t *testing.T) {
+		before := workerCalls.Load()
+		testNativeRuntimeCompatibleInputs(t, cfg, auth, home, nativeTransport, readExchange)
+		want := int32(7)
+		if nativeTransport == "websocket" {
+			want++
+		}
+		if workerCalls.Load()-before != want || cpaCalls.Load() != 0 {
+			t.Fatalf("compatibility egress: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+		}
+	})
+	for _, path := range []string{codexImagesGenerationsPath, codexImagesEditsPath} {
+		t.Run("live_image_events/"+path, func(t *testing.T) {
+			before := workerCalls.Load()
+			testNativeRuntimeLiveImage(t, router, liveImage, path)
+			if workerCalls.Load()-before != 1 || cpaCalls.Load() != 0 {
+				t.Fatalf("unexpected image model egress: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+			}
+			readExchange(t)
+		})
+	}
 	t.Run("unsupported_image_inputs_are_explicit", func(t *testing.T) {
-		for _, field := range []string{"mask", "partial_images", "output_format", "extension"} {
+		for _, field := range []string{"extension"} {
 			for _, stream := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/stream=%t", field, stream), func(t *testing.T) {
 					payload, _ := nativeRuntimeImagePayload(t, codexImagesEditsPath, stream, false)
 					var value any = "unsupported"
-					if field == "mask" {
-						value = map[string]string{"image_url": "data:image/png;base64,BAUG"}
-					} else if field == "partial_images" {
-						value = 1
-					} else if field == "output_format" {
-						value = "jpeg"
-					}
 					payload, _ = sjson.SetBytes(payload, field, value)
 					before := workerCalls.Load()
 					_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesEditsPath, stream), stream)
@@ -872,9 +906,10 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 func nativeRuntimeImagePayload(t *testing.T, path string, stream, form bool) ([]byte, string) {
 	t.Helper()
 	if !form {
-		payload := map[string]any{"model": "gpt-image-1.5", "prompt": "draw", "quality": "low", "stream": stream}
+		payload := map[string]any{"model": "gpt-image-1.5", "prompt": "draw", "quality": "low", "stream": stream, "partial_images": 2, "output_format": "jpeg", "output_compression": 80}
 		if path == codexImagesEditsPath {
 			payload["images"] = []map[string]string{{"image_url": "data:image/png;base64,AQID"}}
+			payload["mask"] = map[string]string{"image_url": "data:image/png;base64,BAUG"}
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -884,7 +919,7 @@ func nativeRuntimeImagePayload(t *testing.T, path string, stream, form bool) ([]
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	for key, value := range map[string]string{"model": "gpt-image-1.5", "prompt": "draw", "quality": "low", "stream": strconv.FormatBool(stream)} {
+	for key, value := range map[string]string{"model": "gpt-image-1.5", "prompt": "draw", "quality": "low", "stream": strconv.FormatBool(stream), "partial_images": "2", "output_format": "jpeg", "output_compression": "80"} {
 		if err := writer.WriteField(key, value); err != nil {
 			t.Fatal(err)
 		}
@@ -896,6 +931,13 @@ func nativeRuntimeImagePayload(t *testing.T, path string, stream, form bool) ([]
 	if _, err = part.Write([]byte{1, 2, 3}); err != nil {
 		t.Fatal(err)
 	}
+	mask, err := writer.CreateFormFile("mask", "mask.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = mask.Write([]byte{4, 5, 6}); err != nil {
+		t.Fatal(err)
+	}
 	if err = writer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -905,6 +947,9 @@ func nativeRuntimeImagePayload(t *testing.T, path string, stream, form bool) ([]
 func nativeRuntimeResponseEvents(t *testing.T, home string, body []byte) [][]byte {
 	t.Helper()
 	output := `[{"type":"message","id":"msg_native","role":"assistant","status":"completed","content":[{"type":"output_text","text":"native result"}]}]`
+	if gjson.GetBytes(body, "generate").Type == gjson.False {
+		output = `[]`
+	}
 	if bytes.Contains(body, []byte("compaction_trigger")) {
 		output = `[{"type":"compaction","encrypted_content":"compact-result"}]`
 	}
@@ -922,6 +967,14 @@ func nativeRuntimeResponseEvents(t *testing.T, home string, body []byte) [][]byt
 			t.Error(errMarshal)
 			return nil
 		}
+		output = string(calls)
+	}
+	if bytes.Contains(body, []byte("third-party-tool-fixture")) {
+		marker := filepath.Join(home, "must-not-be-created")
+		calls, _ := json.Marshal([]map[string]any{
+			{"type": "function_call", "id": "fc_inventory", "call_id": "call_inventory", "name": "query_inventory", "arguments": `{"path":"home"}`},
+			{"type": "custom_tool_call", "id": "ctc_source", "call_id": "call_source", "name": "run_source", "input": "touch " + marker},
+		})
 		output = string(calls)
 	}
 	events := []map[string]any{

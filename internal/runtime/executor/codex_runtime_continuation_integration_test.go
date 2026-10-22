@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,9 +13,82 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	openaihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	"github.com/tidwall/gjson"
 )
+
+func testNativeRuntimeNestedHTTPIdentity(t *testing.T, handler *openaihandlers.OpenAIResponsesAPIHandler, transport string, readExchange func(*testing.T) nativeRuntimeExchange) {
+	t.Helper()
+	router := gin.New()
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.Set("userApiKey", "nested-metadata-caller")
+		handler.Responses(c)
+	})
+	var history []json.RawMessage
+	cacheKey := ""
+	previous := ""
+	for round := range 4 {
+		item, _ := json.Marshal(map[string]any{"role": "user", "content": fmt.Sprintf("native-continuation-step-http-%d", round)})
+		history = append(history, item)
+		instructions := "nested metadata continuation"
+		if round >= 2 {
+			instructions += " changed"
+		}
+		body := map[string]any{
+			"model": "gpt-6.1-sol", "input": history, "instructions": instructions, "stream": true,
+			"client_metadata": map[string]any{"session_id": t.Name(), "thread_id": t.Name(), "turn_id": fmt.Sprintf("turn-%d", round)},
+		}
+		if round == 3 {
+			body["tools"] = []any{map[string]any{"type": "function", "name": "Read"}}
+		}
+		encoded, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(encoded))
+		req.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != 200 {
+			t.Fatalf("round %d: HTTP %d: %s", round, recorder.Code, recorder.Body.String())
+		}
+		reader := bridge.NewSSEReader(bytes.NewReader(recorder.Body.Bytes()))
+		terminal := gjson.Result{}
+		for {
+			frame, err := reader.Next()
+			if err != nil {
+				break
+			}
+			if gjson.GetBytes(frame.Data, "type").String() == "response.completed" {
+				terminal = gjson.GetBytes(frame.Data, "response")
+			}
+		}
+		if !terminal.Exists() {
+			t.Fatalf("round %d: no native completion: %s", round, recorder.Body.String())
+		}
+		actual := readExchange(t)
+		key := gjson.GetBytes(actual.body, "prompt_cache_key").String()
+		if key == "" || round > 0 && key != cacheKey {
+			t.Fatalf("nested session changed when business controls changed: %q -> %q", cacheKey, key)
+		}
+		cacheKey = key
+		count := 0
+		for _, item := range gjson.GetBytes(actual.body, "input").Array() {
+			if item.Get("role").String() != "developer" {
+				count++
+			}
+		}
+		wantCount, wantPrevious := round*2+1, ""
+		if transport == "websocket" && round == 1 {
+			wantCount, wantPrevious = 1, previous
+		}
+		if count != wantCount || gjson.GetBytes(actual.body, "previous_response_id").String() != wantPrevious {
+			t.Fatalf("round %d: native input=%d parent=%q, want %d/%q: %s", round, count, gjson.GetBytes(actual.body, "previous_response_id").String(), wantCount, wantPrevious, actual.body)
+		}
+		previous = terminal.Get("id").String()
+		for _, item := range terminal.Get("output").Array() {
+			history = append(history, json.RawMessage(item.Raw))
+		}
+	}
+}
 
 // The client sends only deltas; the mock upstream observes native wire requests.
 func testNativeRuntimeContinuation(t *testing.T, handler *openaihandlers.OpenAIResponsesAPIHandler, transport string, readExchange func(*testing.T) nativeRuntimeExchange) {

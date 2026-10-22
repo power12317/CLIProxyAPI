@@ -6,6 +6,7 @@
 package gemini
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -34,7 +35,11 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in Codex API format
-func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
+func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
+	return convertGeminiRequestToCodex(modelName, inputRawJSON, stream, false)
+}
+
+func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, modelInput bool) []byte {
 	rawJSON := inputRawJSON
 	// Base template
 	out := []byte(`{"model":"","instructions":"","input":[]}`)
@@ -60,6 +65,11 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 		}
 		if len(names) > 0 {
 			shortMap = buildShortNameMap(names)
+			if modelInput {
+				for _, name := range names {
+					shortMap[name] = name
+				}
+			}
 		}
 	}
 
@@ -174,7 +184,7 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 						n := name.String()
 						if short, ok := shortMap[n]; ok {
 							n = short
-						} else {
+						} else if !modelInput {
 							n = shortenNameIfNeeded(n)
 						}
 						fn, _ = sjson.SetBytes(fn, "name", n)
@@ -244,6 +254,10 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 			for j := 0; j < len(farr); j++ {
 				fn := farr[j]
 				tool := []byte(`{}`)
+				if modelInput {
+					tool = []byte(fn.Raw)
+					tool, _ = sjson.DeleteBytes(tool, "parametersJsonSchema")
+				}
 				tool, _ = sjson.SetBytes(tool, "type", "function")
 				if v := fn.Get("name"); v.Exists() {
 					name := v.String()
@@ -259,12 +273,20 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 				}
 				if prm := fn.Get("parameters"); prm.Exists() {
 					cleaned := cleanGeminiCodexToolParameters(prm)
+					if modelInput {
+						cleaned = normalizeGeminiModelSchema([]byte(prm.Raw))
+					}
 					tool, _ = sjson.SetRawBytes(tool, "parameters", cleaned)
 				} else if prm = fn.Get("parametersJsonSchema"); prm.Exists() {
 					cleaned := cleanGeminiCodexToolParameters(prm)
+					if modelInput {
+						cleaned = normalizeGeminiModelSchema([]byte(prm.Raw))
+					}
 					tool, _ = sjson.SetRawBytes(tool, "parameters", cleaned)
 				}
-				tool, _ = sjson.SetBytes(tool, "strict", false)
+				if !modelInput || !fn.Get("strict").Exists() {
+					tool, _ = sjson.SetBytes(tool, "strict", false)
+				}
 				toolItems = append(toolItems, tool)
 			}
 		}
@@ -274,6 +296,11 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	// Fixed flags aligning with Codex expectations
 	out, _ = sjson.SetBytes(out, "parallel_tool_calls", true)
 	out = setCodexToolChoiceFromGeminiToolConfig(out, root.Get("toolConfig.functionCallingConfig"))
+	if modelInput {
+		if names := root.Get("toolConfig.functionCallingConfig.allowedFunctionNames").Array(); len(names) == 1 && root.Get("toolConfig.functionCallingConfig.mode").String() == "ANY" {
+			out, _ = sjson.SetBytes(out, "tool_choice.name", names[0].String())
+		}
+	}
 
 	// Convert Gemini thinkingConfig to Codex reasoning.effort.
 	// Note: Google official Python SDK sends snake_case fields (thinking_level/thinking_budget).
@@ -314,7 +341,7 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 			}
 		}
 	}
-	if !effortSet {
+	if !effortSet && !modelInput {
 		// No thinking config, set default effort
 		out, _ = sjson.SetBytes(out, "reasoning.effort", "medium")
 	}
@@ -323,8 +350,25 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	// of coupling it to reasoning effort.
 	out, _ = sjson.SetBytes(out, "stream", true)
 	out, _ = sjson.SetBytes(out, "store", false)
-	out, _ = sjson.SetBytes(out, "include", []string{"reasoning.encrypted_content"})
+	if !modelInput {
+		out, _ = sjson.SetBytes(out, "include", []string{"reasoning.encrypted_content"})
+	}
+	if modelInput {
+		for _, mapping := range [][2]string{{"generationConfig.maxOutputTokens", "max_output_tokens"}, {"generationConfig.temperature", "temperature"}, {"generationConfig.topP", "top_p"}, {"generationConfig.topK", "top_k"}} {
+			if value := root.Get(mapping[0]); value.Exists() {
+				out, _ = sjson.SetRawBytes(out, mapping[1], []byte(value.Raw))
+			}
+		}
+		for _, path := range []string{"tool_choice", "parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_retention", "safety_identifier", "reasoning.context"} {
+			if value := root.Get(path); value.Exists() {
+				out, _ = sjson.SetRawBytes(out, path, []byte(value.Raw))
+			}
+		}
+	}
 
+	if modelInput {
+		return out
+	}
 	var pathsToLower []string
 	toolsResult := gjson.GetBytes(out, "tools")
 	util.Walk(toolsResult, "", "type", &pathsToLower)
@@ -342,6 +386,51 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	}
 
 	return out
+}
+
+// normalizeGeminiModelSchema normalizes source type enums only in schema nodes.
+// A default, enum or const may itself contain a case-sensitive business "type".
+func normalizeGeminiModelSchema(raw []byte) []byte {
+	var node map[string]json.RawMessage
+	if json.Unmarshal(raw, &node) != nil || node == nil {
+		return raw
+	}
+	if value, ok := node["type"]; ok {
+		var kind string
+		if json.Unmarshal(value, &kind) == nil {
+			switch kind {
+			case "STRING", "INTEGER", "NUMBER", "BOOLEAN", "OBJECT", "ARRAY", "NULL":
+				node["type"], _ = json.Marshal(strings.ToLower(kind))
+			}
+		}
+	}
+	for _, key := range []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"} {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(node[key], &fields) == nil && fields != nil {
+			for name, field := range fields {
+				fields[name] = normalizeGeminiModelSchema(field)
+			}
+			node[key], _ = json.Marshal(fields)
+		}
+	}
+	for _, key := range []string{"items", "additionalProperties", "additionalItems", "contains", "not", "if", "then", "else", "propertyNames", "unevaluatedProperties", "unevaluatedItems", "allOf", "anyOf", "oneOf", "prefixItems"} {
+		if child, ok := node[key]; ok {
+			var children []json.RawMessage
+			if json.Unmarshal(child, &children) == nil && children != nil {
+				for index, item := range children {
+					children[index] = normalizeGeminiModelSchema(item)
+				}
+				node[key], _ = json.Marshal(children)
+			} else {
+				node[key] = normalizeGeminiModelSchema(child)
+			}
+		}
+	}
+	result, err := json.Marshal(node)
+	if err != nil {
+		return raw
+	}
+	return result
 }
 
 func setCodexToolChoiceFromGeminiToolConfig(out []byte, functionCallingConfig gjson.Result) []byte {

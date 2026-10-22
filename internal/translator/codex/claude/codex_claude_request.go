@@ -51,13 +51,23 @@ func ConvertClaudeRequestToCodexWithCompat(modelName string, inputRawJSON []byte
 	return convertClaudeRequestToCodex(modelName, inputRawJSON, stream, true)
 }
 
-func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, preserveEmptyThinkingBlocks bool) []byte {
+func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, preserveEmptyThinkingBlocks bool, modelInputs ...bool) []byte {
+	modelInput := len(modelInputs) > 0 && modelInputs[0]
 	rawJSON := inputRawJSON
 
 	template := []byte(`{"model":"","instructions":"","input":[]}`)
 
 	rootResult := gjson.ParseBytes(rawJSON)
 	toolNameMap := buildReverseMapFromClaudeOriginalToShort(rawJSON)
+	callID := shortenCodexCallIDIfNeeded
+	if modelInput {
+		callID = func(value string) string { return value }
+	}
+	if modelInput {
+		for name := range toolNameMap {
+			toolNameMap[name] = name
+		}
+	}
 	template, _ = sjson.SetBytes(template, "model", modelName)
 	inputItems := translatorcommon.NewRawArrayItems(rootResult.Get("messages.#").Int())
 
@@ -162,6 +172,22 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 				if messageRole != "assistant" {
 					return
 				}
+				if modelInput {
+					flushMessage()
+					item := []byte(`{"type":"reasoning","summary":[]}`)
+					if text := part.Get("thinking"); text.Type == gjson.String && text.String() != "" {
+						item, _ = sjson.SetBytes(item, "summary", []map[string]string{{"type": "summary_text", "text": text.String()}})
+					}
+					if signature := part.Get("signature"); signature.Type == gjson.String && signature.String() != "" {
+						value := signature.String()
+						if mapped, ok := sigcompat.CompatibleSignatureForProvider(sigcompat.SignatureProviderGPT, value); ok {
+							value = mapped
+						}
+						item, _ = sjson.SetBytes(item, "encrypted_content", value)
+					}
+					inputItems = append(inputItems, item)
+					return
+				}
 
 				rawSignature := part.Get("signature").String()
 				signature, ok := sigcompat.CompatibleSignatureForProvider(sigcompat.SignatureProviderGPT, rawSignature)
@@ -254,12 +280,12 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 							pendingToolUseIDs = append(pendingToolUseIDs, id)
 						}
 						functionCallMessage := []byte(`{"type":"function_call"}`)
-						functionCallMessage, _ = sjson.SetBytes(functionCallMessage, "call_id", shortenCodexCallIDIfNeeded(messageContentResult.Get("id").String()))
+						functionCallMessage, _ = sjson.SetBytes(functionCallMessage, "call_id", callID(messageContentResult.Get("id").String()))
 						{
 							name := messageContentResult.Get("name").String()
 							if short, ok := toolNameMap[name]; ok {
 								name = short
-							} else {
+							} else if !modelInput {
 								name = shortenNameIfNeeded(name)
 							}
 							functionCallMessage, _ = sjson.SetBytes(functionCallMessage, "name", name)
@@ -269,7 +295,7 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 					case "tool_result":
 						flushMessage()
 						functionCallOutputMessage := []byte(`{"type":"function_call_output"}`)
-						functionCallOutputMessage, _ = sjson.SetBytes(functionCallOutputMessage, "call_id", shortenCodexCallIDIfNeeded(messageContentResult.Get("tool_use_id").String()))
+						functionCallOutputMessage, _ = sjson.SetBytes(functionCallOutputMessage, "call_id", callID(messageContentResult.Get("tool_use_id").String()))
 
 						contentResult := messageContentResult.Get("content")
 						if contentResult.IsArray() {
@@ -341,6 +367,9 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 	toolsResult := rootResult.Get("tools")
 	hasWebSearchTool := false
 	var toolItems [][]byte
+	if modelInput && !toolsResult.IsArray() && rootResult.Get("tool_choice").Exists() {
+		template, _ = sjson.SetRawBytes(template, "tool_choice", convertClaudeToolChoiceToCodex(rootResult.Get("tool_choice"), toolNameMap, nil))
+	}
 	if toolsResult.IsArray() {
 		webSearchToolNames := buildClaudeWebSearchToolNameSet(toolsResult)
 		template, _ = sjson.SetRawBytes(template, "tool_choice", convertClaudeToolChoiceToCodex(rootResult.Get("tool_choice"), toolNameMap, webSearchToolNames))
@@ -371,13 +400,23 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 					tool, _ = sjson.SetBytes(tool, "name", name)
 				}
 			}
-			tool, _ = sjson.SetRawBytes(tool, "parameters", []byte(normalizeToolParameters(toolResult.Get("input_schema").Raw)))
-			for _, path := range []string{"input_schema", "parameters.$schema", "cache_control", "defer_loading"} {
+			if modelInput {
+				if schema := toolResult.Get("input_schema"); schema.Exists() {
+					tool, _ = sjson.SetRawBytes(tool, "parameters", []byte(schema.Raw))
+				}
+			} else {
+				tool, _ = sjson.SetRawBytes(tool, "parameters", []byte(normalizeToolParameters(toolResult.Get("input_schema").Raw)))
+			}
+			remove := []string{"input_schema", "cache_control"}
+			if !modelInput {
+				remove = append(remove, "parameters.$schema", "defer_loading")
+			}
+			for _, path := range remove {
 				if gjson.GetBytes(tool, path).Exists() {
 					tool, _ = sjson.DeleteBytes(tool, path)
 				}
 			}
-			if gjson.GetBytes(tool, "strict").Type != gjson.False {
+			if (!modelInput && gjson.GetBytes(tool, "strict").Type != gjson.False) || (modelInput && !gjson.GetBytes(tool, "strict").Exists()) {
 				tool, _ = sjson.SetBytes(tool, "strict", false)
 			}
 			toolItems = append(toolItems, tool)
@@ -395,6 +434,9 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 
 	// Convert thinking.budget_tokens to reasoning.effort.
 	reasoningEffort := "medium"
+	if modelInput {
+		reasoningEffort = ""
+	}
 	if thinkingConfig := rootResult.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
 		switch thinkingConfig.Get("type").String() {
 		case "enabled":
@@ -422,7 +464,9 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 			}
 		}
 	}
-	template, _ = sjson.SetBytes(template, "reasoning.effort", reasoningEffort)
+	if reasoningEffort != "" {
+		template, _ = sjson.SetBytes(template, "reasoning.effort", reasoningEffort)
+	}
 	// OpenAI documents reasoning summaries as explicit opt-in output. Leave
 	// reasoning.summary to the source request's canonical summary intent instead
 	// of coupling it to reasoning effort.
@@ -439,7 +483,9 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 	if hasWebSearchTool {
 		includeFields = append(includeFields, "web_search_call.action.sources")
 	}
-	template, _ = sjson.SetBytes(template, "include", includeFields)
+	if !modelInput {
+		template, _ = sjson.SetBytes(template, "include", includeFields)
+	}
 
 	// Map Claude output_config.format to Codex Responses text.format.
 	if format := rootResult.Get("output_config.format"); format.IsObject() && format.Get("type").String() == "json_schema" && format.Get("schema").IsObject() {
@@ -454,7 +500,7 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 		// OpenAI strict mode requires every declared property to be listed
 		// in required. Downgrade instead of emitting an unsatisfiable
 		// strict schema that strict backends reject with HTTP 400.
-		if strict && codexSchemaMissesRequired(format.Get("schema")) {
+		if !modelInput && strict && codexSchemaMissesRequired(format.Get("schema")) {
 			strict = false
 		}
 		translatedFormat := []byte(`{"type":"json_schema","name":"","strict":true,"schema":{}}`)
@@ -468,6 +514,13 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 		template, _ = sjson.SetRawBytes(template, "tools", translatorcommon.JoinRawArray(toolItems))
 	}
 	template = translatorcommon.SetRawArrayItems(template, "input", inputItems)
+	if modelInput {
+		for _, path := range []string{"parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_tokens", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "safety_identifier", "reasoning.context"} {
+			if value := rootResult.Get(path); value.Exists() {
+				template, _ = sjson.SetRawBytes(template, path, []byte(value.Raw))
+			}
+		}
+	}
 
 	return template
 }

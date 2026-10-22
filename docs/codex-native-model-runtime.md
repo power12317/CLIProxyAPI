@@ -151,18 +151,19 @@ The CPA node-consumer tests, access-logger tests and server build also passed.
 
 ## Native input compatibility
 
-The official model entry accepts a native `Prompt`, typed tools and history,
-reasoning options, structured output, verbosity configuration, and a service tier. It does not accept arbitrary final wire
-extensions or a forced `tool_choice`. These cannot be recreated by patching
-the upstream request after native construction.
+The 2026-10-22 [compatibility adaptation](codex-native-compatible-adaptation.md)
+extends the model-only native input representation while retaining the native
+sender. It accepts caller tool contracts without bundled templates or generic
+JSON equality gates. Explicit tool selection, include lists, generation controls,
+structured-output names and strictness map through typed native controls; caller
+names and complete schemas remain intact. Real structure/association errors and
+business capabilities without a native mapping remain explicit.
 
-The official standalone Images DTO accepts `prompt`, `model`, `background`,
-`n`, `quality`, and `size`; edits also accept `images`. It does not expose
-`mask`, `partial_images`, or `output_format`. Client streaming can adapt the
-native final image result into image completion events, but cannot provide
-upstream partial image events that the native Images operation does not expose.
-Multipart images are first adapted by CPA into the same business input as JSON.
-Unsupported fields must be reported rather than silently removed.
+Standalone Images uses extended native DTOs for `mask`, `partial_images`,
+output format/compression and stream options. Multipart images and masks first
+become the same business references as JSON. The native Images backend validates
+JSON envelopes and delivers SSE partial events before image completion. It does
+not borrow the old raw bridge sender or introduce a CPA direct-egress fallback.
 
 Hosted image declarations in ordinary Responses map to the official native
 `ResponseItem::AdditionalTools` input. The fork-only `ToolSpec::ImageGeneration`

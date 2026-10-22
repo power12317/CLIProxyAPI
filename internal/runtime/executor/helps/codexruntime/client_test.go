@@ -309,15 +309,13 @@ func TestMasterRejectsOldProtocolAndParsedEventCapabilities(t *testing.T) {
 }
 
 func TestBrokenBodyStreamIsARequestScopedError(t *testing.T) {
-	for _, mode := range []string{"disconnect", "wrong-request", "unknown-notification"} {
+	for _, mode := range []string{"disconnect", "wrong-request"} {
 		t.Run(mode, func(t *testing.T) {
 			endpoint := serveMaster(t, validCaps(), func(conn *websocket.Conn, m message) {
 				accept(conn, m)
 				switch mode {
 				case "wrong-request":
 					notify(conn, "cpa/inference/completed", map[string]any{"requestId": "other", "bodyBase64": []byte("data")})
-				case "unknown-notification":
-					notify(conn, "cpa/inference/unknown", map[string]any{"requestId": "req", "event": map[string]string{"type": "response.created"}})
 				}
 			})
 			client := dialMaster(t, endpoint)

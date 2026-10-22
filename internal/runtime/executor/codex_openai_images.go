@@ -334,6 +334,9 @@ func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *clip
 	if errPrepare != nil {
 		return resp, errPrepare
 	}
+	if e.runtime != nil {
+		body = helps.SetBoolIfDifferent(body, "stream", false)
+	}
 
 	apiKey, baseURL := codexCreds(auth)
 	if baseURL == "" {
