@@ -32,6 +32,17 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func runtimeImageOperationPayload(t *testing.T, path string, multipartEdit bool) ([]byte, string) {
+	t.Helper()
+	payload, contentType := runtimeImagePayload(t, multipartEdit)
+	if path == codexImagesGenerationsPath {
+		// Edit inputs are not a valid image-generation request.
+		payload, _ = sjson.DeleteBytes(payload, "images")
+		payload, _ = sjson.DeleteBytes(payload, "mask")
+	}
+	return payload, contentType
+}
+
 // This exercises the real master and child worker with fake credentials and a local upstream.
 func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 	binary := os.Getenv("CODEX_RUNTIME_TEST_BINARY")
@@ -205,7 +216,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 						cpaCalls.Add(1)
 						return nil, fmt.Errorf("CPA direct call forbidden")
 					})))
-					payload, contentType := runtimeImagePayload(t, form)
+					payload, contentType := runtimeImageOperationPayload(t, path, form)
 					opts := codexOpenAIImageTestOptions(path, stream)
 					opts.Headers = http.Header{"Content-Type": {contentType}, "Cookie": {"client-cookie"}}
 					models := []config.PayloadModelRule{{Name: "gpt-image-1.5", Protocol: "openai"}}
@@ -246,7 +257,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 		models := []config.PayloadModelRule{{Name: "gpt-image-1.5", Protocol: "openai"}}
 		cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{Models: models, Params: map[string]any{"stream": true}}}}
 		defer func() { cfg.Payload = config.PayloadConfig{} }()
-		payload, _ := runtimeImagePayload(t, false)
+		payload, _ := runtimeImageOperationPayload(t, codexImagesGenerationsPath, false)
 		output, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, false), false)
 		if err != nil {
 			t.Fatal(err)
@@ -278,7 +289,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 						continue
 					}
 					t.Run(fmt.Sprintf("%s/stream=%t/multipart=%t", path, stream, form), func(t *testing.T) {
-						payload, contentType := runtimeImagePayload(t, form)
+						payload, contentType := runtimeImageOperationPayload(t, path, form)
 						if stream {
 							if form {
 								var err error

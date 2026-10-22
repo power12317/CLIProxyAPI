@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -38,15 +39,36 @@ func translateCodexRequestPair(from, to sdktranslator.Format, model string, orig
 	return original, body
 }
 
+func (e *CodexExecutor) normalizeServiceTier(body []byte) []byte {
+	if e.runtime != nil {
+		return helps.NormalizeCodexRuntimeServiceTier(body)
+	}
+	return helps.NormalizeCodexServiceTier(body)
+}
+
 func translateCodexRequestPairWithUpdateIntent(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, clientHeaders http.Header, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte, bool) {
-	isCompat := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
+	return translateCodexRequestPairContext(context.Background(), from, to, model, originalPayload, payload, stream, clientHeaders, preserveEmptyThinkingBlocks...)
+}
+
+func (e *CodexExecutor) translateRequestPair(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, clientHeaders http.Header, isCompat bool) ([]byte, []byte, bool) {
 	ctx := context.Background()
+	if e.runtime != nil {
+		ctx = translatorcommon.WithModelInput(ctx)
+	}
+	return translateCodexRequestPairContext(ctx, from, to, model, originalPayload, payload, stream, clientHeaders, isCompat)
+}
+
+func translateCodexRequestPairContext(ctx context.Context, from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, clientHeaders http.Header, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte, bool) {
+	isCompat := len(preserveEmptyThinkingBlocks) > 0 && preserveEmptyThinkingBlocks[0]
 	translate := func(raw []byte) ([]byte, bool) {
-		if isCompat && from == sdktranslator.FormatClaude && to == sdktranslator.FormatCodex {
+		if isCompat && !translatorcommon.IsModelInput(ctx) && from == sdktranslator.FormatClaude && to == sdktranslator.FormatCodex {
 			translated := helps.TranslateRequestWithAPIKeyModelCompatibility(ctx, nil, nil, from, to, model, raw, stream, true)
 			return helps.PreserveCodexProtocolFields(raw, translated, util.IsCodexResponsesLiteRequest(raw, clientHeaders)), false
 		}
 		translated := sdktranslator.TranslateRequestEnvelope(ctx, from, to, sdktranslator.RequestEnvelope{Format: from, Model: model, Stream: stream, Body: raw})
+		if translatorcommon.IsModelInput(ctx) {
+			return translated.Body, translated.ConfigurationUpdatesChanged
+		}
 		return helps.PreserveCodexProtocolFields(raw, translated.Body, util.IsCodexResponsesLiteRequest(raw, clientHeaders)), translated.ConfigurationUpdatesChanged
 	}
 	if bytes.Equal(originalPayload, payload) {

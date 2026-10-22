@@ -18,8 +18,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Compare the actual HTTP boundary with the actual bridge boundary, not a second
-// copy of the request-building implementation.
+// Compare shared preprocessing at the HTTP and bridge boundaries. Native input
+// keeps controls and declarations that a direct HTTP wire builder may consume.
 func TestCodexRuntimeUsesFullCPARequestPipeline(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, withPayload := range []bool{false, true} {
@@ -45,7 +45,7 @@ func TestCodexRuntimeUsesFullCPARequestPipeline(t *testing.T) {
 						Filter:      []config.PayloadFilterRule{{Models: models, Params: []string{"tools", "parallel_tool_calls", "include", "client_metadata.x-codex-installation-id"}}},
 					}
 				}
-				body := []byte(`{"model":"runtime-model","input":[{"role":"user","content":[{"type":"input_text","text":"<environment_context>\n<current_date>2026-10-07</current_date>\n<timezone>Asia/Shanghai</timezone>\n</environment_context>"}]}],"client_metadata":{"session_id":"source-session","thread_id":"source-thread","x-codex-turn-metadata":"{\"session_id\":\"source-session\",\"thread_id\":\"source-thread\",\"turn_id\":\"source-turn\",\"timezone\":\"Asia/Shanghai\"}"},"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"prompt_cache_key":"source-cache","service_tier":"default","previous_response_id":"remove-me","generate":false,"prompt_cache_retention":"24h"}`)
+				body := []byte(`{"model":"runtime-model","input":[{"role":"user","content":[{"type":"input_text","text":"<environment_context>\n<current_date>2026-10-07</current_date>\n<timezone>Asia/Shanghai</timezone>\n</environment_context>"}]}],"client_metadata":{"session_id":"source-session","thread_id":"source-thread","x-codex-turn-metadata":"{\"session_id\":\"source-session\",\"thread_id\":\"source-thread\",\"turn_id\":\"source-turn\",\"timezone\":\"Asia/Shanghai\"}"},"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"prompt_cache_key":"source-cache","service_tier":"default","previous_response_id":null,"generate":true,"prompt_cache_retention":"24h"}`)
 				req := coreexecutor.Request{Model: "runtime-model", Payload: body}
 				opts := runtimeTestOptions()
 				opts.Stream = stream
@@ -104,7 +104,12 @@ func TestCodexRuntimeUsesFullCPARequestPipeline(t *testing.T) {
 				if request.SessionID == "" {
 					t.Fatal("missing routing scope")
 				}
-				equalRuntimeJSON(t, directBody, request.Request)
+				for _, field := range []string{"input", "model", "client_metadata", "prompt_cache_key"} {
+					equalRuntimeJSON(t, []byte(gjson.GetBytes(directBody, field).Raw), []byte(gjson.GetBytes(request.Request, field).Raw))
+				}
+				if gjson.GetBytes(request.Request, "generate").Type != gjson.True || !gjson.GetBytes(request.Request, "previous_response_id").Exists() || gjson.GetBytes(request.Request, "previous_response_id").Type != gjson.Null || gjson.GetBytes(request.Request, "prompt_cache_retention").String() != "24h" {
+					t.Fatal("native controls were erased before adaptation")
+				}
 				if strings.Contains(string(request.Request), "Asia/Shanghai") || !strings.Contains(string(request.Request), "Asia/Singapore") {
 					t.Fatalf("CPA timezone processing was skipped: %s", request.Request)
 				}

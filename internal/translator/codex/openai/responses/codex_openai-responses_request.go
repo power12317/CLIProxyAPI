@@ -66,6 +66,17 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	return rawJSON
 }
 
+// convertOpenAIResponsesModelInput adapts public structure without imposing the
+// direct HTTP endpoint's wire restrictions on the native execution input.
+func convertOpenAIResponsesModelInput(body []byte) []byte {
+	if input := gjson.GetBytes(body, "input"); input.Type == gjson.String {
+		message, _ := sjson.SetBytes([]byte(`[{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}]`), "0.content.0.text", input.String())
+		body, _ = sjson.SetRawBytes(body, "input", message)
+	}
+	body = convertSystemRoleToDeveloper(body)
+	return normalizeCodexBuiltinTools(body)
+}
+
 // normalizeEmptyFunctionCallArguments rewrites blank string arguments on
 // history function_call items to "{}". Some Responses clients serialize
 // parameter-less tool calls as an empty string, which strict Codex Responses

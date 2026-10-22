@@ -299,6 +299,14 @@ func ExtractSessionInfo(headers http.Header, payload []byte, metadata map[string
 		}
 	}
 	var codexTurnMetaJSON gjson.Result
+	if codexTurnMeta == "" {
+		for _, candidate := range []gjson.Result{root.Get("client_metadata.x-codex-turn-metadata"), reqRoot.Get("client_metadata.x-codex-turn-metadata")} {
+			if candidate.Type == gjson.String {
+				codexTurnMeta = candidate.String()
+				break
+			}
+		}
+	}
 	if codexTurnMeta != "" {
 		codexTurnMetaJSON = gjson.Parse(codexTurnMeta)
 	}
@@ -308,6 +316,14 @@ func ExtractSessionInfo(headers http.Header, payload []byte, metadata map[string
 	}
 	if tid == "" && codexTurnMetaJSON.Exists() {
 		tid = normalizedSessionCandidate(codexTurnMetaJSON.Get("thread_id").String())
+	}
+	for _, candidate := range []gjson.Result{root.Get("client_metadata"), reqRoot.Get("client_metadata")} {
+		if sid == "" {
+			sid = normalizedSessionCandidate(candidate.Get("session_id").String())
+		}
+		if tid == "" {
+			tid = normalizedSessionCandidate(candidate.Get("thread_id").String())
+		}
 	}
 	if tid == "" && sid != "" && root.Exists() {
 		for _, path := range []string{"thread_id", "threadId", "metadata.thread_id"} {
@@ -330,6 +346,9 @@ func ExtractSessionInfo(headers http.Header, payload []byte, metadata map[string
 		}
 		if parentThread == "" && codexTurnMetaJSON.Exists() {
 			parentThread = normalizedSessionCandidate(codexTurnMetaJSON.Get("parent_thread_id").String())
+		}
+		if parentThread == "" {
+			parentThread = normalizedSessionCandidate(root.Get("client_metadata.parent_thread_id").String())
 		}
 
 		forkedFrom := ""

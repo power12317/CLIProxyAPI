@@ -74,6 +74,11 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 	if !json.Valid(req.Payload) || !gjson.ParseBytes(req.Payload).IsObject() {
 		return runtimeError(400, "Request must be a JSON object")
 	}
+	if opts.SourceFormat == sdktranslator.FormatOpenAI {
+		if err := helps.ValidateCodexRuntimeChatCalls(req.Payload); err != nil {
+			return runtimeError(400, err.Error())
+		}
+	}
 	return nil
 }
 

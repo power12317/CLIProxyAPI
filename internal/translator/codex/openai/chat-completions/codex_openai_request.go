@@ -29,6 +29,10 @@ import (
 // Returns:
 //   - []byte: The transformed request data in OpenAI Responses API format
 func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
+	return convertOpenAIRequestToCodex(modelName, inputRawJSON, stream, false)
+}
+
+func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, modelInput bool) []byte {
 	rawJSON := inputRawJSON
 	root := gjson.ParseBytes(rawJSON)
 	tools := root.Get("tools")
@@ -61,7 +65,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 	// Map reasoning effort
 	if v := gjson.GetBytes(rawJSON, "reasoning_effort"); v.Exists() {
 		out, _ = sjson.SetBytes(out, "reasoning.effort", v.Value())
-	} else {
+	} else if !modelInput {
 		out, _ = sjson.SetBytes(out, "reasoning.effort", "medium")
 	}
 	if serviceTier := normalizeCodexServiceTier(root.Get("service_tier")); serviceTier != "" {
@@ -98,12 +102,22 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 		}
 		allNames := collectRequestToolNames(rawJSON)
 		if len(allNames) > 0 {
-			originalToolNameMap = buildShortNameMap(allNames)
+			if modelInput {
+				for _, name := range allNames {
+					originalToolNameMap[name] = name
+				}
+			} else {
+				originalToolNameMap = buildShortNameMap(allNames)
+			}
 		}
 	}
 
 	resolveToolCall := func(toolCall gjson.Result) (callType, name, input string, valid bool) {
-		switch toolCall.Get("type").String() {
+		kind := toolCall.Get("type").String()
+		if modelInput && kind == "" && toolCall.Get("function").IsObject() {
+			kind = "function"
+		}
+		switch kind {
 		case "custom":
 			return "custom", toolCall.Get("custom.name").String(), toolCall.Get("custom.input").String(), true
 		case "function":
@@ -418,6 +432,19 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 			out, _ = sjson.SetBytes(out, "text.verbosity", v.Value())
 		}
 	}
+	if modelInput {
+		format := text.Get("format")
+		if rf.Exists() {
+			format = rf
+			if rf.Get("type").String() == "json_schema" && rf.Get("json_schema").IsObject() {
+				raw, _ := sjson.SetBytes([]byte(rf.Get("json_schema").Raw), "type", "json_schema")
+				format = gjson.ParseBytes(raw)
+			}
+		}
+		if format.Exists() {
+			out, _ = sjson.SetRawBytes(out, "text.format", []byte(format.Raw))
+		}
+	}
 
 	// Map tools (flatten function fields)
 	if tools.IsArray() && len(toolResults) > 0 {
@@ -426,6 +453,23 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 		for i := 0; i < len(arr); i++ {
 			t := arr[i]
 			toolType := t.Get("type").String()
+			if modelInput {
+				item := []byte(t.Raw)
+				if nested := t.Get("function"); nested.IsObject() && (toolType == "function" || toolType == "") {
+					item = []byte(nested.Raw)
+					toolType = "function"
+				} else if toolType == "" && t.Get("name").Type == gjson.String {
+					toolType = "function"
+				}
+				if toolType == "function" {
+					item, _ = sjson.SetBytes(item, "type", toolType)
+					if !gjson.GetBytes(item, "strict").Exists() {
+						item, _ = sjson.SetBytes(item, "strict", false)
+					}
+				}
+				toolItems = append(toolItems, item)
+				continue
+			}
 			if toolType == "custom" {
 				item := []byte(t.Raw)
 				name := t.Get("name").String()
@@ -492,7 +536,9 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 			if tcType == "function" || tcType == "custom" {
 				name := tc.Get("name").String()
 				if tcType == "function" {
-					name = tc.Get("function.name").String()
+					if nestedName := tc.Get("function.name"); nestedName.Exists() || !modelInput {
+						name = nestedName.String()
+					}
 					if _, custom := customToolNames[name]; custom {
 						tcType = "custom"
 					}
@@ -500,7 +546,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				if name != "" {
 					if short, ok := originalToolNameMap[name]; ok {
 						name = short
-					} else {
+					} else if !modelInput {
 						name = shortenNameIfNeeded(name)
 					}
 				}
@@ -510,7 +556,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 					choice, _ = sjson.SetBytes(choice, "name", name)
 				}
 				out, _ = sjson.SetRawBytes(out, "tool_choice", choice)
-			} else if tcType != "" {
+			} else if tcType != "" || modelInput {
 				// Built-in tool choices (e.g. {"type":"web_search"}) are already Responses-compatible.
 				out, _ = sjson.SetRawBytes(out, "tool_choice", []byte(tc.Raw))
 			}
@@ -518,6 +564,18 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 	}
 
 	out, _ = sjson.SetBytes(out, "store", false)
+	if modelInput {
+		// These are business controls for the native adapter to map or report.
+		// Preserve explicit values before request plugins and final payload rules.
+		for _, path := range []string{"parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "max_completion_tokens", "max_tokens", "truncation", "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "safety_identifier", "user", "context_management", "reasoning.context"} {
+			if value := root.Get(path); value.Exists() {
+				out, _ = sjson.SetRawBytes(out, path, []byte(value.Raw))
+			}
+		}
+		if !root.Get("include").Exists() {
+			out, _ = sjson.DeleteBytes(out, "include")
+		}
+	}
 	return out
 }
 
