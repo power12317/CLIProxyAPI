@@ -17,8 +17,8 @@ runtime into the main runtime or introduce another user-facing mode.
 
 | Branch | Local protocol | Model execution | Image package |
 | --- | --- | --- | --- |
-| `main` | v3, raw HTTP body chunks | Existing native request builder and worker HTTP sender | `ghcr.io/power12317/cliproxyapi` with `ghcr.io/power12317/codex-server` |
-| `codex/native-model-runtime` | v5, native model events | Shared native model execution entry point, including its transport/session machinery | `ghcr.io/power12317/cliproxyapi-native-runtime` with `ghcr.io/power12317/codex-server-native-runtime` |
+| `main` | Raw HTTP body chunks; HTTP EOF completion | Existing native request builder and worker HTTP sender | `ghcr.io/power12317/cliproxyapi` with `ghcr.io/power12317/codex-server` |
+| `codex/native-model-runtime` | Native model events; model terminal completion | Shared native model execution entry point, including its transport/session machinery | `ghcr.io/power12317/cliproxyapi-native-runtime` with `ghcr.io/power12317/codex-server-native-runtime` |
 
 The main branch does not gain native upstream WebSocket continuation merely by
 receiving these compatibility fixes. The native branch retains that capability.
@@ -89,14 +89,11 @@ unsupported legacy standalone `/responses/compact` endpoint.
 
 ## Pairing and existing capability boundaries
 
-Deploy the CPA and codex-server images from the same branch and this compatible
-release together. v3 and v5 pairs reject one another during the existing protocol
-handshake; there is no automatic cross-branch or direct-upstream fallback.
-
-This is a semantic fix within main's existing v3 interface. An older v3 server
-can pass that handshake and still have the old parser/defaulting defects. The
-protocol number alone does not establish that it contains this fix, so update
-both images rather than depending on mismatched revisions.
+Deploy the CPA and codex-server images from the same branch and compatible release
+together. The shared RPC interface describes business notifications, completion,
+diagnostics and transport capabilities directly. Product versions and source
+revisions do not act as private protocol gates. Required missing behavior produces
+a concrete capability error, and CPA never falls back to direct model egress.
 
 The main HTTP runtime still cannot supply upstream WebSocket steering,
 `generate:false` prewarm, asynchronous background retrieval, or external stored

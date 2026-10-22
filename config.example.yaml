@@ -1075,7 +1075,7 @@ oauth:
       # Codex Server shares CPA credentials and runs one worker per enabled account.
       runtime:
         enabled: false
-        # url: ws://127.0.0.1:38317/cpa/v1/ws
+        # url: ws://127.0.0.1:38317/
         credential-modes: {}
       # Terminate and relay Codex Live WebRTC audio and DataChannel traffic in this process.
       # This requires inbound UDP reachability. Keep disabled to preserve direct media behavior.

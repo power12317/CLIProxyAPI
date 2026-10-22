@@ -114,7 +114,7 @@ func runtimeMaster(t *testing.T, handle func(string, map[string]any) any) (strin
 				continue
 			case "initialize":
 			case "cpa/capabilities/read":
-				result = bridge.Capabilities{ProtocolVersion: 3, ExecutionMode: "inference-only", RawBody: true, ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
+				result = bridge.Capabilities{BusinessNotification: "cpa/inference/body", CompletionSemantics: "http-body-eof", DiagnosticsCompleted: false, ResponsesWebsocket: false, ExecutionMode: "inference-only", RawBody: true, ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
 			default:
 				result = handle(msg.Method, msg.Params)
 			}
@@ -130,7 +130,7 @@ func runtimeMaster(t *testing.T, handle func(string, map[string]any) any) (strin
 		}
 	}))
 	t.Cleanup(server.Close)
-	return "ws" + strings.TrimPrefix(server.URL, "http") + "/cpa/v1/ws", connections
+	return "ws" + strings.TrimPrefix(server.URL, "http") + "/", connections
 }
 
 func TestCodexRuntimeOffRemainsLocalAndHidesTopology(t *testing.T) {
@@ -140,7 +140,7 @@ func TestCodexRuntimeOffRemainsLocalAndHidesTopology(t *testing.T) {
 		http.Error(w, "must not connect", 500)
 	}))
 	defer server.Close()
-	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/cpa/v1/ws"
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/"
 	h, path := runtimeHandler(t, false, endpoint)
 	writeRuntimeCredential(t, path, false, map[string]any{"email": "existing@example.invalid"})
 	if err := bridge.ReconcileState(h.codexRuntimeConfig()); err != nil {
@@ -190,7 +190,7 @@ func TestCodexRuntimePreferencesSurviveGlobalToggleAndReloadCPA(t *testing.T) {
 			t.Errorf("unexpected RPC %s", method)
 		}
 		reloads.Add(1)
-		return bridge.Capabilities{ProtocolVersion: 3, RawBody: true, ExecutionMode: "inference-only"}
+		return bridge.Capabilities{BusinessNotification: "cpa/inference/body", CompletionSemantics: "http-body-eof", DiagnosticsCompleted: false, ResponsesWebsocket: false, RawBody: true, ExecutionMode: "inference-only"}
 	})
 	h, path := runtimeHandler(t, false, endpoint)
 	other := bridge.CredentialPath(h.cfg, "组别/账号 B.json")

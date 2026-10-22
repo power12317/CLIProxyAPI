@@ -54,7 +54,7 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read", "cpa/credential/reload":
-				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": bridge.Capabilities{ProtocolVersion: 3, ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}})
+				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "result": bridge.Capabilities{BusinessNotification: "cpa/inference/body", CompletionSemantics: "http-body-eof", DiagnosticsCompleted: false, ResponsesWebsocket: false, ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}})
 			case "cpa/inference/start":
 				rpcCalls.Add(1)
 				latest, _ := codexshared.Read(path)
@@ -83,7 +83,7 @@ func TestCodexSharedCredentialModeSwitchAndRefresh(t *testing.T) {
 		_, _ = io.WriteString(w, "data: "+runtimeTerminal+"\n\n")
 	}))
 	defer native.Close()
-	cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, URL: "ws" + strings.TrimPrefix(wsServer.URL, "http") + "/cpa/v1/ws", CredentialModes: map[string]bool{"Original Account.JSON": true}}}}
+	cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, URL: "ws" + strings.TrimPrefix(wsServer.URL, "http") + "/", CredentialModes: map[string]bool{"Original Account.JSON": true}}}}
 	auth := &coreauth.Auth{ID: "Original Account.JSON", FileName: "Original Account.JSON", Provider: "codex", Metadata: map[string]any{"access_token": "stale", "refresh_token": "stale"}, Attributes: map[string]string{coreauth.AttributePath: path, coreauth.AttributeAuthKind: coreauth.AuthKindOAuth, "base_url": native.URL}}
 	executor := NewCodexAutoExecutor(cfg)
 	req := coreexecutor.Request{Model: "runtime-model", Payload: []byte(`{"model":"runtime-model","input":[]}`)}

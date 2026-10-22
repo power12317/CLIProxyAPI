@@ -340,6 +340,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	diagnosticCtx, finishDiagnostics := logging.WithBackgroundDiagnosticFinalizers(c.Request.Context())
+	c.Request = c.Request.WithContext(diagnosticCtx)
+	defer finishDiagnostics(func() {})
 	writer := newResponsesWebsocketWriter(conn)
 	writer.quality = codexstatus.FromContext(c.Request.Context())
 	passthroughSessionID := uuid.NewString()

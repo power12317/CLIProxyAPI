@@ -56,9 +56,6 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 	default:
 		return runtimeError(400, "Unsupported Codex runtime response protocol")
 	}
-	if coreexecutor.RequiredUpstreamWebsocket(ctx) {
-		return runtimeError(400, "Persistent upstream WebSocket steering is not supported by the Codex runtime")
-	}
 	if opts.ProxyURL != "" {
 		return runtimeError(400, "Configure the Codex runtime network instead of per-request proxy overrides")
 	}
@@ -136,8 +133,13 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 	if err != nil {
 		return nil, err
 	}
+	if coreexecutor.RequiredUpstreamWebsocket(ctx) && !client.Caps.ResponsesWebsocket {
+		client.Close()
+		return nil, runtimeError(400, "The Codex runtime sender does not support upstream WebSocket requests")
+	}
 	client.OnUpstream = upstreamLog.Record
 	upstreamLog.RawBody = true
+	upstreamLog.Bind(client)
 	requestID := ""
 	if imageAPI != "" {
 		requestID = logging.GetRequestID(ctx)
@@ -199,13 +201,15 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 		}
 		upstreamLog.Event(event)
 		reporter.ObserveResponseModel(event)
-		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
-			return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
-		}
-		sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
-		if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
-			failure := newCodexEmptyIncompleteStreamError()
-			return resp, runtimeError(failure.StatusCode(), failure.Error())
+		if !client.NativeTerminal() {
+			if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
+				return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
+			}
+			sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
+			if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
+				failure := newCodexEmptyIncompleteStreamError()
+				return resp, runtimeError(failure.StatusCode(), failure.Error())
+			}
 		}
 		switch gjson.GetBytes(event, "type").String() {
 		case "response.output_item.done":
@@ -257,6 +261,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 			}
 		}
 		upstreamLog.Error(err)
+		upstreamLog.Flush()
 		reporter.PublishFailure(ctx, err)
 		return nil, err
 	}
@@ -287,6 +292,14 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 		outputItems := make(map[int64][]byte)
 		var outputFallback [][]byte
 		sawOutputDelta, terminal := false, false
+		var finalChunks []coreexecutor.StreamChunk
+		deliver := func(chunk coreexecutor.StreamChunk) bool {
+			if terminal && client.NativeTerminal() {
+				finalChunks = append(finalChunks, chunk)
+				return true
+			}
+			return send(chunk)
+		}
 		fail := func(err error) {
 			var remote *bridge.Error
 			if errors.As(err, &remote) {
@@ -305,6 +318,11 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 					failure := newCodexIncompleteStreamError()
 					fail(runtimeError(failure.StatusCode(), failure.Error()))
 				} else {
+					for _, chunk := range finalChunks {
+						if !send(chunk) {
+							return
+						}
+					}
 					reporter.EnsurePublished(ctx)
 				}
 				return
@@ -316,7 +334,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 			event := helps.RestoreCodexMultiAgentV2Response(frame.Data, optimizeMultiAgentV2)
 			if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 				if (format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex) && len(frame.Wire) > 0 {
-					if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
+					if !deliver(coreexecutor.StreamChunk{Payload: frame.Wire}) {
 						return
 					}
 				}
@@ -324,15 +342,17 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 			}
 			upstreamLog.Event(event)
 			observeCodexTokenEvent(reporter, event)
-			if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
-				fail(&bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
-				return
-			}
-			sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
-			if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
-				failure := newCodexEmptyIncompleteStreamError()
-				fail(runtimeError(failure.StatusCode(), failure.Error()))
-				return
+			if !client.NativeTerminal() {
+				if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
+					fail(&bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
+					return
+				}
+				sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
+				if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
+					failure := newCodexEmptyIncompleteStreamError()
+					fail(runtimeError(failure.StatusCode(), failure.Error()))
+					return
+				}
 			}
 			switch gjson.GetBytes(event, "type").String() {
 			case "response.output_item.done":
@@ -355,7 +375,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				if !bytes.Equal(event, frame.Data) {
 					frame.Wire = append(append([]byte("data: "), event...), '\n', '\n')
 				}
-				if !send(coreexecutor.StreamChunk{Payload: frame.Wire}) {
+				if !deliver(coreexecutor.StreamChunk{Payload: frame.Wire}) {
 					return
 				}
 			} else {
@@ -366,7 +386,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				}
 				line := append([]byte("data: "), event...)
 				for _, chunk := range helps.TranslateStreamWithClaudeInputTokens(ctx, sdktranslator.FormatCodex, format, req.Model, original, body, line, &param, claudeTokens) {
-					if !send(coreexecutor.StreamChunk{Payload: chunk}) {
+					if !deliver(coreexecutor.StreamChunk{Payload: chunk}) {
 						return
 					}
 				}

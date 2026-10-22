@@ -93,7 +93,7 @@ func TestCodexRuntimeStopReportsMasterFailureBeforeNativeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{
-		URL:             "ws" + strings.TrimPrefix(master.URL, "http") + "/cpa/v1/ws",
+		URL:             "ws" + strings.TrimPrefix(master.URL, "http") + "/",
 		CredentialModes: map[string]bool{name: true},
 	}}}
 	clientsUpdated := false
@@ -156,7 +156,7 @@ func TestCodexRuntimeStartupAppliesFileStateBeforeAuthLoad(t *testing.T) {
 			}
 			cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{
 				Enabled:         enabled,
-				URL:             "ws" + strings.TrimPrefix(master.URL, "http") + "/cpa/v1/ws",
+				URL:             "ws" + strings.TrimPrefix(master.URL, "http") + "/",
 				CredentialModes: map[string]bool{name: true},
 			}}}
 			loaded := false

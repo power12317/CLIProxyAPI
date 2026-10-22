@@ -1,4 +1,4 @@
-# Plan B v3: one Codex master with independent account processes
+# Plan B: one Codex master with independent account processes
 
 This is the current approved Plan B. It supersedes the v1 Unix-socket prototype
 and v2 container-per-account deployment. CPA uses `codex/plan-b-managed-auth`,
@@ -75,7 +75,6 @@ stores are outside this test branch. Ordinary Responses HTTP/SSE is the implemen
 bridge operation; protocol capability negotiation declares the available operations.
 
 Use the generic [Compose overlay](compose.override.yaml) with your privately maintained deployment configuration.
-The exact frozen wire contract is [PROTOCOL_V3.md](PROTOCOL_V3.md). Earlier protocol
-and validation documents are historical and do not establish v3 test results.
+The exact frozen wire contract is [PROTOCOL.md](PROTOCOL.md). Superseded protocol and validation records are available in Git history.
 Pushes to each development branch trigger its Docker build. Delivery confirms the
 push and Actions trigger without waiting for the build, as requested by the user.

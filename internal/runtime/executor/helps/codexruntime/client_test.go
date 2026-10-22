@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
 )
 
 func serveMaster(t *testing.T, caps Capabilities, handle func(*websocket.Conn, message)) string {
@@ -35,6 +36,15 @@ func serveMaster(t *testing.T, caps Capabilities, handle func(*websocket.Conn, m
 			}
 			switch m.Method {
 			case "initialize":
+				var params struct {
+					ClientInfo struct {
+						Name    string `json:"name"`
+						Version string `json:"version"`
+					} `json:"clientInfo"`
+				}
+				if err := json.Unmarshal(m.Params, &params); err != nil || params.ClientInfo.Name != "cliproxyapi" || params.ClientInfo.Version != buildinfo.Version {
+					t.Errorf("initialize must carry the actual CPA build identity: %s", m.Params)
+				}
 				_ = conn.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read":
@@ -46,12 +56,12 @@ func serveMaster(t *testing.T, caps Capabilities, handle func(*websocket.Conn, m
 		}
 	}))
 	t.Cleanup(server.Close)
-	return "ws" + strings.TrimPrefix(server.URL, "http") + "/cpa/v1/ws"
+	return "ws" + strings.TrimPrefix(server.URL, "http") + "/"
 }
 
 func validCaps() Capabilities {
 	return Capabilities{
-		ProtocolVersion: ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha",
+		BusinessNotification: "cpa/inference/body", CompletionSemantics: "http-body-eof", DiagnosticsCompleted: false, ResponsesWebsocket: false, RuntimeVersion: "test", UpstreamRevision: "test-sha",
 		ExecutionMode: "inference-only", RawBody: true, Operations: []string{"responses"},
 		ManualOAuth: true, UpstreamLogs: true, UpstreamBodyLogs: true,
 	}
@@ -280,10 +290,10 @@ func TestUpstreamLogsDoNotCountAsUnrelatedNotifications(t *testing.T) {
 	}
 }
 
-func TestMasterRejectsOldProtocolAndParsedEventCapabilities(t *testing.T) {
+func TestMasterRejectsMissingRequiredBusinessCapabilities(t *testing.T) {
 	for _, change := range []func(*Capabilities){
-		func(c *Capabilities) { c.ProtocolVersion = 1 },
-		func(c *Capabilities) { c.ProtocolVersion = 2 },
+		func(c *Capabilities) { c.BusinessNotification = "" },
+		func(c *Capabilities) { c.CompletionSemantics = "" },
 		func(c *Capabilities) { c.ExecutionMode = "agent" },
 		func(c *Capabilities) { c.RawBody = false },
 	} {
@@ -431,7 +441,7 @@ func TestCancellationClosesOnlyRequestConnection(t *testing.T) {
 		t.Fatalf("OnClose invoked %d times", closeCount)
 	}
 	other := dialMaster(t, endpoint)
-	if other.Caps.ProtocolVersion != ProtocolVersion {
+	if other.Caps.BusinessNotification != "cpa/inference/body" {
 		t.Fatal("another master connection was affected")
 	}
 }
@@ -472,7 +482,7 @@ func TestExplicitReloadUsesOriginalCredentialID(t *testing.T) {
 	if err := client.Call("cpa/credential/reload", map[string]string{"credentialId": "Group/Account-A.json"}, &caps); err != nil {
 		t.Fatal(err)
 	}
-	if !caps.ManualOAuth || !caps.RawBody || caps.ProtocolVersion != 3 {
+	if !caps.ManualOAuth || !caps.RawBody || caps.CompletionSemantics != "http-body-eof" {
 		t.Fatal("reload did not return master capabilities", caps)
 	}
 }

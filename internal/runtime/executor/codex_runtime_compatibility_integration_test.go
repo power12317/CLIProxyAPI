@@ -382,7 +382,7 @@ func startCompatibleMainWorker(t *testing.T, binary, home, upstreamURL string) (
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	cfg := &config.Config{AuthDir: filepath.Join(home, "auths"), Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, URL: fmt.Sprintf("ws://127.0.0.1:%d/cpa/v1/ws", port)}}}
+	cfg := &config.Config{AuthDir: filepath.Join(home, "auths"), Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, URL: fmt.Sprintf("ws://127.0.0.1:%d/", port)}}}
 	auth := runtimeTestAuth("compatible-main.json")
 	runtimeImageAuth(t, cfg, auth)
 	auth.Attributes["base_url"] = upstreamURL + "/v1"
