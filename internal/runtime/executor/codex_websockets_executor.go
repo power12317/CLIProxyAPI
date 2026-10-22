@@ -79,7 +79,7 @@ func (e *CodexAutoExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth
 	if err != nil {
 		return err
 	}
-	if cliproxyauth.IsCodexRuntimeOwnedAuth(fresh) {
+	if bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(fresh) {
 		return runtimeError(400, "Use the Codex runtime for this credential")
 	}
 	auth = fresh

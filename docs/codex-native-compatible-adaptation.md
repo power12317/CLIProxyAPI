@@ -95,10 +95,10 @@ ignored; they neither fail the model nor contaminate another request's log.
 Safety-buffering response headers are retained with the existing safe header
 projection. Credentials and raw routing cookies are not exposed to clients.
 
-IPC stays at version 5. Paired upgrades are needed to obtain the new input
-capabilities: an older v5 worker can still reject a newly expressible option.
-CPA returns that actual worker error and never switches to direct model egress.
-A genuinely incompatible protocol/execution mode still fails negotiation.
+Paired upgrades provide the current input capabilities. A worker can reject an
+unsupported option with its concrete error; CPA never switches to direct model
+egress. Compatibility uses actual business notification, completion, diagnostic
+and transport capabilities rather than a private protocol number.
 
 ## Disposition of the original 81 observations
 
@@ -215,7 +215,7 @@ behavior when no model-only request controls are supplied.
 
 ### Recorded paired result
 
-The paired worker snapshot reports `codex-app-server 0.162.1`, IPC v5, SHA-256
+The pre-migration worker snapshot reported `codex-app-server 0.162.1`, SHA-256
 `bd9509a21b64e7258571e5ec42055e41fadacf0f4a2add88ee99c2bc32490adb`.
 
 | Check | Result |

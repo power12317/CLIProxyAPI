@@ -1,43 +1,90 @@
-# CPA / Codex inference bridge v1
+# Shared model-only RPC extension contract
 
-> Historical contract, superseded by [native model runtime contract](../../docs/codex-native-model-runtime.md). Do not use
-> this Unix-socket contract for deployment. Current deployment instructions are
-> in [README_CN.md](README_CN.md).
+Interface scope: main and codex/native-model-runtime, after their
+completed caller-input compatibility fixes. No upstream-main merge or executor
+unification is required. This contract contains no private protocol number,
+contractId, hash, or replacement branch-version gate.
 
-Transport: app-server WebSocket over a Unix-domain socket. One inference per connection. Normal app-server initialize (clientInfo, capabilities.experimentalApi=true), then initialized, precedes CPA calls. Notifications use the app-server envelope without a jsonrpc field. IDs for calls are integers; requestId is an opaque string.
+## Endpoint and initialization
 
-## Capabilities
+- Connect to ws://<host>:38317/ (root path). Health routes remain unchanged.
+- Keep the official initialize / initialized JSON-RPC message shapes, including
+  official clientInfo and capability behavior. clientInfo.version is the actual
+  caller product version; Codex Server child initialization remains 0.162.1.
+- The cpa/* model-only, credential, OAuth, diagnostics and ticket messages below
+  are explicit fork extensions carried by the official app-server envelope.
+  They are not official thread/start or turn/start and never execute client tools.
 
-`cpa/capabilities/read`, params `{}`:
+## Capability response
 
-```json
-{"protocolVersion":1,"runtimeVersion":"fork-version","upstreamRevision":"commit","credentialId":"worker-a","accountId":"workspace-id","authMode":"chatgpt","executionMode":"inference-only","rawEvents":true,"operations":["responses"],"persistentSessions":false}
-```
+Use cpa/capabilities/read after initialization. No private numeric protocol version is exchanged.
+Keep existing runtimeVersion, upstreamRevision, executionMode, rawBody,
+responseIdentityMapping, manualOAuth, upstreamLogs, upstreamBodyLogs and operations.
+Product/source metadata are informational and must not become protocol-number gates.
 
-accountId/authMode may be null while signed out. CPA must verify the protocol, credential ID, expected account, managed auth mode, execution mode, and requested operation before submitting. The worker must recheck account identity when submitting, including concurrent logout/account changes. Capability results never contain tokens.
+Only four small factual fields are added; ticketSnapshots is reused:
 
-## Inference
+| Field | main | native |
+| --- | --- | --- |
+| executionMode (existing) | inference-only | inference-only |
+| rawBody (existing) | true | true |
+| businessNotification | cpa/inference/body | cpa/inference/event |
+| completionSemantics | http-body-eof | native-terminal |
+| diagnosticsCompleted | false | true |
+| responsesWebsocket | false | true |
+| ticketSnapshots (existing on main) | true | false |
 
-`cpa/inference/start`:
+These describe actual behavior; they are not a new execution switch or opaque
+contract identifier. responsesWebsocket means the Responses implementation has a
+native WS path, not that every model/provider/configuration guarantees WS. HTTP-only
+requests cannot claim prewarming. Keep specific per-request unsupported errors.
+Missing optional ticketSnapshots means false. Do not require all capability fields
+to equal one fixed template. Reject only a genuinely missing required behavior or
+malformed essential field, and explain that behavior rather than a version mismatch.
 
-```json
-{"requestId":"opaque-id","credentialId":"worker-a","accountId":"workspace-id","operation":"responses","sourceFormat":"openai-response","sessionId":"caller-and-account-scoped-id","request":{"model":"model-id","input":[],"stream":true}}
-```
+## Request, business bytes and completion
 
-request carries Responses semantics, not an agent prompt. The worker validates supported fields and uses its own identity/auth metadata; it must not silently replace caller instructions/tools/tool_choice. CPA forwards no Authorization or Cookie header. persistentSessions=false requires rejection of previous_response_id and prewarm/generate=false. Compaction requires operations to include responses/compact.
+- cpa/inference/start/cancel and existing parameter/result shapes remain intact.
+  Keep requestId, credentialId, operation, sourceFormat, sessionId, imageApi and
+  the normalized business request; optional envelope additions remain tolerant.
+- The main-only captureTicketSnapshot feature is used only with ticketSnapshots.
+  A required snapshot on a worker that advertises false is unsupported; callers
+  must not pretend that a model success produced a ticket.
+- Register/accept both existing business notification names. Route the byte stream
+  using businessNotification. Each carries requestId and bodyBase64; decode once.
+- Main bytes retain raw HTTP business data; completed means HTTP EOF. CPA must
+  interpret response/image events to determine model-level success.
+- Native bytes are accepted native-parser business output; completed means native
+  model/image success. The completion notification remains payload-free.
+- Preserve real-time first event, continued deltas/partials and cancellation.
+  Errors after acceptance use cpa/inference/error and never successful completion.
+  No local Agent/tool loop, inference replay, or CPA direct-upstream fallback is added.
 
-After upstream headers, reply to start with `{requestId,statusCode,headers}` where headers is a map of arrays of strings. This reply MUST precede inference notifications. Non-success before acceptance uses JSON-RPC error `{code,message,data:{httpStatus}}`. CPA does not retry an ambiguous accepted request.
+## Diagnostics and tickets
 
-Ordered notifications:
-- `cpa/inference/event`: `{requestId,event:<complete upstream Responses JSON event>}`.
-- For compact: `cpa/inference/result`: `{requestId,body:<complete compact JSON>}`.
-- `cpa/inference/error`: `{requestId,httpStatus,message}` for an accepted request that fails.
-- `cpa/inference/completed`: `{requestId}`, exactly once after events/results/errors.
+- Keep existing cpa/inference/upstream payloads and original raw IPC logging.
+  Optional/unknown diagnostic details do not establish model success or fail it.
+- When diagnosticsCompleted is true, keep the independent diagnostic route alive
+  until cpa/inference/diagnostics/completed, in either order with business terminal.
+  When false, use main's existing lifecycle; do not wait for a nonexistent terminal.
+- Keep main cpa/inference/ticket payloads, privacy, opt-in, exchange provenance,
+  ordering and captured cookie expiry behavior. Native ticketSnapshots=false is
+  honest absence, not a reason to remove main's existing feature.
+- Retries belong to CPA/the client. Both worker model send paths remain zero-retry,
+  including reqwest protocol retries and post-401 authentication resubmission.
 
-A Responses request needs a valid response.completed/response.incomplete/response.failed terminal event, a raw upstream error event, or an explicit inference error; completed alone is not a model completion. Preserve wire fields and event order alongside parsed internal events without bypassing required safety buffering. Unknown events retain their raw JSON.
+## Deployment and verification
 
-`cpa/inference/cancel`, params `{requestId}`, result `{}`. Connection closure also cancels only that connection's inference. Runtime auth/background workers remain alive. Bounded queues propagate backpressure. No network read/idle/total inference timeout after connection establishment.
+Update root URLs consistently in repository scripts, examples, deployment docs,
+fixtures and tests. Keep port, health checks, credentials, product version,
+User-Agent, originator, binary names, image names, compose names and release triggers.
+Regenerate JSON/TS/Python/precomputed artifacts with the repository script.
 
-## Security and upgrades
+Verify both root-path handshakes and existing model-only flows: full tool/input/
+output schemas and explicit controls; body/event choice; EOF/native completion;
+independent native diagnostics; main ticket capture; image JSON/multipart/stream;
+actual first/delta delivery; cancellation and zero model retries. CPA owns its
+matching changes in its own repository; Codex Server modifies no CPA/CPAMP source.
 
-One persistent managed identity per worker. Private socket mount; do not expose a public unauthenticated listener. Never echo tokens, cookies, or request bodies in errors/logs. Strip upstream secret and hop-by-hop response headers. CPA namespaces sessions by caller, credential, and supplied conversation key. Unsupported operations fail closed; no silent downgrade to a legacy executor. Release metadata must identify upstream and fork revisions plus supported protocol major/capabilities. Real-account tests are separate from deterministic contract tests.
+Implementation artifacts and final immutable binaries will be recorded alongside
+this file. Deploy matching CPA and Codex Server images when upgrading from the removed endpoint.

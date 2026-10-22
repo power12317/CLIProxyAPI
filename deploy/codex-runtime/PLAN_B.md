@@ -1,4 +1,4 @@
-# Plan B v3: one Codex master with independent account processes
+# Plan B: one Codex master with independent account processes
 
 This is the current approved Plan B. It supersedes the v1 Unix-socket prototype
 and v2 container-per-account deployment. CPA uses `codex/plan-b-managed-auth`,

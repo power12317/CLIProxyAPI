@@ -5,7 +5,7 @@ import (
 	"net/url"
 )
 
-const DefaultCodexRuntimeURL = "ws://127.0.0.1:38317/cpa/v1/ws"
+const DefaultCodexRuntimeURL = "ws://127.0.0.1:38317/"
 
 // CodexRuntimeConfig selects the master and remembers per-credential preferences.
 type CodexRuntimeConfig struct {

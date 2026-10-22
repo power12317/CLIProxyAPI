@@ -44,7 +44,7 @@ func TestCodexRuntimeForkV3OAuthAndModeSwitch(t *testing.T) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/cpa/v1/ws", port)
+	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/", port)
 	h, sharedFile := runtimeHandler(t, false, endpoint)
 	if err := codexshared.Write(sharedFile, map[string]any{"type": "codex", "extension": "preserved", "codex_client_system": "windows"}); err != nil {
 		t.Fatal(err)

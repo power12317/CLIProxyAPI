@@ -58,7 +58,7 @@ func runtimeTestMaster(t *testing.T, id string, handle func(*websocket.Conn, run
 				_ = c.WriteJSON(map[string]any{"id": m.ID, "result": map[string]any{}})
 			case "initialized":
 			case "cpa/capabilities/read":
-				caps := bridge.Capabilities{ProtocolVersion: bridge.ProtocolVersion, RuntimeVersion: "test", UpstreamRevision: "test-sha", ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
+				caps := bridge.Capabilities{BusinessNotification: "cpa/inference/event", CompletionSemantics: "native-terminal", DiagnosticsCompleted: true, ResponsesWebsocket: true, RuntimeVersion: "test", UpstreamRevision: "test-sha", ExecutionMode: "inference-only", RawBody: true, UpstreamLogs: true, UpstreamBodyLogs: true, Operations: []string{"responses"}}
 				for _, apply := range customize {
 					apply(&caps)
 				}

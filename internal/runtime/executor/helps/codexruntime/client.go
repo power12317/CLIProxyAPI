@@ -1,10 +1,9 @@
-// Package codexruntime implements the versioned, request-scoped Codex bridge.
+// Package codexruntime carries model-only extensions over the Codex app-server RPC envelope.
 package codexruntime
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,10 +11,9 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
 	log "github.com/sirupsen/logrus"
 )
-
-const ProtocolVersion = 5
 
 // Error preserves native failures for CPA's ordinary retry policy. IPC failures
 // remain request-scoped because their upstream outcome is unknown.
@@ -38,7 +36,12 @@ func fail(status int, message string) error { return &Error{Status: status, Mess
 
 // Capabilities describes the master shared by all managed credentials.
 type Capabilities struct {
-	ProtocolVersion  int      `json:"protocolVersion"`
+	BusinessNotification string `json:"businessNotification"`
+	CompletionSemantics  string `json:"completionSemantics"`
+	DiagnosticsCompleted bool   `json:"diagnosticsCompleted"`
+	ResponsesWebsocket   bool   `json:"responsesWebsocket"`
+	TicketSnapshots      bool   `json:"ticketSnapshots"`
+
 	RuntimeVersion   string   `json:"runtimeVersion"`
 	UpstreamRevision string   `json:"upstreamRevision"`
 	ExecutionMode    string   `json:"executionMode"`
@@ -103,26 +106,27 @@ type incoming struct {
 }
 
 type Client struct {
-	inbox           *notificationQueue[incoming]
-	diagnostics     *notificationQueue[UpstreamLog]
-	diagnosticsDone chan struct{}
-	diagnosticsOnce sync.Once
-	receiving       atomic.Bool
-	finalReceived   atomic.Bool
-	nativeSuccess   atomic.Bool
-	conn            *websocket.Conn
-	ctx             context.Context
-	stop            func() bool
-	once            sync.Once
-	onClose         func()
-	nextID          int
-	requestID       string
-	done            bool
-	pending         []message
-	Caps            Capabilities
-	Headers         http.Header
-	StatusCode      int
-	OnUpstream      func(UpstreamLog)
+	inbox            *notificationQueue[incoming]
+	diagnostics      *notificationQueue[UpstreamLog]
+	diagnosticsDone  chan struct{}
+	diagnosticsOnce  sync.Once
+	receiving        atomic.Bool
+	finalReceived    atomic.Bool
+	nativeSuccess    atomic.Bool
+	upstreamResponse *UpstreamLog
+	conn             *websocket.Conn
+	ctx              context.Context
+	stop             func() bool
+	once             sync.Once
+	onClose          func()
+	nextID           int
+	requestID        string
+	done             bool
+	pending          []message
+	Caps             Capabilities
+	Headers          http.Header
+	StatusCode       int
+	OnUpstream       func(UpstreamLog)
 }
 
 // Dial opens the internal TCP bridge for inference or explicit management calls.
@@ -144,7 +148,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 	c := &Client{conn: conn, ctx: ctx, diagnosticsDone: make(chan struct{})}
 	// The local runtime bridge carries complete requests and upstream logs without a size limit.
 	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
-	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": "5"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
+	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": buildinfo.Version}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -156,9 +160,17 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		c.Close()
 		return nil, err
 	}
-	if c.Caps.ProtocolVersion != ProtocolVersion || c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawBody {
+	if c.Caps.ExecutionMode != "inference-only" || !c.Caps.RawBody {
 		c.Close()
-		return nil, fail(502, fmt.Sprintf("Codex runtime protocol or capabilities mismatch (requires protocol %d, got %d); upgrade CPA and codex-server together", ProtocolVersion, c.Caps.ProtocolVersion))
+		return nil, fail(502, "Codex runtime must provide model-only business bytes")
+	}
+	if c.Caps.BusinessNotification != "cpa/inference/body" && c.Caps.BusinessNotification != "cpa/inference/event" {
+		c.Close()
+		return nil, fail(502, "Codex runtime business notification is unsupported")
+	}
+	if c.Caps.CompletionSemantics != "http-body-eof" && c.Caps.CompletionSemantics != "native-terminal" {
+		c.Close()
+		return nil, fail(502, "Codex runtime completion semantics are unsupported")
 	}
 	return c, nil
 }
@@ -172,7 +184,7 @@ func (c *Client) Close() {
 		}
 		// A confirmed native result is independent of diagnostic delivery.
 		// Keep reading trailing logs until their own completion marker.
-		if !c.finalReceived.Load() {
+		if !c.Caps.DiagnosticsCompleted || !c.finalReceived.Load() {
 			_ = c.conn.Close()
 		}
 		if !c.receiving.Load() {
@@ -187,6 +199,9 @@ func (c *Client) Close() {
 func (c *Client) OnClose(fn func()) { c.onClose = fn }
 
 func (c *Client) NativeCompleted() bool { return c.nativeSuccess.Load() }
+
+// NativeTerminal reports whether completion is an authoritative model outcome.
+func (c *Client) NativeTerminal() bool { return c.Caps.CompletionSemantics == "native-terminal" }
 func (c *Client) ioError() error {
 	if c.ctx.Err() != nil {
 		return c.ctx.Err()
@@ -226,7 +241,13 @@ func (c *Client) call(method string, params, out any) error {
 		}
 		if len(m.ID) == 0 {
 			if strings.HasPrefix(m.Method, "cpa/inference/") {
-				c.pending = append(c.pending, m)
+				if !c.Caps.DiagnosticsCompleted && m.Method == "cpa/inference/upstream" && len(c.pending) == 0 {
+					if err := c.observeUpstream(m.Params); err != nil {
+						log.WithField("request_id", c.requestID).Warnf("Codex runtime diagnostic ignored: %v", err)
+					}
+				} else {
+					c.pending = append(c.pending, m)
+				}
 				continue
 			}
 			continue
@@ -272,13 +293,23 @@ func (c *Client) Start(req Request) error {
 	if json.Unmarshal(req.Request, &body) != nil || body == nil {
 		return fail(400, "Codex runtime request must be a JSON object")
 	}
+	if !c.Caps.ResponsesWebsocket && req.Operation == "responses" {
+		if v := body["previous_response_id"]; len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
+			return fail(400, "Codex runtime does not support previous_response_id on its HTTP sender")
+		}
+		if string(body["generate"]) == "false" {
+			return fail(400, "Codex runtime does not support prewarm on its HTTP sender")
+		}
+	}
 	var result struct {
 		RequestID  string      `json:"requestId"`
 		StatusCode int         `json:"statusCode"`
 		Headers    http.Header `json:"headers"`
 	}
 	c.requestID = req.RequestID
-	c.startReceiving(c.nextID + 1)
+	if c.Caps.DiagnosticsCompleted {
+		c.startReceiving(c.nextID + 1)
+	}
 	if err := c.call("cpa/inference/start", req, &result); err != nil {
 		return err
 	}
@@ -311,7 +342,13 @@ func (c *Client) Next() (Frame, error) {
 				return Frame{}, err
 			}
 		}
-		if m.Method != "cpa/inference/event" && m.Method != "cpa/inference/completed" && m.Method != "cpa/inference/error" {
+		if m.Method == "cpa/inference/upstream" {
+			if err := c.observeUpstream(m.Params); err != nil {
+				log.WithField("request_id", c.requestID).Warnf("Codex runtime diagnostic ignored: %v", err)
+			}
+			continue
+		}
+		if m.Method != c.Caps.BusinessNotification && m.Method != "cpa/inference/completed" && m.Method != "cpa/inference/error" {
 			// Optional notifications do not constitute model output or termination.
 			continue
 		}
@@ -328,10 +365,19 @@ func (c *Client) Next() (Frame, error) {
 			return Frame{}, fail(502, "Codex runtime body request identity mismatch")
 		}
 		switch m.Method {
-		case "cpa/inference/event":
+		case "cpa/inference/body", "cpa/inference/event":
+			if m.Method == "cpa/inference/body" {
+				entry := UpstreamLog{RequestID: p.RequestID, Kind: "body", BodyBytes: p.BodyBytes}
+				if c.diagnostics != nil {
+					c.diagnostics.push(entry)
+				} else if c.OnUpstream != nil {
+					c.OnUpstream(entry)
+				}
+			}
 			return Frame{Body: p.BodyBytes}, nil
 		case "cpa/inference/completed":
 			c.done = true
+			c.nativeSuccess.Store(c.NativeTerminal())
 			return Frame{}, io.EOF
 		case "cpa/inference/error":
 			c.done = true
@@ -361,13 +407,28 @@ func (c *Client) observeUpstream(raw json.RawMessage) error {
 	default:
 		return fail(502, "Unknown Codex runtime upstream log kind")
 	}
-	c.diagnostics.push(entry)
+	if c.diagnostics != nil {
+		c.diagnostics.push(entry)
+	} else {
+		switch entry.Kind {
+		case "request":
+			c.upstreamResponse = nil
+		case "response":
+			c.upstreamResponse = &entry
+		}
+		if c.OnUpstream != nil {
+			c.OnUpstream(entry)
+		}
+	}
 	return nil
 }
 
 // WaitDiagnostics joins log consumption only. Call after business delivery, never
 // before returning a frame or final model result to the HTTP consumer.
 func (c *Client) WaitDiagnostics() {
+	if !c.receiving.Load() {
+		return
+	}
 	<-c.diagnosticsDone
 }
 
@@ -432,7 +493,7 @@ func (c *Client) startReceiving(startID int) {
 					}
 					if json.Unmarshal(m.Params, &p) == nil && p.RequestID == c.requestID {
 						c.finalReceived.Store(true)
-						c.nativeSuccess.Store(m.Method == "cpa/inference/completed")
+						c.nativeSuccess.Store(c.NativeTerminal() && m.Method == "cpa/inference/completed")
 						if c.stop != nil {
 							c.stop()
 						}
@@ -449,13 +510,24 @@ func (c *Client) startReceiving(startID int) {
 
 func (c *Client) remoteError(status int, message, body string, headers http.Header, nativeError json.RawMessage) error {
 	// Attempt diagnostics cannot override the native executor's final outcome.
+	if !c.NativeTerminal() {
+		if last := c.upstreamResponse; last != nil && last.StatusCode >= 400 {
+			status = last.StatusCode
+			if body == "" {
+				body = last.Body
+			}
+			if len(headers) == 0 {
+				headers = last.Headers
+			}
+		}
+	}
 	if body != "" {
 		message = body
 	}
 	if message == "" {
 		message = "Codex runtime inference failed"
 	}
-	return &Error{Status: status, Message: message, Body: []byte(body), ResponseHeaders: SafeHeaders(headers), NativeError: nativeError, nativeFailure: true}
+	return &Error{Status: status, Message: message, Body: []byte(body), ResponseHeaders: SafeHeaders(headers), NativeError: nativeError, nativeFailure: c.NativeTerminal()}
 }
 
 func canonicalHeaders(headers http.Header) http.Header {

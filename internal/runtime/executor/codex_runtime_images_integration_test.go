@@ -271,7 +271,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	settings := config.CodexRuntimeConfig{Enabled: true, URL: fmt.Sprintf("ws://127.0.0.1:%d/cpa/v1/ws", port)}
+	settings := config.CodexRuntimeConfig{Enabled: true, URL: fmt.Sprintf("ws://127.0.0.1:%d/", port)}
 	cfg := &config.Config{Codex: config.CodexConfig{Runtime: settings}}
 	cfg.DisableImageGeneration = config.DisableImageGenerationPassthrough
 	cfg.RequestLog = true

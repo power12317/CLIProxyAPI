@@ -125,8 +125,9 @@ completed responses before the first diagnostic stream is released, and that
 both upstream exchanges are retained in the final log. The complete real-worker
 matrix passes 96 leaf cases with `-race`, alongside that diagnostic regression
 and the relevant handler/helper package tests. This is a CPA-only correction;
-IPC v5 and codex-server commit `6d9c1b9d5d3fe872e94608b428ae214e7ab90805`
-remain compatible.
+This recorded result predates the capability migration and used codex-server
+commit `6d9c1b9d5d3fe872e94608b428ae214e7ab90805`; current deployments use the
+[shared extension contract](../deploy/codex-runtime/PROTOCOL.md).
 
 ## WebSocket gateway node diagnostics
 
@@ -331,7 +332,7 @@ arrived before their next generation phases were released.
 
 The linked worker used for this validation has SHA256
 `d5541190215d37e16d9be9035539bff16301278abe9630e50565203afa048fb3`.
-Official identity and IPC remain `0.162.1` and v5. The mock services do not prove
+That pre-migration worker retained the official `0.162.1` identity. The mock services do not prove
 production prompt-cache hit rates or live ChatGPT acceptance.
 
 Complete OpenAI/API handler and helper package race tests, Codex executor race

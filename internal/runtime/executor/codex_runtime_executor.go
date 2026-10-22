@@ -133,6 +133,10 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 	if err != nil {
 		return nil, err
 	}
+	if coreexecutor.RequiredUpstreamWebsocket(ctx) && !client.Caps.ResponsesWebsocket {
+		client.Close()
+		return nil, runtimeError(400, "The Codex runtime sender does not support upstream WebSocket requests")
+	}
 	client.OnUpstream = upstreamLog.Record
 	upstreamLog.RawBody = true
 	upstreamLog.Bind(client)
@@ -178,6 +182,7 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 	outputItems := make(map[int64][]byte)
 	var outputFallback [][]byte
 	var terminal []byte
+	sawOutputDelta := false
 	for {
 		frame, errNext := reader.Next()
 		if errNext == io.EOF {
@@ -192,6 +197,16 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 		}
 		upstreamLog.Event(event)
 		reporter.ObserveResponseModel(event)
+		if !client.NativeTerminal() {
+			if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
+				return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
+			}
+			sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
+			if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
+				failure := newCodexEmptyIncompleteStreamError()
+				return resp, runtimeError(failure.StatusCode(), failure.Error())
+			}
+		}
 		switch gjson.GetBytes(event, "type").String() {
 		case "response.output_item.done":
 			collectCodexOutputItemDone(event, outputItems, &outputFallback)
@@ -271,10 +286,11 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 		claudeTokens := helps.NewClaudeInputTokenState(opts.SourceFormat, sdktranslator.FormatCodex, format, original)
 		outputItems := make(map[int64][]byte)
 		var outputFallback [][]byte
+		sawOutputDelta := false
 		terminal := false
 		var finalChunks []coreexecutor.StreamChunk
 		deliver := func(chunk coreexecutor.StreamChunk) bool {
-			if terminal {
+			if terminal && client.NativeTerminal() {
 				// Hold only terminal framing until the native success notification.
 				// A downstream client may cancel immediately upon seeing completion.
 				finalChunks = append(finalChunks, chunk)
@@ -323,6 +339,18 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 			}
 			upstreamLog.Event(event)
 			observeCodexTokenEvent(reporter, event)
+			if !client.NativeTerminal() {
+				if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
+					fail(&bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
+					return
+				}
+				sawOutputDelta = sawOutputDelta || helps.HasMeaningfulCodexOutputDelta(event)
+				if helps.IsCodexTerminalEmptyIncomplete(event, len(outputItems)+len(outputFallback), sawOutputDelta) {
+					failure := newCodexEmptyIncompleteStreamError()
+					fail(runtimeError(failure.StatusCode(), failure.Error()))
+					return
+				}
+			}
 			switch gjson.GetBytes(event, "type").String() {
 			case "response.output_item.done":
 				collectCodexOutputItemDone(event, outputItems, &outputFallback)
