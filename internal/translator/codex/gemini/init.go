@@ -22,7 +22,7 @@ func init() {
 		},
 	)
 	sdktranslator.RegisterRequestEnvelope(sdktranslator.FormatGemini, sdktranslator.FormatCodex, func(ctx context.Context, req sdktranslator.RequestEnvelope) sdktranslator.RequestEnvelope {
-		req.Body = convertGeminiRequestToCodex(req.Model, req.Body, req.Stream, translatorcommon.IsModelInput(ctx))
+		req.Body, req.Err = convertGeminiRequestToCodex(req.Model, req.Body, req.Stream, translatorcommon.IsModelInput(ctx))
 		return req
 	})
 }

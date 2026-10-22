@@ -270,7 +270,7 @@ func loadCodexCatalogTemplates() (map[string]map[string]any, map[string]any, uin
 			continue
 		}
 		templates[modelID] = model
-		if modelID == "gpt-5.5" {
+		if defaultTemplate == nil || modelID == "gpt-5.5" {
 			defaultTemplate = model
 		}
 	}
@@ -423,7 +423,7 @@ func codexSpawnAgentModelsFromSources(availableModels []map[string]any, catalogJ
 			continue
 		}
 		templates[modelID] = model
-		if modelID == "gpt-5.5" {
+		if defaultTemplate == nil || modelID == "gpt-5.5" {
 			defaultTemplate = model
 		}
 	}

@@ -50,6 +50,7 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 			System:               "windows",
 			RequestTurnStateLen:  292,
 			ResponseTurnStateLen: 312,
+			EffectiveServiceTier: "priority",
 			Generate:             coreusage.GenerateFlag(true),
 			RequestedAt:          time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC),
 			Latency:              1500 * time.Millisecond,
@@ -78,6 +79,7 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireStringField(t, payload, "user_agent", "test-client/1.0")
 		requireStringField(t, payload, "reasoning_effort", "medium")
 		requireStringField(t, payload, "service_tier", "auto")
+		requireStringField(t, payload, "effective_service_tier", "priority")
 		requireMissingField(t, payload, "request_service_tier")
 		requireStringField(t, payload, "response_service_tier", "default")
 		requireStringField(t, payload, "response_model", "gpt-5.6-luna")
@@ -235,6 +237,7 @@ func TestUsageQueuePluginEmitsSingleCanonicalAutoTier(t *testing.T) {
 
 		payload := popSinglePayload(t)
 		requireStringField(t, payload, "service_tier", "auto")
+		requireMissingField(t, payload, "effective_service_tier")
 		requireMissingField(t, payload, "request_service_tier")
 	})
 }
@@ -791,4 +794,86 @@ func TestUsageQueuePlugin_SchemeB_StrictLegacyRequestIDPreservation(t *testing.T
 	requireStringField(t, payload, "execution_id", execUUID)
 	// trace_id reflects the record.TraceID
 	requireStringField(t, payload, "trace_id", "custom-trace-id")
+}
+
+func TestUsageQueuePluginPayloadDistinguishesNativeKey(t *testing.T) {
+	withEnabledQueue(t, func() {
+		t.Run("native_key", func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			w := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(w)
+			ginCtx.Set("userApiKey", "sk-native-key-123")
+			ginCtx.Set("accessProvider", "config-inline")
+
+			ctx := context.WithValue(context.Background(), "gin", ginCtx)
+			ctx = internallogging.WithRequestID(ctx, "req-native-1")
+
+			plugin := &usageQueuePlugin{}
+			plugin.HandleUsage(ctx, coreusage.Record{
+				Provider: "openai",
+				Model:    "gpt-5.4",
+				APIKey:   "sk-native-key-123",
+			})
+
+			payload := popSinglePayload(t)
+			requireStringField(t, payload, "api_key", "sk-native-key-123")
+			requireBoolField(t, payload, "is_native_key", true)
+			requireStringField(t, payload, "access_provider", "config-inline")
+		})
+
+		t.Run("plugin_key", func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			w := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(w)
+			ginCtx.Set("userApiKey", "plugin-principal-456")
+			ginCtx.Set("accessProvider", "custom-auth-plugin")
+
+			ctx := context.WithValue(context.Background(), "gin", ginCtx)
+			ctx = internallogging.WithRequestID(ctx, "req-plugin-1")
+
+			plugin := &usageQueuePlugin{}
+			plugin.HandleUsage(ctx, coreusage.Record{
+				Provider: "openai",
+				Model:    "gpt-5.4",
+				APIKey:   "plugin-principal-456",
+			})
+
+			payload := popSinglePayload(t)
+			requireStringField(t, payload, "api_key", "plugin-principal-456")
+			requireBoolField(t, payload, "is_native_key", false)
+			requireStringField(t, payload, "access_provider", "custom-auth-plugin")
+		})
+
+		t.Run("record_explicit_native", func(t *testing.T) {
+			ctx := internallogging.WithRequestID(context.Background(), "req-explicit-1")
+
+			plugin := &usageQueuePlugin{}
+			plugin.HandleUsage(ctx, coreusage.Record{
+				Provider:       "openai",
+				Model:          "gpt-5.4",
+				APIKey:         "sk-explicit-native",
+				IsNativeKey:    true,
+				AccessProvider: "config-inline",
+			})
+
+			payload := popSinglePayload(t)
+			requireStringField(t, payload, "api_key", "sk-explicit-native")
+			requireBoolField(t, payload, "is_native_key", true)
+			requireStringField(t, payload, "access_provider", "config-inline")
+		})
+
+		t.Run("unauthenticated", func(t *testing.T) {
+			ctx := internallogging.WithRequestID(context.Background(), "req-unauth-1")
+
+			plugin := &usageQueuePlugin{}
+			plugin.HandleUsage(ctx, coreusage.Record{
+				Provider: "openai",
+				Model:    "gpt-5.4",
+			})
+
+			payload := popSinglePayload(t)
+			requireBoolField(t, payload, "is_native_key", false)
+			requireMissingField(t, payload, "access_provider")
+		})
+	})
 }

@@ -7,6 +7,8 @@
 package chat_completions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 
@@ -28,12 +30,14 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in OpenAI Responses API format
-func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
+func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) ([]byte, error) {
 	return convertOpenAIRequestToCodex(modelName, inputRawJSON, stream, false)
 }
 
-func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, modelInput bool) []byte {
+func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream bool, modelInputs ...bool) ([]byte, error) {
+	modelInput := len(modelInputs) > 0 && modelInputs[0]
 	rawJSON := inputRawJSON
+	var drops translatorcommon.UserTurnDrops
 	root := gjson.ParseBytes(rawJSON)
 	tools := root.Get("tools")
 	toolResults := tools.Array()
@@ -71,7 +75,7 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 	if serviceTier := normalizeCodexServiceTier(root.Get("service_tier")); serviceTier != "" {
 		out, _ = sjson.SetBytes(out, "service_tier", serviceTier)
 	}
-	out, _ = sjson.SetBytes(out, "parallel_tool_calls", true)
+	out, _ = sjson.SetBytes(out, "parallel_tool_calls", gjson.GetBytes(rawJSON, "parallel_tool_calls").Type != gjson.False)
 	// OpenAI documents reasoning summaries as explicit opt-in output. Leave
 	// reasoning.summary to the source request's canonical summary intent instead
 	// of coupling it to reasoning effort.
@@ -226,10 +230,13 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 				}
 
 				contentItems := make([][]byte, 0, 4)
+				// Counts the parts this user turn really sends; an empty text part does not.
+				turnSendable := 0
 
 				// Handle regular content
 				c := m.Get("content")
 				if c.Exists() && c.Type == gjson.String && c.String() != "" {
+					turnSendable++
 					// Single string content
 					partType := "input_text"
 					if role == "assistant" {
@@ -254,6 +261,9 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 							part, _ = sjson.SetBytes(part, "type", partType)
 							part, _ = sjson.SetBytes(part, "text", it.Get("text").String())
 							contentItems = append(contentItems, part)
+							if it.Get("text").String() != "" {
+								turnSendable++
+							}
 						case "image_url":
 							// Map image inputs to input_image for Responses API
 							if role == "user" {
@@ -263,19 +273,15 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 									part, _ = sjson.SetBytes(part, "image_url", u.String())
 								}
 								contentItems = append(contentItems, part)
+								turnSendable++
 							}
 						case "file":
 							if role == "user" {
-								fileData := it.Get("file.file_data").String()
-								filename := it.Get("file.filename").String()
-								if fileData != "" {
-									part := []byte(`{}`)
-									part, _ = sjson.SetBytes(part, "type", "input_file")
-									part, _ = sjson.SetBytes(part, "file_data", fileData)
-									if filename != "" {
-										part, _ = sjson.SetBytes(part, "filename", filename)
-									}
+								if part, ok := codexInputFilePart(it); ok {
 									contentItems = append(contentItems, part)
+									turnSendable++
+								} else {
+									drops.Drop(t)
 								}
 							}
 						case "input_audio":
@@ -290,10 +296,16 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 										part, _ = sjson.SetBytes(part, "format", audioFormat)
 									}
 									contentItems = append(contentItems, part)
+									turnSendable++
+								} else {
+									drops.Drop(t)
 								}
 							}
 						}
 					}
+				}
+				if role == "user" {
+					drops.EndTurn(turnSendable)
 				}
 
 				// Don't emit empty assistant messages when only tool_calls
@@ -346,6 +358,17 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 									callID = baseCallID + "_" + strconv.Itoa(suffix)
 								}
 								usedCallIDs[callID] = struct{}{}
+							}
+							// Codex rejects call_id values longer than 64 characters.
+							if shortID := shortenCodexCallIDIfNeeded(callID); shortID != callID {
+								for attempt := 1; ; attempt++ {
+									if _, used := usedCallIDs[shortID]; !used {
+										break
+									}
+									shortID = shortenCodexCallIDIfNeeded(callID + "_" + strconv.Itoa(attempt))
+								}
+								usedCallIDs[shortID] = struct{}{}
+								callID = shortID
 							}
 							pendingToolCalls = append(pendingToolCalls, pendingToolCall{
 								callID:       callID,
@@ -576,7 +599,7 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream, 
 			out, _ = sjson.DeleteBytes(out, "include")
 		}
 	}
-	return out
+	return out, drops.Err()
 }
 
 func setToolCallOutputContent(funcOutput []byte, content gjson.Result) []byte {
@@ -638,30 +661,39 @@ func toolOutputContentPart(item gjson.Result) []byte {
 		}
 		return part
 	case "file":
-		fileID := item.Get("file.file_id").String()
-		fileData := item.Get("file.file_data").String()
-		fileURL := item.Get("file.file_url").String()
-		if fileID == "" && fileData == "" && fileURL == "" {
-			return toolOutputFallbackPart(item)
+		if part, ok := codexInputFilePart(item); ok {
+			return part
 		}
-		part := []byte(`{}`)
-		part, _ = sjson.SetBytes(part, "type", "input_file")
-		if fileID != "" {
-			part, _ = sjson.SetBytes(part, "file_id", fileID)
-		}
-		if fileData != "" {
-			part, _ = sjson.SetBytes(part, "file_data", fileData)
-		}
-		if fileURL != "" {
-			part, _ = sjson.SetBytes(part, "file_url", fileURL)
-		}
-		if filename := item.Get("file.filename").String(); filename != "" {
-			part, _ = sjson.SetBytes(part, "filename", filename)
-		}
-		return part
+		return toolOutputFallbackPart(item)
 	default:
 		return toolOutputFallbackPart(item)
 	}
+}
+
+// codexInputFilePart maps a Chat Completions file part onto a Responses input_file
+// part. It reports false when the part names no file id, bytes or url.
+func codexInputFilePart(item gjson.Result) ([]byte, bool) {
+	fileID := item.Get("file.file_id").String()
+	fileData := item.Get("file.file_data").String()
+	fileURL := item.Get("file.file_url").String()
+	if fileID == "" && fileData == "" && fileURL == "" {
+		return nil, false
+	}
+	part := []byte(`{}`)
+	part, _ = sjson.SetBytes(part, "type", "input_file")
+	if fileID != "" {
+		part, _ = sjson.SetBytes(part, "file_id", fileID)
+	}
+	if fileData != "" {
+		part, _ = sjson.SetBytes(part, "file_data", fileData)
+	}
+	if fileURL != "" {
+		part, _ = sjson.SetBytes(part, "file_url", fileURL)
+	}
+	if filename := item.Get("file.filename").String(); filename != "" {
+		part, _ = sjson.SetBytes(part, "filename", filename)
+	}
+	return part, true
 }
 
 func hasToolOutputImagePart(content gjson.Result) bool {
@@ -856,4 +888,17 @@ func normalizeCodexServiceTier(result gjson.Result) string {
 	default:
 		return ""
 	}
+}
+
+// shortenCodexCallIDIfNeeded keeps client tool call IDs within the Codex
+// call_id limit with a deterministic, low-collision mapping.
+func shortenCodexCallIDIfNeeded(id string) string {
+	const limit = 64
+	if len(id) <= limit {
+		return id
+	}
+
+	sum := sha256.Sum256([]byte(id))
+	suffix := "_" + hex.EncodeToString(sum[:8])
+	return id[:limit-len(suffix)] + suffix
 }

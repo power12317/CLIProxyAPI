@@ -21,7 +21,7 @@ func init() {
 		},
 	)
 	sdktranslator.RegisterRequestEnvelope(sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, func(ctx context.Context, req sdktranslator.RequestEnvelope) sdktranslator.RequestEnvelope {
-		req.Body = convertOpenAIRequestToCodex(req.Model, req.Body, req.Stream, translatorcommon.IsModelInput(ctx))
+		req.Body, req.Err = convertOpenAIRequestToCodex(req.Model, req.Body, req.Stream, translatorcommon.IsModelInput(ctx))
 		return req
 	})
 }

@@ -262,7 +262,16 @@ func TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile(t *testing.T)
 	for _, status := range []string{"pending", "completed", "error"} {
 		t.Run(status, func(t *testing.T) {
 			mock := newRuntimeOAuthMock(t)
-			mock.start(t, "")
+			const credentialID = "existing-polled-account.json"
+			existingPath := bridge.CredentialPath(mock.h.cfg, credentialID)
+			writeRuntimeCredential(t, existingPath, false, map[string]any{"email": "polled@example.com"})
+			mock.h.syncRuntimeAuth(context.Background(), existingPath)
+			existing, found := mock.h.authManager.GetByID(credentialID)
+			if !found {
+				t.Fatal("existing credential was not loaded")
+			}
+			existing.EnsureIndex()
+			mock.start(t, "?auth_index="+url.QueryEscape(existing.Index))
 			path := bridge.CredentialPath(mock.h.cfg, mock.startedCredential())
 			metadata, err := codexshared.Read(path)
 			if err != nil {

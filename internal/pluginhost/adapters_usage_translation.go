@@ -167,20 +167,35 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 	if traceID == "" {
 		traceID = strings.TrimSpace(logging.GetRequestID(ctx))
 	}
+	accessProvider := strings.TrimSpace(record.AccessProvider)
+	if accessProvider == "" {
+		accessProvider = strings.TrimSpace(coreusage.AccessProviderFromContext(ctx))
+	}
+	isNativeKey := record.IsNativeKey
+	if !isNativeKey {
+		if nativeExplicit, ok := coreusage.IsNativeKeyFromContext(ctx); ok {
+			isNativeKey = nativeExplicit
+		} else if accessProvider != "" {
+			isNativeKey = coreusage.IsNativeAccessProvider(accessProvider)
+		}
+	}
+	apiKey := strings.TrimSpace(record.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(coreusage.APIKeyFromContext(ctx))
+	}
 	plugin.HandleUsage(ctx, pluginapi.UsageRecord{
 		RequestID:            requestID,
 		TraceID:              traceID,
-		ResponseServiceTier:  record.ResponseServiceTier,
-		Stream:               record.Stream,
 		Provider:             record.Provider,
 		BaseURL:              record.BaseURL,
 		ExecutorType:         record.ExecutorType,
 		Model:                record.Model,
 		Alias:                record.Alias,
-		ResponseModel:        record.ResponseModel,
-		OaiLBNode:            record.OaiLBNode,
-		APIKey:               record.APIKey,
+		APIKey:               apiKey,
+		IsNativeKey:          isNativeKey,
+		AccessProvider:       accessProvider,
 		SessionID:            sessionID,
+		OaiLBNode:            record.OaiLBNode,
 		TurnID:               record.TurnID,
 		ParentSessionID:      parentSessionID,
 		AuthID:               record.AuthID,
@@ -189,10 +204,14 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 		Source:               record.Source,
 		ReasoningEffort:      record.ReasoningEffort,
 		ServiceTier:          record.ServiceTier,
+		EffectiveServiceTier: record.EffectiveServiceTier,
+		ResponseServiceTier:  record.ResponseServiceTier,
+		ResponseModel:        record.ResponseModel,
+		Generate:             coreusage.GenerateEnabled(record.Generate),
+		Stream:               record.Stream,
 		System:               record.System,
 		RequestTurnStateLen:  record.RequestTurnStateLen,
 		ResponseTurnStateLen: record.ResponseTurnStateLen,
-		Generate:             coreusage.GenerateEnabled(record.Generate),
 		RequestedAt:          record.RequestedAt,
 		Latency:              record.Latency,
 		TTFT:                 record.TTFT,

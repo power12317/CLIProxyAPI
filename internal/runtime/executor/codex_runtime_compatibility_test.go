@@ -115,7 +115,10 @@ func TestCodexRuntimeChatCallRelationships(t *testing.T) {
 				t.Fatal(err)
 			}
 			e := &CodexExecutor{runtime: &CodexRuntimeExecutor{}}
-			_, actual, _ := e.translateRequestPair(sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, "runtime-model", body, body, false, nil, false)
+			_, actual, _, errTranslate := e.translateRequestPair(sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, "runtime-model", body, body, false, nil, false)
+			if errTranslate != nil {
+				t.Fatal(errTranslate)
+			}
 			calls := map[string]string{}
 			for _, item := range gjson.GetBytes(actual, "input").Array() {
 				switch item.Get("type").String() {
@@ -138,12 +141,21 @@ func TestCodexRuntimeChatCallRelationships(t *testing.T) {
 func TestCodexRuntimeTranslationDefaultsAndIdempotence(t *testing.T) {
 	e := &CodexExecutor{runtime: &CodexRuntimeExecutor{}}
 	body := []byte(`{"input":[{"role":"system","content":"policy"},{"role":"user","content":"question"}],"tools":[{"type":"function","name":"Read","input_schema":{"type":"object","properties":{}}}],"include":[],"parallel_tool_calls":false}`)
-	_, first, _ := e.translateRequestPair(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatCodex, "runtime-model", body, body, true, nil, false)
-	_, second, _ := e.translateRequestPair(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatCodex, "runtime-model", first, first, true, nil, false)
+	_, first, _, errTranslate := e.translateRequestPair(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatCodex, "runtime-model", body, body, true, nil, false)
+	if errTranslate != nil {
+		t.Fatal(errTranslate)
+	}
+	_, second, _, errTranslate := e.translateRequestPair(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatCodex, "runtime-model", first, first, true, nil, false)
+	if errTranslate != nil {
+		t.Fatal(errTranslate)
+	}
 	equalRuntimeJSON(t, first, second)
 	for _, source := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatClaude} {
 		input := []byte(`{"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","name":"Read"}]}`)
-		_, actual, _ := e.translateRequestPair(source, sdktranslator.FormatCodex, "runtime-model", input, input, true, nil, false)
+		_, actual, _, errTranslate := e.translateRequestPair(source, sdktranslator.FormatCodex, "runtime-model", input, input, true, nil, false)
+		if errTranslate != nil {
+			t.Fatal(errTranslate)
+		}
 		if gjson.GetBytes(actual, "reasoning.effort").Exists() || gjson.GetBytes(actual, "include").Exists() {
 			t.Fatalf("%s imposed Agent defaults on missing controls: %s", source, actual)
 		}
@@ -152,13 +164,19 @@ func TestCodexRuntimeTranslationDefaultsAndIdempotence(t *testing.T) {
 		}
 	}
 	input := []byte(`{"messages":[{"role":"user","content":"hello"}],"tool_choice":{"type":"none"}}`)
-	_, actual, _ := e.translateRequestPair(sdktranslator.FormatClaude, sdktranslator.FormatCodex, "runtime-model", input, input, true, nil, false)
+	_, actual, _, errTranslate := e.translateRequestPair(sdktranslator.FormatClaude, sdktranslator.FormatCodex, "runtime-model", input, input, true, nil, false)
+	if errTranslate != nil {
+		t.Fatal(errTranslate)
+	}
 	if gjson.GetBytes(actual, "tool_choice").String() != "none" {
 		t.Fatalf("explicit Claude tool choice was lost without declarations: %s", actual)
 	}
 	for _, format := range []string{`"response_format":{"type":"json_object"}`, `"response_format":{"type":"json_schema","json_schema":{"name":"client_result","strict":false,"schema":{"type":"string"}}}`, `"text":{"format":{"type":"json_schema","name":"client_result","strict":false,"schema":{"type":"string"}}}`} {
 		body := []byte(`{"messages":[{"role":"user","content":"hello"}],` + format + `}`)
-		_, actual, _ := e.translateRequestPair(sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, "runtime-model", body, body, true, nil, false)
+		_, actual, _, errTranslate := e.translateRequestPair(sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, "runtime-model", body, body, true, nil, false)
+		if errTranslate != nil {
+			t.Fatal(errTranslate)
+		}
 		if strings.Contains(format, "json_object") {
 			if gjson.GetBytes(actual, "text.format.type").String() != "json_object" {
 				t.Fatalf("Chat JSON-object format was lost: %s", actual)

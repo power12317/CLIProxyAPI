@@ -126,3 +126,35 @@ func TestSharedCodexReauthorizationReplacesTokensInOriginalFile(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSharedCodexStatusSavePreservesBothCredentialPartitions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shared-siwc.json")
+	disk := map[string]any{
+		"type": "codex", "access_token": "worker-new", "refresh_token": "worker-refresh",
+		"use_siwc": true, "siwc": map[string]any{"access_token": "siwc-new", "refresh_token": "siwc-refresh"},
+		"codex_cli": map[string]any{"enabled": true}, "extension": "keep",
+	}
+	if err := codexshared.Write(path, disk); err != nil {
+		t.Fatal(err)
+	}
+	store := NewFileTokenStore()
+	store.SetBaseDir(dir)
+	auth := &coreauth.Auth{ID: "shared-siwc.json", Provider: "codex", Disabled: true, Metadata: map[string]any{
+		"type": "codex", "access_token": "stale", "refresh_token": "stale",
+		"use_siwc": false, "siwc": map[string]any{"access_token": "stale"},
+		"codex_cli": map[string]any{"enabled": false},
+	}}
+	if _, err := store.Save(context.Background(), auth); err != nil {
+		t.Fatal(err)
+	}
+	got, err := codexshared.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := disk
+	want["disabled"], want["use_siwc"] = true, false
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("status and SIWC preference save changed credential partitions: got=%v want=%v", got, want)
+	}
+}
