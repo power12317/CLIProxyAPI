@@ -359,7 +359,7 @@ func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 				out, _ = sjson.SetRawBytes(out, mapping[1], []byte(value.Raw))
 			}
 		}
-		for _, path := range []string{"tool_choice", "parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_retention", "safety_identifier", "reasoning.context"} {
+		for _, path := range []string{"tool_choice", "parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_retention", "safety_identifier", "text", "reasoning.context"} {
 			if value := root.Get(path); value.Exists() {
 				out, _ = sjson.SetRawBytes(out, path, []byte(value.Raw))
 			}

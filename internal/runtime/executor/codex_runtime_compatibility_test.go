@@ -32,6 +32,7 @@ func TestCodexRuntimeCompatibleBusinessInput(t *testing.T) {
 				tool := []byte(`{"type":"function","name":"name","parameters":` + schema + `,"strict":false,"output_schema":{"type":"string"}}`)
 				tool, _ = sjson.SetBytes(tool, "name", name)
 				body := []byte(`{"model":"runtime-model","input":"hello","tool_choice":"none","parallel_tool_calls":false,"include":[],"store":false,"background":false,"generate":false,"service_tier":"flex","max_output_tokens":25,"prompt_cache_retention":"24h","stream_options":{"include_usage":true},"client_metadata":{"optional_trace":{"name":"WorkBuddy"},"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`)
+				body, _ = sjson.SetRawBytes(body, "text", []byte(`{"format":{"type":"json_schema","name":"source_result","strict":false,"schema":{"type":"string"}}}`))
 				if source == sdktranslator.FormatOpenAI {
 					function, _ := sjson.DeleteBytes(tool, "type")
 					body, _ = sjson.DeleteBytes(body, "input")
@@ -39,6 +40,7 @@ func TestCodexRuntimeCompatibleBusinessInput(t *testing.T) {
 					tool = append(append([]byte(`{"type":"function","function":`), function...), '}')
 				}
 				if source == sdktranslator.FormatClaude {
+					body, _ = sjson.SetRawBytes(body, "output_config.format", []byte(gjson.GetBytes(body, "text.format").Raw))
 					body, _ = sjson.DeleteBytes(body, "input")
 					body, _ = sjson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"hello"}]`))
 					body, _ = sjson.SetRawBytes(body, "tool_choice", []byte(`{"type":"none"}`))
@@ -69,7 +71,7 @@ func TestCodexRuntimeCompatibleBusinessInput(t *testing.T) {
 					t.Fatal(err)
 				}
 				actual := (<-captured).Request
-				for _, field := range []string{"tool_choice", "parallel_tool_calls", "include", "store", "background", "generate", "service_tier", "max_output_tokens", "prompt_cache_retention", "stream_options", "client_metadata.optional_trace"} {
+				for _, field := range []string{"tool_choice", "parallel_tool_calls", "include", "store", "background", "generate", "service_tier", "max_output_tokens", "prompt_cache_retention", "stream_options", "client_metadata.optional_trace", "text"} {
 					if source == sdktranslator.FormatClaude && field == "tool_choice" {
 						continue
 					}

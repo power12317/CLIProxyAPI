@@ -1,10 +1,22 @@
 package gemini
 
 import (
+	"context"
 	"testing"
 
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 )
+
+func TestModelInputPreservesExplicitTextContract(t *testing.T) {
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"text":{"verbosity":"low","format":{"type":"json_schema","name":"caller_result","strict":false,"schema":{"type":"object","properties":{"large":{"type":"integer","maximum":9007199254740993}},"additionalProperties":false}}}}`)
+	ctx := translatorcommon.WithModelInput(context.Background())
+	actual := sdktranslator.TranslateRequestEnvelope(ctx, sdktranslator.FormatGemini, sdktranslator.FormatCodex, sdktranslator.RequestEnvelope{Model: "model", Body: body, Stream: true})
+	if gjson.GetBytes(actual.Body, "text").Raw != gjson.GetBytes(body, "text").Raw {
+		t.Fatalf("explicit structured output contract was lost: %s", actual.Body)
+	}
+}
 
 func TestModelSchemaTypesDoNotRewriteBusinessValues(t *testing.T) {
 	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"tools":[{"functionDeclarations":[{"name":"Read","parameters":{"type":"OBJECT","$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"kind":{"type":"STRING","default":"UPPER"},"config":{"type":"OBJECT","default":{"type":"CaseSensitive"},"enum":[{"type":"KeepThis"}],"const":{"type":"KeepThat"}},"large":{"type":"INTEGER","maximum":9007199254740993}},"additionalProperties":true}}]}]}`)
