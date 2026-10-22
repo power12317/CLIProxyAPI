@@ -54,6 +54,18 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		authType = "unknown"
 	}
 	apiKey := strings.TrimSpace(record.APIKey)
+	accessProvider := strings.TrimSpace(record.AccessProvider)
+	if accessProvider == "" {
+		accessProvider = strings.TrimSpace(coreusage.AccessProviderFromContext(ctx))
+	}
+	isNativeKey := record.IsNativeKey
+	if !isNativeKey {
+		if nativeExplicit, ok := coreusage.IsNativeKeyFromContext(ctx); ok {
+			isNativeKey = nativeExplicit
+		} else if accessProvider != "" {
+			isNativeKey = coreusage.IsNativeAccessProvider(accessProvider)
+		}
+	}
 	requestID := strings.TrimSpace(internallogging.GetRequestID(ctx))
 	traceID := strings.TrimSpace(record.TraceID)
 	if traceID == "" {
@@ -74,6 +86,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	if serviceTier == "" {
 		serviceTier = coreusage.ServiceTierFromContext(ctx)
 	}
+	effectiveServiceTier := strings.TrimSpace(record.EffectiveServiceTier)
 	responseServiceTier := strings.TrimSpace(record.ResponseServiceTier)
 	responseModel := strings.TrimSpace(record.ResponseModel)
 	turnStateLen := ""
@@ -138,11 +151,6 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 
 	payload, err := json.Marshal(queuedUsageDetail{
-		ExecutionID:          executionID,
-		TraceID:              traceID,
-		NodeKind:             strings.TrimSpace(clientRequestMetadata.NodeKind),
-		IsFork:               clientRequestMetadata.IsFork,
-		IsCompaction:         clientRequestMetadata.IsCompaction,
 		requestDetail:        detail,
 		AccountingVersion:    coreusage.TokenAccountingSchemaVersion,
 		TokenBreakdown:       usageDetail.TokenBreakdown,
@@ -167,6 +175,14 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		TurnStateLen:         turnStateLen,
 		RequestTurnStateLen:  record.RequestTurnStateLen,
 		ResponseTurnStateLen: record.ResponseTurnStateLen,
+		IsNativeKey:          isNativeKey,
+		AccessProvider:       accessProvider,
+		ExecutionID:          executionID,
+		TraceID:              traceID,
+		NodeKind:             strings.TrimSpace(clientRequestMetadata.NodeKind),
+		IsFork:               clientRequestMetadata.IsFork,
+		IsCompaction:         clientRequestMetadata.IsCompaction,
+		EffectiveServiceTier: effectiveServiceTier,
 	})
 	if err != nil {
 		return
@@ -175,11 +191,6 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 }
 
 type queuedUsageDetail struct {
-	ExecutionID  string `json:"execution_id,omitempty"`
-	TraceID      string `json:"trace_id,omitempty"`
-	NodeKind     string `json:"node_kind,omitempty"`
-	IsFork       bool   `json:"is_fork,omitempty"`
-	IsCompaction bool   `json:"is_compaction,omitempty"`
 	requestDetail
 	AccountingVersion    int                      `json:"accounting_version"`
 	TokenBreakdown       coreusage.TokenBreakdown `json:"token_breakdown"`
@@ -204,6 +215,14 @@ type queuedUsageDetail struct {
 	TurnStateLen         string                   `json:"turn_state_len,omitempty"`
 	RequestTurnStateLen  int                      `json:"request_turn_state_len,omitempty"`
 	ResponseTurnStateLen int                      `json:"response_turn_state_len,omitempty"`
+	IsNativeKey          bool                     `json:"is_native_key"`
+	AccessProvider       string                   `json:"access_provider,omitempty"`
+	ExecutionID          string                   `json:"execution_id,omitempty"`
+	TraceID              string                   `json:"trace_id,omitempty"`
+	NodeKind             string                   `json:"node_kind,omitempty"`
+	IsFork               bool                     `json:"is_fork,omitempty"`
+	IsCompaction         bool                     `json:"is_compaction,omitempty"`
+	EffectiveServiceTier string                   `json:"effective_service_tier,omitempty"`
 }
 
 type requestDetail struct {

@@ -22,7 +22,7 @@ func init() {
 		},
 	)
 	sdktranslator.RegisterRequestEnvelope(sdktranslator.FormatClaude, sdktranslator.FormatCodex, func(ctx context.Context, req sdktranslator.RequestEnvelope) sdktranslator.RequestEnvelope {
-		req.Body = convertClaudeRequestToCodex(req.Model, req.Body, req.Stream, false, translatorcommon.IsModelInput(ctx))
+		req.Body, req.Err = convertClaudeRequestToCodex(req.Model, req.Body, req.Stream, false, translatorcommon.IsModelInput(ctx))
 		return req
 	})
 }

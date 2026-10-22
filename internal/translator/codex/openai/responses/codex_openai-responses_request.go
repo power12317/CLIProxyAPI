@@ -12,7 +12,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
+func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte, _ bool) ([]byte, error) {
 	rawJSON := inputRawJSON
 
 	inputResult := util.GetGJSONBytesNoCopy(rawJSON, "input")
@@ -26,7 +26,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = setCodexRequiredBool(rawJSON, "store", false)
 	// Preserve the original Lite contract across translation, including invalid
 	// explicitly supplied values so automatic detection cannot turn them into false.
-	if !gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").Exists() && gjson.GetBytes(rawJSON, "reasoning.context").String() != "all_turns" && !util.IsCodexResponsesLiteRequest(rawJSON, nil) {
+	if gjson.GetBytes(rawJSON, "parallel_tool_calls").Type != gjson.False && !gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").Exists() && gjson.GetBytes(rawJSON, "reasoning.context").String() != "all_turns" && !util.IsCodexResponsesLiteRequest(rawJSON, nil) {
 		rawJSON = setCodexRequiredBool(rawJSON, "parallel_tool_calls", true)
 	}
 	rawJSON = setCodexRequiredInclude(rawJSON)
@@ -63,7 +63,7 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = normalizeCodexBuiltinTools(rawJSON)
 	rawJSON = normalizeEmptyFunctionCallArguments(rawJSON)
 
-	return rawJSON
+	return rawJSON, nil
 }
 
 // convertOpenAIResponsesModelInput adapts public structure without imposing the

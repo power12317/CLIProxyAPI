@@ -24,7 +24,7 @@ func init() {
 		if translatorcommon.IsModelInput(ctx) {
 			req.Body = convertOpenAIResponsesModelInput(req.Body)
 		} else {
-			req.Body = ConvertOpenAIResponsesRequestToCodex(req.Model, req.Body, req.Stream)
+			req.Body, req.Err = ConvertOpenAIResponsesRequestToCodex(req.Model, req.Body, req.Stream)
 		}
 		return req
 	})

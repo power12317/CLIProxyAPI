@@ -21,7 +21,7 @@ func init() {
 		},
 	)
 	sdktranslator.RegisterRequestEnvelope(sdktranslator.FormatInteractions, sdktranslator.FormatCodex, func(ctx context.Context, req sdktranslator.RequestEnvelope) sdktranslator.RequestEnvelope {
-		req.Body = convertInteractionsRequestToCodex(req.Model, req.Body, req.Stream, translatorcommon.IsModelInput(ctx))
+		req.Body, req.Err = convertInteractionsRequestToCodex(req.Model, req.Body, req.Stream, translatorcommon.IsModelInput(ctx))
 		return req
 	})
 }

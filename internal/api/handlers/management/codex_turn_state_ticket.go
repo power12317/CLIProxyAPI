@@ -53,7 +53,13 @@ func (h *Handler) GetCodexTurnStateTicket(c *gin.Context) {
 // PutCodexTurnStateTicket updates the policy while preserving unrelated config
 // fields and comments through the normal management persistence path.
 func (h *Handler) PutCodexTurnStateTicket(c *gin.Context) {
-	if h == nil || h.cfg == nil {
+	if h == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "config unavailable"})
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cfg == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "config unavailable"})
 		return
 	}
@@ -112,7 +118,7 @@ func (h *Handler) PutCodexTurnStateTicket(c *gin.Context) {
 	if req.Models != nil {
 		policy.Models = req.Models
 	}
-	if !h.persist(c) {
+	if !h.persistLocked(c) {
 		return
 	}
 }
