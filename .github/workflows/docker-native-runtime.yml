@@ -44,7 +44,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate build metadata
         run: |
-          echo "VERSION=native-runtime-${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
+          echo "VERSION=v8.0.40" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build and push branch image
         uses: docker/build-push-action@v6
