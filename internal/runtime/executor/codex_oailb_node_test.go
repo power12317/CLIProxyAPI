@@ -126,7 +126,7 @@ func TestOaiLBReusedWebsocketKeepsHandshakeNode(t *testing.T) {
 				case "missing":
 					headers.Del("Cookie")
 				}
-				if existing, _ := existingWebsocketSessionConn(sess, credential.ID, u, proxy, helps.CodexConnectionFingerprint(credential, headers, proxy)); existing != conn {
+				if existing, _ := existingWebsocketSessionConn(sess, credential.ID, u, proxy, false, helps.CodexConnectionFingerprint(credential, headers, proxy)); existing != conn {
 					t.Fatalf("%s changed connection eligibility", state)
 				}
 				reporter := helps.NewUsageReporter(ctx, "codex", "model", credential)

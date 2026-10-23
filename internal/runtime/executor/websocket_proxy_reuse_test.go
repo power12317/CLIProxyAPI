@@ -17,20 +17,20 @@ func TestWebsocketSessionIsolatesReusableConnectionByProxy(t *testing.T) {
 		connCloser: closer,
 	}
 
-	if got, _ := existingWebsocketSessionConn(sess, "auth-1", sess.wsURL, "http://proxy-b.example:8082"); got != nil {
+	if got, _ := existingWebsocketSessionConn(sess, "auth-1", sess.wsURL, "http://proxy-b.example:8082", false); got != nil {
 		t.Fatal("reused websocket after proxy_url changed")
 	}
-	if got, _ := existingWebsocketSessionConn(sess, "auth-1", sess.wsURL, ""); got != nil {
+	if got, _ := existingWebsocketSessionConn(sess, "auth-1", sess.wsURL, "", false); got != nil {
 		t.Fatal("reused proxied websocket after proxy override was removed")
 	}
-	if got, _ := existingWebsocketSessionConn(sess, "auth-1", sess.wsURL, sess.proxyURL); got == nil {
+	if got, _ := existingWebsocketSessionConn(sess, "auth-1", sess.wsURL, sess.proxyURL, false); got == nil {
 		t.Fatal("did not reuse websocket for the same proxy")
 	}
-	if !websocketSessionTargetChanged(sess, "auth-1", sess.wsURL, "http://proxy-b.example:8082") {
+	if !websocketSessionTargetChanged(sess, "auth-1", sess.wsURL, "http://proxy-b.example:8082", false) {
 		t.Fatal("proxy change was not treated as a websocket target change")
 	}
 
-	detached, detachedCloser, _, _, _ := detachMismatchedWebsocketSessionConn(sess, "auth-1", sess.wsURL, "")
+	detached, detachedCloser, _, _, _ := detachMismatchedWebsocketSessionConn(sess, "auth-1", sess.wsURL, "", false)
 	if detached == nil || detachedCloser == nil {
 		t.Fatal("removing the proxy override did not detach the websocket")
 	}
