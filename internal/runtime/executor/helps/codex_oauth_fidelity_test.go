@@ -3,6 +3,7 @@ package helps
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -164,8 +165,8 @@ func TestConfigureCodexChatGPTUsageRequestUsesSystemProfile(t *testing.T) {
 		system string
 		wantUA string
 	}{
-		{name: "legacy defaults to mac", wantUA: "codex-tui/0.161.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.161.0)"},
-		{name: "windows", system: "windows", wantUA: "codex-tui/0.161.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.161.0)"},
+		{name: "legacy defaults to mac", wantUA: "codex-tui/0.163.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.163.0)"},
+		{name: "windows", system: "windows", wantUA: "codex-tui/0.163.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.163.0)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			auth := &cliproxyauth.Auth{
@@ -219,4 +220,72 @@ func TestCodexCookieJarsRemainIsolatedAcrossSystemCredentials(t *testing.T) {
 	}
 	InvalidateCodexCookieJar(macAuth.ID)
 	InvalidateCodexCookieJar(windowsAuth.ID)
+}
+
+func TestCodexQuotaRequestsReplaceLegacyManagementIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		path, method, reserve string
+	}{
+		{"/backend-api/wham/usage", http.MethodGet, "1"},
+		{"/backend-api/wham/rate-limit-reset-credits", http.MethodGet, ""},
+		{"/backend-api/wham/rate-limit-reset-credits/consume", http.MethodPost, ""},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path || r.Method != tc.method {
+					t.Errorf("request target = %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.UserAgent(); got != "codex-tui/0.163.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.163.0)" {
+					t.Errorf("outbound User-Agent = %q", got)
+				}
+				if got := r.Header.Get("X-OpenAI-Codex-Luna-Reserve"); got != tc.reserve {
+					t.Errorf("reserve header = %q, want %q", got, tc.reserve)
+				}
+				if r.Header.Get("Authorization") != "Bearer access" || r.Header.Get("ChatGPT-Account-ID") != "account" {
+					t.Error("missing ordinary OAuth account headers")
+				}
+				if r.Header.Get("Cookie") != "" || r.Header.Get("Version") != "" || r.Header.Get("Originator") != "" {
+					t.Error("quota request gained headers absent from the official backend client")
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "access", "account_id": "account"}}
+			req, err := http.NewRequest(tc.method, "https://chatgpt.com"+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("User-Agent", "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)")
+			req.Header.Set("Cookie", "stale=1")
+			if !ConfigureCodexChatGPTUsageRequest(req, auth) {
+				t.Fatal("quota request was not recognized")
+			}
+			target, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := resp.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, target := range []string{
+		"https://example.com/backend-api/wham/rate-limit-reset-credits",
+		"https://chatgpt.com/backend-api/wham/unknown",
+	} {
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("User-Agent", "caller")
+		auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "access"}}
+		if ConfigureCodexChatGPTUsageRequest(req, auth) || req.UserAgent() != "caller" {
+			t.Fatalf("unrelated request was modified: %s", target)
+		}
+	}
 }

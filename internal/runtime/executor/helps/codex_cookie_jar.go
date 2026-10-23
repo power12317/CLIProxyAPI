@@ -214,15 +214,25 @@ func IsCodexChatGPTUsageURL(rawURL string) bool {
 }
 
 // ConfigureCodexChatGPTUsageRequest applies the canonical OAuth usage headers.
-// It returns true only when req targets the first-party usage endpoint for a Codex OAuth auth.
+// It covers first-party usage and rate-limit-reset requests for Codex OAuth auth.
 func ConfigureCodexChatGPTUsageRequest(req *http.Request, auth *cliproxyauth.Auth) bool {
-	if req == nil || auth == nil || !CodexAuthUsesOAuthCookieJar(auth) || !IsCodexChatGPTUsageURL(req.URL.String()) {
+	if req == nil || auth == nil || !CodexAuthUsesOAuthCookieJar(auth) || !isAllowedCodexCookieURL(req.URL) {
+		return false
+	}
+	usageRequest := false
+	switch strings.ToLower(strings.TrimSuffix(req.URL.Path, "/")) {
+	case codexChatGPTUsagePath:
+		usageRequest = true
+	case "/backend-api/wham/rate-limit-reset-credits", "/backend-api/wham/rate-limit-reset-credits/consume":
+	default:
 		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+codexOAuthAccessToken(auth))
 	req.Header.Set("ChatGPT-Account-ID", codexOAuthAccountID(auth))
 	req.Header.Set("User-Agent", CodexOAuthUserAgent(auth))
-	req.Header.Set("X-OpenAI-Codex-Luna-Reserve", "1")
+	if usageRequest {
+		req.Header.Set("X-OpenAI-Codex-Luna-Reserve", "1")
+	}
 	req.Header.Del("Cookie")
 	return true
 }

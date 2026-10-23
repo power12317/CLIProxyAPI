@@ -10,7 +10,8 @@ contractId, hash, or replacement branch-version gate.
 - Connect to ws://<host>:38317/ (root path). Health routes remain unchanged.
 - Keep the official initialize / initialized JSON-RPC message shapes, including
   official clientInfo and capability behavior. clientInfo.version is the actual
-  caller product version; Codex Server child initialization remains 0.162.1.
+  caller product version; Codex Server child initialization uses its corresponding
+  official release version.
 - The cpa/* model-only, credential, OAuth, diagnostics and ticket messages below
   are explicit fork extensions carried by the official app-server envelope.
   They are not official thread/start or turn/start and never execute client tools.
