@@ -29,8 +29,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
-	apiKey, baseURL := codexCreds(auth)
-	if errSIWC := ensureCodexSIWCCredentials(auth, apiKey); errSIWC != nil {
+	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
+	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey, opts.Headers); errSIWC != nil {
 		return resp, errSIWC
 	}
 	if baseURL == "" {
@@ -76,7 +76,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		body, _ = sjson.DeleteBytes(body, "safety_identifier")
 		body, _ = sjson.DeleteBytes(body, "stream_options")
 	}
-	useSIWC := codexUseSIWC(auth)
+	useSIWC := codexUseSIWCForRequest(ctx, auth, opts.Headers)
 	if !useSIWC {
 		body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
 	}
@@ -301,8 +301,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
-	apiKey, baseURL := codexCreds(auth)
-	if errSIWC := ensureCodexSIWCCredentials(auth, apiKey); errSIWC != nil {
+	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
+	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey, opts.Headers); errSIWC != nil {
 		return resp, errSIWC
 	}
 	if baseURL == "" {
@@ -345,7 +345,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
 		body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 	}
-	if !codexUseSIWC(auth) {
+	if !codexUseSIWCForRequest(ctx, auth, opts.Headers) {
 		body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
 	} else {
 		hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
@@ -360,7 +360,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 
 	var compactIdentity helps.CodexOAuthIdentity
 	compactOAuth := false
-	if !codexUseSIWC(auth) && (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
+	if !codexUseSIWCForRequest(ctx, auth, opts.Headers) && (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, compactIdentity, compactOAuth = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"

@@ -31,8 +31,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
-	apiKey, baseURL := codexCreds(auth)
-	if errSIWC := ensureCodexSIWCCredentials(auth, apiKey); errSIWC != nil {
+	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
+	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey, opts.Headers); errSIWC != nil {
 		return nil, errSIWC
 	}
 	if baseURL == "" {
@@ -86,7 +86,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if e.runtime != nil {
 		body = helps.SetBoolIfDifferent(body, "stream", true)
 	}
-	useSIWC := codexUseSIWC(auth)
+	useSIWC := codexUseSIWCForRequest(ctx, auth, opts.Headers)
 	if !useSIWC {
 		body = normalizeCodexInstructions(body, preserveNativeOutput)
 	}

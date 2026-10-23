@@ -92,7 +92,7 @@ func TestCodexTopicConnectionCompatibility(t *testing.T) {
 			wantReplace := change == "token" || change == "proxy"
 			proxyURL := executionProxyURL(t.Context(), e.cfg, credential)
 			fingerprint := helps.CodexConnectionFingerprint(credential, headers, proxyURL)
-			existing, _ := existingWebsocketSessionConn(sess, credential.ID, url, proxyURL, fingerprint)
+			existing, _ := existingWebsocketSessionConn(sess, credential.ID, url, proxyURL, false, fingerprint)
 			if (existing == nil) != wantReplace {
 				t.Fatalf("required-connection lookup mismatch: got %p, replace=%t", existing, wantReplace)
 			}

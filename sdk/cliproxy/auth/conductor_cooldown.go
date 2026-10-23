@@ -881,7 +881,7 @@ func isStaleExecutionResult(result Result, current *Auth) bool {
 	if staleEpoch {
 		return true
 	}
-	if result.AccessToken != "" && authAccessToken(current) == result.AccessToken {
+	if result.AccessToken != "" && authMatchesTokenPartition(current, result.AccessToken) {
 		return false
 	}
 	staleVersion := result.CredentialVersion < current.CredentialVersion && (result.CredentialVersion > 0 || current.CredentialVersion > 1)
@@ -1323,7 +1323,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		if rejectsToken {
 			tokenToReject := result.AccessToken
 			if tokenToReject == "" {
-				tokenToReject = authAccessToken(auth)
+				tokenToReject = authAccessTokenForRequest(ctx, auth, result.Options.Headers)
 			}
 			_ = recordRejectedTokenOnAuth(auth, tokenToReject)
 		}
@@ -1425,7 +1425,7 @@ func (m *Manager) recordExecutionResult(ctx context.Context, result Result, auth
 			result.RegistrationEpoch = auth.RegistrationEpoch
 		}
 		if result.AccessToken == "" {
-			result.AccessToken = authAccessToken(auth)
+			result.AccessToken = authAccessTokenForRequest(ctx, auth, result.Options.Headers)
 		}
 	}
 	if !ephemeral {

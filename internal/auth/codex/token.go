@@ -146,6 +146,9 @@ func MergeWithDiskMap(diskMap, incomingMap map[string]any) map[string]any {
 		if value == nil {
 			continue
 		}
+		if key == "allow_codex_client_siwc" && len(diskMap) > 0 {
+			continue
+		}
 		if key == "siwc" || key == "use_siwc" || key == "codex_cli" {
 			if _, exists := diskMap[key]; exists {
 				continue

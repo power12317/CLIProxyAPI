@@ -279,7 +279,7 @@ func mergeAuthContent(base, current, updated *Auth) *Auth {
 		if baseMeta != nil {
 			for k, baseVal := range baseMeta {
 				trimmedKey := strings.ToLower(strings.TrimSpace(k))
-				if trimmedKey == "proxy_url" || trimmedKey == "siwc" || trimmedKey == "use_siwc" {
+				if trimmedKey == "proxy_url" || trimmedKey == "siwc" || trimmedKey == "use_siwc" || trimmedKey == "allow_codex_client_siwc" {
 					continue
 				}
 				if _, inUpdated := updated.Metadata[k]; !inUpdated {

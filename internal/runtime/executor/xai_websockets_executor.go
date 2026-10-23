@@ -545,7 +545,7 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	var respHS *http.Response
 	var errDial error
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sessCfg, auth))
+		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sessCfg, auth), false)
 		if conn == nil {
 			unlockStreamSession()
 			return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
@@ -1212,7 +1212,7 @@ func (e *XAIWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *cl
 	}
 
 	proxyURL := executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth)
-	if staleConn, staleCloser, staleAuthID, staleWSURL, staleLifecycle := detachMismatchedWebsocketSessionConn(sess, authID, wsURL, proxyURL); staleConn != nil {
+	if staleConn, staleCloser, staleAuthID, staleWSURL, staleLifecycle := detachMismatchedWebsocketSessionConn(sess, authID, wsURL, proxyURL, false); staleConn != nil {
 		staleLastEvent := sess.getLastEventType(staleConn)
 		logXAIWebsocketDisconnectedWithLastEvent(sess, sess.sessionID, staleAuthID, staleWSURL, "target_changed", staleLastEvent, nil)
 		if staleCloser != nil {
