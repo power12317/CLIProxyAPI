@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,9 +105,7 @@ func (h *Handler) completeRuntimeOAuth(c *gin.Context, state string, metadata ma
 		}
 		bridge.CancelCredential(path)
 		// Stop the old worker before removal so a refresh cannot recreate its UUID file.
-		placeholder := maps.Clone(credential)
-		placeholder["codex_cli"] = map[string]any{"enabled": false}
-		if err := codexshared.Write(path, placeholder); err != nil {
+		if err := bridge.SetCredentialEnabled(path, false); err != nil {
 			runtimeHTTPError(c, fmt.Errorf("disable Codex OAuth placeholder: %w", err))
 			return false
 		}

@@ -3,6 +3,7 @@ package codexruntime
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -56,7 +57,7 @@ func TestCodexSharedModeAndOriginalFileIdentity(t *testing.T) {
 	dir := t.TempDir()
 	id := "team/中文 Original.JSON"
 	path := filepath.Join(dir, id)
-	metadata := map[string]any{"type": "codex", "access_token": "latest", "refresh_token": "latest-refresh", "extension": true, "codex_cli": map[string]any{"enabled": true, "owner": "codex", "worker_id": "old"}}
+	metadata := map[string]any{"type": "codex", "access_token": "latest", "refresh_token": "latest-refresh", "extension": true, "use_siwc": true, "siwc": map[string]any{"access_token": "siwc-current", "refresh_token": "siwc-refresh"}, "codex_cli": map[string]any{"enabled": true, "owner": "codex", "worker_id": "old"}}
 	if err := codexshared.Write(path, metadata); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +70,9 @@ func TestCodexSharedModeAndOriginalFileIdentity(t *testing.T) {
 		}
 		state, _ := codexshared.Get(got)
 		flags := got["codex_cli"].(map[string]any)
+		if got["use_siwc"] != true || !reflect.DeepEqual(got["siwc"], metadata["siwc"]) {
+			t.Fatal("mode update changed the SIWC partition", got)
+		}
 		if state.Enabled != enabled || got["access_token"] != "latest" || got["extension"] != true || flags["owner"] != nil || flags["worker_id"] != nil {
 			t.Fatal(got)
 		}

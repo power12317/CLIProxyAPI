@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -251,8 +252,7 @@ func reconcileState(cfg *config.Config, credentialIDs ...string) (bool, error) {
 			continue
 		}
 		CancelCredential(credential.Path)
-		codexshared.Set(credential.Metadata, codexshared.State{Enabled: enabled})
-		if err := codexshared.Write(credential.Path, credential.Metadata); err != nil {
+		if err := SetCredentialEnabled(credential.Path, enabled); err != nil {
 			return changed, fmt.Errorf("write Codex mode for credential %q: %w", credential.ID, err)
 		}
 		changed = true
@@ -298,4 +298,16 @@ func ReloadCredentials(ctx context.Context, cfg *config.Config) error {
 	}
 	defer client.Close()
 	return client.Call("cpa/credential/reload", map[string]any{}, nil)
+}
+
+// SetCredentialEnabled updates only the worker flag under the shared credential lock.
+func SetCredentialEnabled(path string, enabled bool) error {
+	return codex.WithFileLock(path, func() error {
+		metadata, err := codexshared.Read(path)
+		if err != nil {
+			return err
+		}
+		codexshared.Set(metadata, codexshared.State{Enabled: enabled})
+		return codex.WriteJSONFileAtomic(path, metadata)
+	})
 }
