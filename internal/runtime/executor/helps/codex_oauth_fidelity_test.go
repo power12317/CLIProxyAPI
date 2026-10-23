@@ -165,8 +165,8 @@ func TestConfigureCodexChatGPTUsageRequestUsesSystemProfile(t *testing.T) {
 		system string
 		wantUA string
 	}{
-		{name: "legacy defaults to mac", wantUA: "codex-tui/0.163.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.163.0)"},
-		{name: "windows", system: "windows", wantUA: "codex-tui/0.163.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.163.0)"},
+		{name: "legacy defaults to mac", wantUA: "codex-tui/0.164.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.164.0)"},
+		{name: "windows", system: "windows", wantUA: "codex-tui/0.164.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.164.0)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			auth := &cliproxyauth.Auth{
@@ -235,7 +235,7 @@ func TestCodexQuotaRequestsReplaceLegacyManagementIdentity(t *testing.T) {
 				if r.URL.Path != tc.path || r.Method != tc.method {
 					t.Errorf("request target = %s %s", r.Method, r.URL.Path)
 				}
-				if got := r.UserAgent(); got != "codex-tui/0.163.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.163.0)" {
+				if got := r.UserAgent(); got != "codex-tui/0.164.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.164.0)" {
 					t.Errorf("outbound User-Agent = %q", got)
 				}
 				if got := r.Header.Get("X-OpenAI-Codex-Luna-Reserve"); got != tc.reserve {
