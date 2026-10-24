@@ -78,6 +78,14 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 		}
 		workerCalls.Add(1)
 		requests <- body
+		lite := r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite") == "true"
+		if lite && gjson.GetBytes(body, "parallel_tool_calls").Type != gjson.False ||
+			bytes.Contains(body, []byte("native-lite-parallel-probe")) && !lite {
+			t.Error("worker sent an invalid native Lite/parallel combination")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"native Lite requires parallel_tool_calls=false"}}`)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer synthetic-worker-token" {
 			t.Error("model request did not use worker credentials")
 		}
@@ -367,6 +375,12 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 			t.Fatal("worker model request survived cancellation")
 		}
 		read(t)
+	})
+	t.Run("native_lite_parallel_calls", func(t *testing.T) {
+		testCodexRuntimeLiteParallelCalls(t, cfg, auth, read)
+	})
+	t.Run("native_history_field_replay", func(t *testing.T) {
+		testCodexRuntimeNativeFieldReplay(t, cfg, auth, nil, read)
 	})
 	if cpaCalls.Load() != 0 {
 		t.Fatalf("CPA directly sent %d model requests", cpaCalls.Load())

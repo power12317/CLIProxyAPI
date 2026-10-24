@@ -149,6 +149,9 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 					message := []byte(`{"type":"message","role":""}`)
 					message, _ = sjson.SetBytes(message, "role", messageRole)
 					message, _ = sjson.SetRawBytes(message, "content", translatorcommon.JoinRawArray(contentItems))
+					if modelInput {
+						message = translatorcommon.PreserveModelInputFields(message, messageResult, "type", "role", "content")
+					}
 					inputItems = append(inputItems, message)
 					contentItems = contentItems[:0]
 				}
@@ -235,6 +238,10 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 							pendingSystemReminders = nil
 						}
 						appendTextContent(messageContentResult.Get("text").String())
+						if modelInput {
+							last := len(contentItems) - 1
+							contentItems[last] = translatorcommon.PreserveModelInputFields(contentItems[last], messageContentResult, "type", "text", "cache_control")
+						}
 					case "thinking":
 						appendReasoningContent(messageContentResult)
 					case "image":
@@ -274,6 +281,9 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 							functionCallMessage, _ = sjson.SetBytes(functionCallMessage, "name", name)
 						}
 						functionCallMessage, _ = sjson.SetBytes(functionCallMessage, "arguments", messageContentResult.Get("input").Raw)
+						if modelInput {
+							functionCallMessage = translatorcommon.PreserveModelInputFields(functionCallMessage, messageContentResult, "type", "id", "name", "input", "arguments", "call_id")
+						}
 						inputItems = append(inputItems, functionCallMessage)
 					case "tool_result":
 						flushMessage()
@@ -311,7 +321,12 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 								} else if toolResultContentType == "text" {
 									toolResultContent := []byte(`{"type":"input_text","text":""}`)
 									toolResultContent, _ = sjson.SetBytes(toolResultContent, "text", contentResults[k].Get("text").String())
+									if modelInput {
+										toolResultContent = translatorcommon.PreserveModelInputFields(toolResultContent, contentResults[k], "type", "text", "cache_control")
+									}
 									toolResultContentItems = append(toolResultContentItems, toolResultContent)
+								} else if modelInput {
+									toolResultContentItems = append(toolResultContentItems, []byte(contentResults[k].Raw))
 								}
 							}
 							if len(toolResultContentItems) > 0 {
@@ -325,6 +340,11 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 
 						inputItems = append(inputItems, functionCallOutputMessage)
 						turnSendable++
+					default:
+						if modelInput {
+							contentItems = append(contentItems, []byte(messageContentResult.Raw))
+							bufferedSendable++
+						}
 					}
 				}
 				flushMessage()
@@ -355,11 +375,11 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 	hasWebSearchTool := false
 	var toolItems [][]byte
 	if modelInput && !toolsResult.IsArray() && rootResult.Get("tool_choice").Exists() {
-		template, _ = sjson.SetRawBytes(template, "tool_choice", convertClaudeToolChoiceToCodex(rootResult.Get("tool_choice"), toolNameMap, nil))
+		template, _ = sjson.SetRawBytes(template, "tool_choice", convertClaudeToolChoiceToCodex(rootResult.Get("tool_choice"), toolNameMap, nil, modelInput))
 	}
 	if toolsResult.IsArray() {
 		webSearchToolNames := buildClaudeWebSearchToolNameSet(toolsResult)
-		template, _ = sjson.SetRawBytes(template, "tool_choice", convertClaudeToolChoiceToCodex(rootResult.Get("tool_choice"), toolNameMap, webSearchToolNames))
+		template, _ = sjson.SetRawBytes(template, "tool_choice", convertClaudeToolChoiceToCodex(rootResult.Get("tool_choice"), toolNameMap, webSearchToolNames, modelInput))
 		toolResults := toolsResult.Array()
 		toolItems = make([][]byte, 0, len(toolResults))
 		for i := 0; i < len(toolResults); i++ {
@@ -367,7 +387,16 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 			// Special handling: map Claude web search tool to Codex web_search
 			if isClaudeWebSearchToolType(toolResult.Get("type").String()) {
 				hasWebSearchTool = true
-				toolItems = append(toolItems, convertClaudeWebSearchToolToCodex(toolResult))
+				tool := convertClaudeWebSearchToolToCodex(toolResult)
+				if modelInput {
+					tool = translatorcommon.PreserveModelInputFields(tool, toolResult, "type", "name", "allowed_domains", "user_location", "cache_control")
+				}
+				toolItems = append(toolItems, tool)
+				continue
+			}
+			if kind := toolResult.Get("type").String(); modelInput && kind != "" && kind != "function" {
+				// An explicit native declaration is not a Claude function alias.
+				toolItems = append(toolItems, []byte(toolResult.Raw))
 				continue
 			}
 			tool := []byte(toolResult.Raw)
@@ -380,7 +409,7 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 				name := originalName
 				if short, ok := toolNameMap[name]; ok {
 					name = short
-				} else {
+				} else if !modelInput {
 					name = shortenNameIfNeeded(name)
 				}
 				if v.Type != gjson.String || name != originalName {
@@ -504,11 +533,7 @@ func convertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 	}
 	template = translatorcommon.SetRawArrayItems(template, "input", inputItems)
 	if modelInput {
-		for _, path := range []string{"parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_tokens", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "safety_identifier", "reasoning.context"} {
-			if value := rootResult.Get(path); value.Exists() {
-				template, _ = sjson.SetRawBytes(template, path, []byte(value.Raw))
-			}
-		}
+		template = translatorcommon.PreserveModelInputFields(template, rootResult, "model", "messages", "input", "system", "tools", "tool_choice", "thinking", "output_config", "speed")
 	}
 
 	return template, drops.Err()
@@ -569,7 +594,8 @@ func buildClaudeWebSearchToolNameSet(tools gjson.Result) map[string]struct{} {
 	return names
 }
 
-func convertClaudeToolChoiceToCodex(toolChoice gjson.Result, toolNameMap map[string]string, webSearchToolNames map[string]struct{}) []byte {
+func convertClaudeToolChoiceToCodex(toolChoice gjson.Result, toolNameMap map[string]string, webSearchToolNames map[string]struct{}, modelInputs ...bool) []byte {
+	modelInput := len(modelInputs) > 0 && modelInputs[0]
 	if !toolChoice.Exists() || toolChoice.Type == gjson.Null {
 		return []byte(`"auto"`)
 	}
@@ -596,14 +622,20 @@ func convertClaudeToolChoiceToCodex(toolChoice gjson.Result, toolNameMap map[str
 		} else {
 			name = shortenNameIfNeeded(name)
 		}
-		if name == "" {
+		if name == "" && !modelInput {
 			return []byte(`"auto"`)
 		}
 
 		choice := []byte(`{"type":"function","name":""}`)
 		choice, _ = sjson.SetBytes(choice, "name", name)
+		if modelInput {
+			choice = translatorcommon.PreserveModelInputFields(choice, toolChoice, "type", "name", "disable_parallel_tool_use")
+		}
 		return choice
 	default:
+		if modelInput {
+			return []byte(toolChoice.Raw)
+		}
 		return []byte(`"auto"`)
 	}
 }

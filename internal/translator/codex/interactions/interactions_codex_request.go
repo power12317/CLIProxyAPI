@@ -31,11 +31,7 @@ func convertInteractionsRequestToCodex(modelName string, inputRawJSON []byte, st
 	out = copyInteractionsToolsToCodex(out, root, modelInput)
 	out = copyInteractionsCodexTopLevel(out, root)
 	if modelInput {
-		for _, path := range []string{"include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_retention", "safety_identifier", "text", "reasoning.context"} {
-			if value := root.Get(path); value.Exists() {
-				out, _ = sjson.SetRawBytes(out, path, []byte(value.Raw))
-			}
-		}
+		out = translatorcommon.PreserveModelInputFields(out, root, "model", "input", "system_instruction", "systemInstruction", "tools", "generation_config", "generationConfig")
 	}
 	if !modelInput {
 		out = ensureInteractionsCodexEncryptedContentInclude(out)
@@ -250,6 +246,17 @@ func appendInteractionsStepToCodex(items *[][]byte, step gjson.Result, defaultRo
 		return
 	}
 	stepType := strings.ToLower(strings.TrimSpace(step.Get("type").String()))
+	if len(modelInputs) > 0 && modelInputs[0] {
+		switch stepType {
+		case "model_output", "assistant", "thought", "user_input", "function_result", "function_call", "":
+			// These Interactions structures need an explicit protocol conversion.
+		default:
+			// Already-native history is parsed by the worker, including new types.
+			run.End()
+			*items = append(*items, []byte(step.Raw))
+			return
+		}
+	}
 	switch stepType {
 	case "function_call":
 		run.End()
@@ -257,24 +264,24 @@ func appendInteractionsStepToCodex(items *[][]byte, step gjson.Result, defaultRo
 	case "function_result", "function_call_output":
 		// A tool result is content the model reads, so it keeps the surrounding user turn.
 		run.Add()
-		appendInteractionsFunctionResultToCodex(items, step)
+		appendInteractionsFunctionResultToCodex(items, step, modelInputs...)
 	case "model_output", "assistant":
 		run.End()
-		appendInteractionsContentToCodexItem(items, step.Get("content"), "assistant", run)
+		appendInteractionsContentToCodexItem(items, step.Get("content"), "assistant", run, modelInputs...)
 	case "thought", "reasoning":
 		run.End()
 		appendInteractionsThoughtToCodex(items, step, modelName, emittedSignatures)
 	case "user_input", "message", "":
 		role := interactionsCodexStepRole(step, defaultRole)
 		if content := step.Get("content"); content.Exists() {
-			appendInteractionsContentToCodexItem(items, content, role, run)
+			appendInteractionsContentToCodexItem(items, content, role, run, modelInputs...)
 		} else if text := step.Get("text"); text.Exists() {
 			appendInteractionsRoleTextToCodex(items, role, text.String(), run)
 		}
 	default:
 		role := interactionsCodexStepRole(step, defaultRole)
 		if content := step.Get("content"); content.Exists() {
-			appendInteractionsContentToCodexItem(items, content, role, run)
+			appendInteractionsContentToCodexItem(items, content, role, run, modelInputs...)
 		} else if text := step.Get("text"); text.Exists() {
 			appendInteractionsRoleTextToCodex(items, role, text.String(), run)
 		}
@@ -290,7 +297,7 @@ func appendInteractionsRoleTextToCodex(items *[][]byte, role, text string, run *
 	}
 }
 
-func appendInteractionsContentToCodexItem(items *[][]byte, content gjson.Result, role string, run *translatorcommon.UserRun) {
+func appendInteractionsContentToCodexItem(items *[][]byte, content gjson.Result, role string, run *translatorcommon.UserRun, modelInputs ...bool) {
 	if !content.Exists() {
 		return
 	}
@@ -301,21 +308,28 @@ func appendInteractionsContentToCodexItem(items *[][]byte, content gjson.Result,
 	userRun := interactionsCodexUserRun(run, role)
 	if content.IsArray() {
 		content.ForEach(func(_, part gjson.Result) bool {
-			appendInteractionsContentPartToCodex(items, part, role, userRun)
+			appendInteractionsContentPartToCodex(items, part, role, userRun, modelInputs...)
 			return true
 		})
 		return
 	}
 	if content.IsObject() {
-		appendInteractionsContentPartToCodex(items, content, role, userRun)
+		appendInteractionsContentPartToCodex(items, content, role, userRun, modelInputs...)
 	}
 }
 
 // appendInteractionsContentPartToCodex adds one content part. run is nil for
 // content that is not user content; for user content it records what is sent and
 // what cannot be.
-func appendInteractionsContentPartToCodex(items *[][]byte, part gjson.Result, role string, run *translatorcommon.UserRun) {
+func appendInteractionsContentPartToCodex(items *[][]byte, part gjson.Result, role string, run *translatorcommon.UserRun, modelInputs ...bool) {
 	item := interactionsCodexMessagePart(part, role)
+	if len(modelInputs) > 0 && modelInputs[0] && part.IsObject() {
+		if len(item) == 0 {
+			item = []byte(part.Raw)
+		} else {
+			item = translatorcommon.PreserveModelInputFields(item, part, "type", "text", "image", "data", "mime_type", "mimeType", "uri")
+		}
+	}
 	if len(item) == 0 {
 		if droppedType := translatorcommon.InteractionsAttachmentType(part); droppedType != "" {
 			run.Drop(droppedType)
@@ -353,10 +367,16 @@ func appendInteractionsFunctionCallToCodex(items *[][]byte, step gjson.Result, m
 	} else if args := step.Get("args"); args.Exists() {
 		item, _ = sjson.SetBytes(item, "arguments", interactionsCodexJSONString(args))
 	}
+	if len(modelInputs) > 0 && modelInputs[0] {
+		item = translatorcommon.PreserveModelInputFields(item, step, "type", "name", "arguments", "args", "call_id", "id")
+		if id := step.Get("id"); id.Exists() && step.Get("call_id").Exists() {
+			item, _ = sjson.SetRawBytes(item, "id", []byte(id.Raw))
+		}
+	}
 	*items = append(*items, item)
 }
 
-func appendInteractionsFunctionResultToCodex(items *[][]byte, step gjson.Result) {
+func appendInteractionsFunctionResultToCodex(items *[][]byte, step gjson.Result, modelInputs ...bool) {
 	item := []byte(`{"type":"function_call_output"}`)
 	if callID := interactionsCodexCallID(step); callID != "" {
 		item, _ = sjson.SetBytes(item, "call_id", callID)
@@ -365,6 +385,9 @@ func appendInteractionsFunctionResultToCodex(items *[][]byte, step gjson.Result)
 		item, _ = sjson.SetBytes(item, "output", interactionsCodexOutputString(result))
 	} else if output := step.Get("output"); output.Exists() {
 		item, _ = sjson.SetBytes(item, "output", interactionsCodexOutputString(output))
+	}
+	if len(modelInputs) > 0 && modelInputs[0] {
+		item = translatorcommon.PreserveModelInputFields(item, step, "type", "id", "call_id", "result", "output")
 	}
 	*items = append(*items, item)
 }

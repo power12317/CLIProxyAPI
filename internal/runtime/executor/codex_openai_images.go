@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -96,7 +97,7 @@ func (e *CodexExecutor) executeOpenAIImage(ctx context.Context, auth *cliproxyau
 		}
 	}
 
-	prepared, errPrepare := codexPrepareOpenAIImageRequest(req, opts)
+	prepared, errPrepare := codexPrepareOpenAIImageRequest(req, opts, e.runtime != nil)
 	if errPrepare != nil {
 		return resp, errPrepare
 	}
@@ -203,7 +204,7 @@ func (e *CodexExecutor) executeOpenAIImageStream(ctx context.Context, auth *clip
 		}
 	}
 
-	prepared, errPrepare := codexPrepareOpenAIImageRequest(req, opts)
+	prepared, errPrepare := codexPrepareOpenAIImageRequest(req, opts, e.runtime != nil)
 	if errPrepare != nil {
 		return nil, errPrepare
 	}
@@ -758,16 +759,18 @@ func (e *CodexExecutor) prepareCodexOpenAIImageBody(ctx context.Context, auth *c
 		return nil, errThinking
 	}
 
-	out = helps.NormalizeCodexServiceTier(out)
+	out = e.normalizeServiceTier(out)
 	out = helps.ApplyCodexFastMode(out, e.cfg)
 	out = helps.SetStringIfDifferent(out, "model", mainModel)
 	out = helps.SetBoolIfDifferent(out, "stream", true)
-	out, _ = sjson.DeleteBytes(out, "previous_response_id")
-	out, _ = sjson.DeleteBytes(out, "prompt_cache_retention")
-	out, _ = sjson.DeleteBytes(out, "safety_identifier")
-	out, _ = sjson.DeleteBytes(out, "stream_options")
-	if codexUseSIWCForRequest(ctx, auth, opts.Headers) {
-		return applyCodexSIWCRequestBodyRules(out, false), nil
+	if e.runtime == nil {
+		out, _ = sjson.DeleteBytes(out, "previous_response_id")
+		out, _ = sjson.DeleteBytes(out, "prompt_cache_retention")
+		out, _ = sjson.DeleteBytes(out, "safety_identifier")
+		out, _ = sjson.DeleteBytes(out, "stream_options")
+		if codexUseSIWCForRequest(ctx, auth, opts.Headers) {
+			return applyCodexSIWCRequestBodyRules(out, false), nil
+		}
 	}
 	return normalizeCodexInstructions(out), nil
 }
@@ -792,10 +795,10 @@ func recordCodexOpenAIImageRequest(ctx context.Context, cfg *config.Config, prov
 	})
 }
 
-func codexPrepareOpenAIImageRequest(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (codexOpenAIImagePreparedRequest, error) {
+func codexPrepareOpenAIImageRequest(req cliproxyexecutor.Request, opts cliproxyexecutor.Options, modelInputs ...bool) (codexOpenAIImagePreparedRequest, error) {
 	path := helps.PayloadRequestPath(opts)
 	if strings.HasSuffix(path, codexImagesGenerationsPath) {
-		return codexPrepareOpenAIImageGenerationJSON(req.Payload, req.Model)
+		return codexPrepareOpenAIImageGenerationJSON(req.Payload, req.Model, modelInputs...)
 	}
 	if !strings.HasSuffix(path, codexImagesEditsPath) {
 		return codexOpenAIImagePreparedRequest{}, fmt.Errorf("unsupported OpenAI image endpoint path %q", path)
@@ -804,17 +807,24 @@ func codexPrepareOpenAIImageRequest(req cliproxyexecutor.Request, opts cliproxye
 	contentType := codexImageContentType(opts.Headers)
 	mediaType, _, _ := mime.ParseMediaType(contentType)
 	if strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		if len(modelInputs) > 0 && modelInputs[0] {
+			payload, _, errPrepare := codexPrepareDirectOpenAIImageEditPayload(req.Payload, req.Model, contentType, opts.Stream)
+			if errPrepare != nil {
+				return codexOpenAIImagePreparedRequest{}, errPrepare
+			}
+			return codexPrepareOpenAIImageEditJSON(payload, req.Model, true)
+		}
 		return codexPrepareOpenAIImageEditMultipart(req.Payload, req.Model, contentType)
 	}
-	return codexPrepareOpenAIImageEditJSON(req.Payload, req.Model)
+	return codexPrepareOpenAIImageEditJSON(req.Payload, req.Model, modelInputs...)
 }
 
-func codexPrepareOpenAIImageGenerationJSON(rawJSON []byte, routeModel string) (codexOpenAIImagePreparedRequest, error) {
+func codexPrepareOpenAIImageGenerationJSON(rawJSON []byte, routeModel string, modelInputs ...bool) (codexOpenAIImagePreparedRequest, error) {
 	if !json.Valid(rawJSON) {
 		return codexOpenAIImagePreparedRequest{}, fmt.Errorf("invalid OpenAI image generation request JSON")
 	}
 	prompt := strings.TrimSpace(gjson.GetBytes(rawJSON, "prompt").String())
-	tool := codexBuildOpenAIImageTool(rawJSON, routeModel, "generate", []string{"size", "quality", "background", "output_format", "moderation"}, []string{"output_compression", "partial_images"})
+	tool := codexBuildOpenAIImageTool(rawJSON, routeModel, "generate", []string{"size", "quality", "background", "output_format", "moderation"}, []string{"output_compression", "partial_images"}, modelInputs...)
 	body := codexBuildImagesResponsesRequest(prompt, nil, tool)
 	return codexOpenAIImagePreparedRequest{
 		Body:           body,
@@ -823,7 +833,7 @@ func codexPrepareOpenAIImageGenerationJSON(rawJSON []byte, routeModel string) (c
 	}, nil
 }
 
-func codexPrepareOpenAIImageEditJSON(rawJSON []byte, routeModel string) (codexOpenAIImagePreparedRequest, error) {
+func codexPrepareOpenAIImageEditJSON(rawJSON []byte, routeModel string, modelInputs ...bool) (codexOpenAIImagePreparedRequest, error) {
 	if !json.Valid(rawJSON) {
 		return codexOpenAIImagePreparedRequest{}, fmt.Errorf("invalid OpenAI image edit request JSON")
 	}
@@ -837,7 +847,7 @@ func codexPrepareOpenAIImageEditJSON(rawJSON []byte, routeModel string) (codexOp
 			}
 		}
 	}
-	tool := codexBuildOpenAIImageTool(rawJSON, routeModel, "edit", []string{"size", "quality", "background", "output_format", "input_fidelity", "moderation"}, []string{"output_compression", "partial_images"})
+	tool := codexBuildOpenAIImageTool(rawJSON, routeModel, "edit", []string{"size", "quality", "background", "output_format", "input_fidelity", "moderation"}, []string{"output_compression", "partial_images"}, modelInputs...)
 	if mask := strings.TrimSpace(gjson.GetBytes(rawJSON, "mask.image_url").String()); mask != "" {
 		tool, _ = sjson.SetBytes(tool, "input_image_mask.image_url", mask)
 	}
@@ -939,10 +949,15 @@ func codexOpenAIImageToolModel(requestModel string, routeModel string) string {
 	return model
 }
 
-func codexBuildOpenAIImageTool(rawJSON []byte, routeModel string, action string, stringFields []string, numberFields []string) []byte {
+func codexBuildOpenAIImageTool(rawJSON []byte, routeModel string, action string, stringFields []string, numberFields []string, modelInputs ...bool) []byte {
 	tool := []byte(`{"type":"image_generation","action":""}`)
 	tool, _ = sjson.SetBytes(tool, "action", action)
 	tool, _ = sjson.SetBytes(tool, "model", codexOpenAIImageToolModel(gjson.GetBytes(rawJSON, "model").String(), routeModel))
+	if len(modelInputs) > 0 && modelInputs[0] {
+		// The endpoint's prompt and attachments have become Responses input;
+		// response_format and stream are handled by CPA's response adapter.
+		return translatorcommon.PreserveModelInputFields(tool, gjson.ParseBytes(rawJSON), "type", "action", "model", "prompt", "images", "image", "mask", "response_format", "stream")
+	}
 	for _, field := range stringFields {
 		if value := strings.TrimSpace(gjson.GetBytes(rawJSON, field).String()); value != "" {
 			tool, _ = sjson.SetBytes(tool, field, value)

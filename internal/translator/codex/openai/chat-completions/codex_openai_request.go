@@ -212,7 +212,10 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				toolOutput := []byte(`{}`)
 				toolOutput, _ = sjson.SetBytes(toolOutput, "type", outputType)
 				toolOutput, _ = sjson.SetBytes(toolOutput, "call_id", toolCallID)
-				toolOutput = setToolCallOutputContent(toolOutput, m.Get("content"))
+				toolOutput = setToolCallOutputContent(toolOutput, m.Get("content"), modelInput)
+				if modelInput {
+					toolOutput = translatorcommon.PreserveModelInputFields(toolOutput, m, "type", "role", "content", "tool_call_id", "call_id", "output")
+				}
 				inputItems = append(inputItems, toolOutput)
 
 			default:
@@ -258,6 +261,9 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 								partType = "output_text"
 							}
 							part := []byte(`{}`)
+							if modelInput {
+								part = []byte(it.Raw)
+							}
 							part, _ = sjson.SetBytes(part, "type", partType)
 							part, _ = sjson.SetBytes(part, "text", it.Get("text").String())
 							contentItems = append(contentItems, part)
@@ -301,6 +307,11 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 									drops.Drop(t)
 								}
 							}
+						default:
+							if modelInput {
+								contentItems = append(contentItems, []byte(it.Raw))
+								turnSendable++
+							}
 						}
 					}
 				}
@@ -313,6 +324,9 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				// directly, otherwise call_id matching fails (#2132).
 				if role != "assistant" || len(contentItems) > 0 {
 					msg, _ = sjson.SetRawBytes(msg, "content", translatorcommon.JoinRawArray(contentItems))
+					if modelInput {
+						msg = translatorcommon.PreserveModelInputFields(msg, m, "type", "role", "content", "tool_calls", "function_call")
+					}
 					inputItems = append(inputItems, msg)
 				}
 
@@ -360,7 +374,7 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 								usedCallIDs[callID] = struct{}{}
 							}
 							// Codex rejects call_id values longer than 64 characters.
-							if shortID := shortenCodexCallIDIfNeeded(callID); shortID != callID {
+							if shortID := shortenCodexCallIDIfNeeded(callID); !modelInput && shortID != callID {
 								for attempt := 1; ; attempt++ {
 									if _, used := usedCallIDs[shortID]; !used {
 										break
@@ -389,6 +403,10 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 								}
 								funcCall, _ = sjson.SetBytes(funcCall, "name", toolCallName)
 								funcCall, _ = sjson.SetBytes(funcCall, "arguments", toolCallInput)
+								if modelInput {
+									funcCall = translatorcommon.PreserveModelInputFields(funcCall, tc.Get("function"), "name", "arguments")
+									funcCall = translatorcommon.PreserveModelInputFields(funcCall, tc, "type", "id", "function", "custom", "name", "arguments", "input", "call_id")
+								}
 								inputItems = append(inputItems, funcCall)
 							case "custom":
 								customCall := []byte(`{}`)
@@ -401,6 +419,10 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 								}
 								customCall, _ = sjson.SetBytes(customCall, "name", toolCallName)
 								customCall, _ = sjson.SetBytes(customCall, "input", toolCallInput)
+								if modelInput {
+									customCall = translatorcommon.PreserveModelInputFields(customCall, tc.Get("custom"), "name", "input")
+									customCall = translatorcommon.PreserveModelInputFields(customCall, tc, "type", "id", "function", "custom", "name", "arguments", "input", "call_id")
+								}
 								inputItems = append(inputItems, customCall)
 							}
 						}
@@ -480,6 +502,7 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				item := []byte(t.Raw)
 				if nested := t.Get("function"); nested.IsObject() && (toolType == "function" || toolType == "") {
 					item = []byte(nested.Raw)
+					item = translatorcommon.PreserveModelInputFields(item, t, "type", "function")
 					toolType = "function"
 				} else if toolType == "" && t.Get("name").Type == gjson.String {
 					toolType = "function"
@@ -574,6 +597,13 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 					}
 				}
 				choice := []byte(`{}`)
+				if modelInput {
+					choice = []byte(tc.Raw)
+					if nested := tc.Get("function"); nested.IsObject() {
+						choice = translatorcommon.PreserveModelInputFields(choice, nested)
+						choice, _ = sjson.DeleteBytes(choice, "function")
+					}
+				}
 				choice, _ = sjson.SetBytes(choice, "type", tcType)
 				if name != "" {
 					choice, _ = sjson.SetBytes(choice, "name", name)
@@ -588,13 +618,9 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 
 	out, _ = sjson.SetBytes(out, "store", false)
 	if modelInput {
-		// These are business controls for the native adapter to map or report.
-		// Preserve explicit values before request plugins and final payload rules.
-		for _, path := range []string{"parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "max_completion_tokens", "max_tokens", "truncation", "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "safety_identifier", "user", "context_management", "reasoning.context"} {
-			if value := root.Get(path); value.Exists() {
-				out, _ = sjson.SetRawBytes(out, path, []byte(value.Raw))
-			}
-		}
+		// These source structures have already been converted. All other model
+		// fields, including future native fields, belong to the native parser.
+		out = translatorcommon.PreserveModelInputFields(out, root, "model", "messages", "input", "tools", "tool_choice", "response_format", "reasoning_effort")
 		if !root.Get("include").Exists() {
 			out, _ = sjson.DeleteBytes(out, "include")
 		}
@@ -602,18 +628,18 @@ func convertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 	return out, drops.Err()
 }
 
-func setToolCallOutputContent(funcOutput []byte, content gjson.Result) []byte {
+func setToolCallOutputContent(funcOutput []byte, content gjson.Result, modelInputs ...bool) []byte {
 	switch {
 	case content.Type == gjson.String:
 		structuredContent := gjson.Parse(content.String())
 		if hasToolOutputImagePart(structuredContent) {
-			return setToolCallOutputContent(funcOutput, structuredContent)
+			return setToolCallOutputContent(funcOutput, structuredContent, modelInputs...)
 		}
 		funcOutput, _ = sjson.SetBytes(funcOutput, "output", content.String())
 	case content.IsArray():
 		outputItems := make([][]byte, 0, 4)
 		for _, item := range content.Array() {
-			outputItems = append(outputItems, toolOutputContentPart(item))
+			outputItems = append(outputItems, toolOutputContentPart(item, modelInputs...))
 		}
 		funcOutput, _ = sjson.SetRawBytes(funcOutput, "output", translatorcommon.JoinRawArray(outputItems))
 	default:
@@ -626,15 +652,22 @@ func setToolCallOutputContent(funcOutput []byte, content gjson.Result) []byte {
 	return funcOutput
 }
 
-func toolOutputContentPart(item gjson.Result) []byte {
+func toolOutputContentPart(item gjson.Result, modelInputs ...bool) []byte {
+	modelInput := len(modelInputs) > 0 && modelInputs[0]
 	itemType := item.Get("type").String()
 	switch itemType {
 	case "text", "input_text", "output_text":
 		part := []byte(`{}`)
+		if modelInput {
+			part = []byte(item.Raw)
+		}
 		part, _ = sjson.SetBytes(part, "type", "input_text")
 		part, _ = sjson.SetBytes(part, "text", item.Get("text").String())
 		return part
 	case "image_url", "input_image":
+		if modelInput && itemType == "input_image" {
+			return []byte(item.Raw)
+		}
 		imageURL := item.Get("image_url.url").String()
 		fileID := item.Get("image_url.file_id").String()
 		if itemType == "input_image" {
@@ -666,6 +699,9 @@ func toolOutputContentPart(item gjson.Result) []byte {
 		}
 		return toolOutputFallbackPart(item)
 	default:
+		if modelInput {
+			return []byte(item.Raw)
+		}
 		return toolOutputFallbackPart(item)
 	}
 }

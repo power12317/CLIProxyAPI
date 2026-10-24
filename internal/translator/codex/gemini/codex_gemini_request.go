@@ -154,6 +154,10 @@ func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 			var pendingThoughtSummaryParts [][]byte
 			for j := 0; j < len(parr); j++ {
 				p := parr[j]
+				if modelInput && p.Get("type").Type == gjson.String {
+					inputItems = append(inputItems, codexMessageWithPart(role, []byte(p.Raw)))
+					continue
+				}
 
 				// A thoughtSignature is replayable reasoning state, not visible
 				// content. Restore it as a reasoning item only when its detected
@@ -243,6 +247,9 @@ func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 						id = fmt.Sprintf("call_gemini_%016d", callCounter)
 					}
 					fn, _ = sjson.SetBytes(fn, "call_id", id)
+					if modelInput {
+						fn = translatorcommon.PreserveModelInputFields(fn, fc, "name", "args", "id", "call_id")
+					}
 					pendingCallIDs = append(pendingCallIDs, id)
 					inputItems = append(inputItems, fn)
 					continue
@@ -273,8 +280,14 @@ func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 						id = fmt.Sprintf("call_gemini_%016d", callCounter)
 					}
 					fno, _ = sjson.SetBytes(fno, "call_id", id)
+					if modelInput {
+						fno = translatorcommon.PreserveModelInputFields(fno, fr, "name", "response", "id", "call_id")
+					}
 					inputItems = append(inputItems, fno)
 					continue
+				}
+				if modelInput {
+					inputItems = append(inputItems, codexMessageWithPart(role, []byte(p.Raw)))
 				}
 			}
 		}
@@ -292,6 +305,9 @@ func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 			td := tarr[i]
 			fns := td.Get("functionDeclarations")
 			if !fns.IsArray() {
+				if modelInput {
+					toolItems = append(toolItems, []byte(td.Raw))
+				}
 				continue
 			}
 			farr := fns.Array()
@@ -403,11 +419,7 @@ func convertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool, 
 				out, _ = sjson.SetRawBytes(out, mapping[1], []byte(value.Raw))
 			}
 		}
-		for _, path := range []string{"tool_choice", "parallel_tool_calls", "include", "store", "background", "generate", "previous_response_id", "conversation", "client_metadata", "metadata", "service_tier", "stream_options", "temperature", "top_p", "top_k", "max_output_tokens", "truncation", "prompt_cache_key", "prompt_cache_retention", "safety_identifier", "text", "reasoning.context"} {
-			if value := root.Get(path); value.Exists() {
-				out, _ = sjson.SetRawBytes(out, path, []byte(value.Raw))
-			}
-		}
+		out = translatorcommon.PreserveModelInputFields(out, root, "model", "contents", "input", "systemInstruction", "system_instruction", "tools", "toolConfig", "generationConfig")
 	}
 
 	if modelInput {
