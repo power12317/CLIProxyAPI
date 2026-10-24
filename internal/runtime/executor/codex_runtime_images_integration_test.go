@@ -157,6 +157,13 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				}
 				workerCalls.Add(1)
 				requests <- nativeRuntimeExchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true, node: node}
+				lite := gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() == "true"
+				if lite && gjson.GetBytes(body, "parallel_tool_calls").Type != gjson.False ||
+					bytes.Contains(body, []byte("native-lite-parallel-probe")) && !lite {
+					t.Error("worker sent an invalid native WebSocket Lite/parallel combination")
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":400,"error":{"message":"native Lite requires parallel_tool_calls=false","type":"invalid_request_error"}}`))
+					return
+				}
 				if bytes.Contains(body, []byte("fail-before-output")) || bytes.Contains(body, []byte("CPA-owned-retry")) && cpaRetryCalls.Add(1) == 1 {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":503,"error":{"message":"controlled native pre-output failure","type":"server_error","code":"server_error"}}`))
 					return
@@ -207,6 +214,16 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		}
 		workerCalls.Add(1)
 		requests <- nativeRuntimeExchange{path: r.URL.Path, body: body, headers: r.Header.Clone()}
+		if r.URL.Path == "/v1/responses" {
+			lite := r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite") == "true"
+			if lite && gjson.GetBytes(body, "parallel_tool_calls").Type != gjson.False ||
+				bytes.Contains(body, []byte("native-lite-parallel-probe")) && !lite {
+				t.Error("worker sent an invalid native HTTP Lite/parallel combination")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"message":"native Lite requires parallel_tool_calls=false"}}`)
+				return
+			}
+		}
 		if r.Header.Get("Authorization") != "Bearer synthetic-worker-token" {
 			t.Error("worker did not use its shared credential")
 		}
@@ -642,18 +659,33 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			readExchange(t)
 		})
 	}
-	t.Run("unsupported_image_inputs_are_explicit", func(t *testing.T) {
+	t.Run("native_lite_parallel_calls", func(t *testing.T) {
+		before := workerCalls.Load()
+		want := testCodexRuntimeLiteParallelCalls(t, cfg, auth, func(t *testing.T) []byte { return readExchange(t).body })
+		if workerCalls.Load()-before != int32(want) || cpaCalls.Load() != 0 {
+			t.Fatalf("Lite egress: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+		}
+	})
+	t.Run("native_history_field_replay", func(t *testing.T) {
+		before := workerCalls.Load()
+		want := testCodexRuntimeNativeFieldReplay(t, cfg, auth, router, func(t *testing.T) []byte { return readExchange(t).body })
+		if workerCalls.Load()-before != int32(want) || cpaCalls.Load() != 0 {
+			t.Fatalf("history replay egress: worker=%d CPA=%d", workerCalls.Load()-before, cpaCalls.Load())
+		}
+	})
+	t.Run("native_image_extensions_are_preserved", func(t *testing.T) {
 		for _, field := range []string{"extension"} {
 			for _, stream := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/stream=%t", field, stream), func(t *testing.T) {
 					payload, _ := nativeRuntimeImagePayload(t, codexImagesEditsPath, stream, false)
-					var value any = "unsupported"
-					payload, _ = sjson.SetBytes(payload, field, value)
+					payload, _ = sjson.SetRawBytes(payload, field, []byte(`{"large":9007199254740993,"nullable":null,"enabled":false}`))
 					before := workerCalls.Load()
 					_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesEditsPath, stream), stream)
-					if err == nil || !strings.Contains(err.Error(), field) || workerCalls.Load() != before || cpaCalls.Load() != 0 {
-						t.Fatalf("unsupported input was dropped or sent: field=%s worker=%d CPA=%d error=%v", field, workerCalls.Load()-before, cpaCalls.Load(), err)
+					if err != nil || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
+						t.Fatalf("native image extension did not reach the worker: field=%s worker=%d CPA=%d error=%v", field, workerCalls.Load()-before, cpaCalls.Load(), err)
 					}
+					received := readExchange(t)
+					equalRuntimeNativeJSON(t, []byte(gjson.GetBytes(payload, field).Raw), []byte(gjson.GetBytes(received.body, field).Raw))
 				})
 			}
 		}
