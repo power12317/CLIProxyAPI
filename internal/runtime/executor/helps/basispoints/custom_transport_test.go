@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestUnmarkedCustomExecPreservesEntireProgram(t *testing.T) {
@@ -50,12 +50,12 @@ func TestUnmarkedCustomExecPreservesEntireProgram(t *testing.T) {
 			raw, _ := json.Marshal(body)
 			for _, scope := range []string{"account-a", "account-b"} {
 				wire, _, errReplay := Prepare(raw, scope, "session", cache)
-				if errReplay != nil || gjson.GetBytes(wire, "input.3.output").String() != "client result" {
+				if errReplay != nil || ojson.GetBytes(wire, "input.3.output").String() != "client result" {
 					t.Fatalf("replay failed: %s %v", scope, errReplay)
 				}
 				if scope == "account-b" {
-					args := gjson.Parse(gjson.GetBytes(wire, "input.2.arguments").String())
-					if gjson.Parse(args.Get("code").String()).Get("input").String() != program {
+					args := ojson.Parse(ojson.GetBytes(wire, "input.2.arguments").String())
+					if ojson.Parse(args.Get("code").String()).Get("input").String() != program {
 						t.Fatal("rebuilt client program changed across accounts")
 					}
 				}

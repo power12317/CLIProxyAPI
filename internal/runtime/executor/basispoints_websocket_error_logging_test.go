@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
@@ -23,7 +24,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsWebsocketToolErrorsLogBeforeFinalize(t *testing.T) {
@@ -110,7 +110,7 @@ func TestBasispointsWebsocketToolErrorsLogBeforeFinalize(t *testing.T) {
 					if errRead != nil {
 						t.Fatal(errRead)
 					}
-					if gjson.GetBytes(event, "type").String() != "response.completed" {
+					if ojson.GetBytes(event, "type").String() != "response.completed" {
 						t.Fatalf("connection not reusable: %s", event)
 					}
 					return

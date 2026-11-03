@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 type runtimeOAuthCall struct {
@@ -135,10 +135,10 @@ func (mock *runtimeOAuthMock) lastCallback() string {
 func (mock *runtimeOAuthMock) start(t *testing.T, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := runtimeCall(t, mock.h.RequestCodexToken, http.MethodGet, "/codex-auth-url"+query, "")
-	if rec.Code != http.StatusOK || gjson.Get(rec.Body.String(), "status").String() != "ok" || gjson.Get(rec.Body.String(), "state").String() != mock.state {
+	if rec.Code != http.StatusOK || ojson.Get(rec.Body.String(), "status").String() != "ok" || ojson.Get(rec.Body.String(), "state").String() != mock.state {
 		t.Fatal("standard OAuth start failed", rec.Code, rec.Body.String())
 	}
-	if gjson.Get(rec.Body.String(), "login_id").Exists() {
+	if ojson.Get(rec.Body.String(), "login_id").Exists() {
 		t.Fatal("internal login identity exposed to the OAuth page", rec.Body.String())
 	}
 	return rec
@@ -164,7 +164,7 @@ func TestCodexRuntimeStandardOAuthReusesOriginalCredentialAndClientSystem(t *tes
 	}
 	auth.EnsureIndex()
 	rec := mock.start(t, "?auth_index="+url.QueryEscape(auth.Index)+"&client_system=mac")
-	if gjson.Get(rec.Body.String(), "client_system").String() != "windows" || mock.startedCredential() != credentialID {
+	if ojson.Get(rec.Body.String(), "client_system").String() != "windows" || mock.startedCredential() != credentialID {
 		t.Fatal("targeted authorization changed existing identity/system", rec.Body.String())
 	}
 	provider, _, isPlugin, metadata, completed, exists := GetOAuthSessionDetails(mock.state)
@@ -172,7 +172,7 @@ func TestCodexRuntimeStandardOAuthReusesOriginalCredentialAndClientSystem(t *tes
 		t.Fatal("runtime session does not use original OAuth state", provider, metadata)
 	}
 	rec = runtimeCall(t, mock.h.GetAuthStatus, http.MethodGet, "/get-auth-status?state="+mock.state, "")
-	if rec.Code != 200 || gjson.Get(rec.Body.String(), "status").String() != "wait" {
+	if rec.Code != 200 || ojson.Get(rec.Body.String(), "status").String() != "wait" {
 		t.Fatal("pending did not use standard wait status", rec.Code, rec.Body.String())
 	}
 	redirect := "http://localhost:1455/auth/callback?code=code-1&state=" + mock.state + "&other=untouched"
@@ -218,7 +218,7 @@ func TestCodexRuntimeStandardOAuthCreatesNewFileOnlyAtStart(t *testing.T) {
 		t.Fatal("status created credentials", files, err)
 	}
 	rec := mock.start(t, "?client_system=windows")
-	if gjson.Get(rec.Body.String(), "client_system").String() != "windows" {
+	if ojson.Get(rec.Body.String(), "client_system").String() != "windows" {
 		t.Fatal("standard client system field lost", rec.Body.String())
 	}
 	credentialID := mock.startedCredential()
@@ -284,7 +284,7 @@ func TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile(t *testing.T)
 			mock.setStatus(status)
 			rec := runtimeCall(t, mock.h.GetAuthStatus, http.MethodGet, "/get-auth-status?state="+mock.state, "")
 			want := map[string]string{"pending": "wait", "completed": "ok", "error": "error"}[status]
-			if rec.Code != 200 || gjson.Get(rec.Body.String(), "status").String() != want {
+			if rec.Code != 200 || ojson.Get(rec.Body.String(), "status").String() != want {
 				t.Fatal(rec.Code, rec.Body.String())
 			}
 			if status == "completed" {
@@ -293,7 +293,7 @@ func TestCodexRuntimeStandardStatusMapsResultsAndSyncsOriginalFile(t *testing.T)
 					t.Fatal("poll completion did not sync original file", auth)
 				}
 			}
-			if status == "error" && gjson.Get(rec.Body.String(), "error").String() != "OAuth denied by upstream" {
+			if status == "error" && ojson.Get(rec.Body.String(), "error").String() != "OAuth denied by upstream" {
 				t.Fatal("poll error detail lost", rec.Body.String())
 			}
 		})
@@ -324,7 +324,7 @@ func TestCodexRuntimeStandardOAuthHonorsExistingValidationAndCancellation(t *tes
 		t.Fatal("mismatched provider reached runtime", rec.Code, rec.Body.String())
 	}
 	rec = runtimeCall(t, mock.h.CancelAuthSession, http.MethodDelete, "/cancel-auth-session?state="+mock.state, "")
-	if rec.Code != 200 || !gjson.Get(rec.Body.String(), "cancelled").Bool() {
+	if rec.Code != 200 || !ojson.Get(rec.Body.String(), "cancelled").Bool() {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
 	rec = runtimeCall(t, mock.h.PostOAuthCallback, http.MethodPost, "/oauth-callback", runtimeJSON(t, map[string]any{"state": mock.state, "code": "unused"}))
@@ -351,7 +351,7 @@ func TestCodexRuntimeStandardOAuthFailsLocallyAfterModeOff(t *testing.T) {
 				}
 			} else {
 				rec = runtimeCall(t, mock.h.GetAuthStatus, http.MethodGet, "/get-auth-status?state="+mock.state, "")
-				if rec.Code != 200 || gjson.Get(rec.Body.String(), "status").String() != "error" {
+				if rec.Code != 200 || ojson.Get(rec.Body.String(), "status").String() != "error" {
 					t.Fatal(rec.Code, rec.Body.String())
 				}
 			}
@@ -384,7 +384,7 @@ func TestCodexRuntimeStandardOAuthPreservesRPCFailures(t *testing.T) {
 			if operation == "status" {
 				wantStatus = http.StatusOK
 			}
-			if rec.Code != wantStatus || gjson.Get(rec.Body.String(), "error").String() != "mock OAuth upstream failed" {
+			if rec.Code != wantStatus || ojson.Get(rec.Body.String(), "error").String() != "mock OAuth upstream failed" {
 				t.Fatal("upstream OAuth failure changed", rec.Code, rec.Body.String())
 			}
 			assertNoRuntimeCallbackFile(t, mock.h.cfg)
@@ -417,8 +417,8 @@ func TestCodexRuntimeOffUsesNativeOAuthAndReauthorizesSharedFile(t *testing.T) {
 	}
 	t.Cleanup(func() { newCodexOAuthService = originalFactory })
 	rec := runtimeCall(t, h.RequestCodexToken, http.MethodGet, "/codex-auth-url?auth_index="+auth.Index+"&client_system=mac", "")
-	state := gjson.Get(rec.Body.String(), "state").String()
-	if rec.Code != 200 || state == "" || gjson.Get(rec.Body.String(), "client_system").String() != "windows" || nativeCalls != 1 {
+	state := ojson.Get(rec.Body.String(), "state").String()
+	if rec.Code != 200 || state == "" || ojson.Get(rec.Body.String(), "client_system").String() != "windows" || nativeCalls != 1 {
 		t.Fatal("disabled integration changed native OAuth", rec.Code, rec.Body.String())
 	}
 	t.Cleanup(func() { CancelOAuthSession(state) })
@@ -428,7 +428,7 @@ func TestCodexRuntimeOffUsesNativeOAuthAndReauthorizesSharedFile(t *testing.T) {
 	}
 	waitForOAuthSessionDone(t, state)
 	rec = runtimeCall(t, h.GetAuthStatus, http.MethodGet, "/get-auth-status?state="+state, "")
-	if rec.Code != 200 || rec.Body.String() != `{"status":"ok"}` {
+	if rec.Code != 200 || ojson.Get(rec.Body.String(), "status").String() != "ok" || ojson.Get(rec.Body.String(), "auth_id").String() != "existing-account.json" || !ojson.Get(rec.Body.String(), "adopted").Bool() {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
 	metadata := assertRuntimeEnabled(t, path, false)

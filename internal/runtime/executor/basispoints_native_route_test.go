@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsNativeRouteBeforeNetworkAndRetainsSession(t *testing.T) {
@@ -28,7 +28,7 @@ func TestBasispointsNativeRouteBeforeNetworkAndRetainsSession(t *testing.T) {
 				tools := []any{map[string]any{"type": "tool_search", "execution": "client"}, map[string]any{"type": "web_search", "external_web_access": true}}
 				wantTools, _ := json.Marshal(tools)
 				checkNative := func(body []byte) {
-					if gjson.GetBytes(body, "tools").Raw != string(wantTools) || !strings.Contains(string(body), "data:image/png;base64,") {
+					if ojson.GetBytes(body, "tools").Raw != string(wantTools) || !strings.Contains(string(body), "data:image/png;base64,") {
 						t.Error("native route altered tool declarations or inline image")
 					}
 				}

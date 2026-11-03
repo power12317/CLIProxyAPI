@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -20,7 +21,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 // CodexRuntimeExecutor delegates through the master to the process for the selected CPA credential.
@@ -68,7 +68,7 @@ func (e *CodexRuntimeExecutor) validate(ctx context.Context, auth *coreauth.Auth
 		// The image builder validates and translates JSON or multipart before IPC.
 		return nil
 	}
-	if !json.Valid(req.Payload) || !gjson.ParseBytes(req.Payload).IsObject() {
+	if !json.Valid(req.Payload) || !ojson.ParseBytes(req.Payload).IsObject() {
 		return runtimeError(400, "Request must be a JSON object")
 	}
 	if opts.SourceFormat == sdktranslator.FormatOpenAI {
@@ -121,7 +121,7 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 		session, _ = opts.Metadata[coreexecutor.ExecutionSessionMetadataKey].(string)
 	}
 	if session == "" {
-		session = gjson.GetBytes(req.Payload, "prompt_cache_key").String()
+		session = ojson.GetBytes(req.Payload, "prompt_cache_key").String()
 	}
 	if session == "" || scope == "" {
 		session = uuid.NewString()
@@ -207,12 +207,12 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 				return resp, runtimeError(failure.StatusCode(), failure.Error())
 			}
 		}
-		switch gjson.GetBytes(event, "type").String() {
+		switch ojson.GetBytes(event, "type").String() {
 		case "response.output_item.done":
 			collectCodexOutputItemDone(event, outputItems, &outputFallback)
 		case "response.completed", "response.incomplete", "response.done":
 			terminal = patchCodexCompletedOutput(normalizeCodexWebsocketCompletion(event), outputItems, outputFallback)
-			if gjson.GetBytes(terminal, "type").String() == "response.completed" {
+			if ojson.GetBytes(terminal, "type").String() == "response.completed" {
 				cacheCodexReasoningReplayFromCompleted(replayScope, terminal)
 			}
 		}
@@ -227,7 +227,7 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 	format := coreexecutor.ResponseFormatOrSource(opts)
 	var output []byte
 	if format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex {
-		output = []byte(gjson.GetBytes(terminal, "response").Raw)
+		output = []byte(ojson.GetBytes(terminal, "response").Raw)
 		if format == sdktranslator.FormatOpenAIResponse {
 			output = helps.EnsureResponsesUsageDetails(output)
 		}
@@ -351,13 +351,13 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 					return
 				}
 			}
-			switch gjson.GetBytes(event, "type").String() {
+			switch ojson.GetBytes(event, "type").String() {
 			case "response.output_item.done":
 				collectCodexOutputItemDone(event, outputItems, &outputFallback)
 			case "response.completed", "response.incomplete", "response.done":
 				terminal = true
 				event = normalizeCodexWebsocketCompletion(event)
-				if gjson.GetBytes(event, "type").String() == "response.completed" {
+				if ojson.GetBytes(event, "type").String() == "response.completed" {
 					cacheCodexReasoningReplayFromCompleted(replayScope, event)
 				}
 				if detail, ok := helps.ParseCodexUsage(event); ok {

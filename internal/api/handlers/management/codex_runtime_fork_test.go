@@ -3,7 +3,6 @@ package management
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -28,7 +30,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 // This optional test connects real CPA management/execution code to the fork using only fake OAuth.
@@ -176,15 +177,15 @@ stream_max_retries = 0
 	if start.Code != 200 {
 		t.Fatal(start.Body.String())
 	}
-	stateID := gjson.Get(start.Body.String(), "state").String()
-	if gjson.Get(start.Body.String(), "status").String() != "ok" || gjson.Get(start.Body.String(), "client_system").String() != "windows" {
+	stateID := ojson.Get(start.Body.String(), "state").String()
+	if ojson.Get(start.Body.String(), "status").String() != "ok" || ojson.Get(start.Body.String(), "client_system").String() != "windows" {
 		t.Fatal("standard OAuth contract or original system metadata changed", start.Body.String())
 	}
 	pending := runtimeCall(t, h.GetAuthStatus, "GET", "/get-auth-status?state="+url.QueryEscape(stateID), "")
-	if pending.Code != 200 || gjson.Get(pending.Body.String(), "status").String() != "wait" {
+	if pending.Code != 200 || ojson.Get(pending.Body.String(), "status").String() != "wait" {
 		t.Fatal(pending.Body.String())
 	}
-	authURL, err := url.Parse(gjson.Get(start.Body.String(), "url").String())
+	authURL, err := url.Parse(ojson.Get(start.Body.String(), "url").String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,11 +196,11 @@ stream_max_retries = 0
 	callback := query.Get("redirect_uri") + "?code=fake-code&state=" + url.QueryEscape(query.Get("state"))
 	payload, _ := json.Marshal(map[string]string{"provider": "codex", "redirect_url": callback})
 	completed := runtimeCall(t, h.PostOAuthCallback, "POST", "/oauth-callback", string(payload))
-	if completed.Code != 200 || gjson.Get(completed.Body.String(), "status").String() != "ok" {
+	if completed.Code != 200 || ojson.Get(completed.Body.String(), "status").String() != "ok" {
 		t.Fatal(completed.Body.String())
 	}
 	status := runtimeCall(t, h.GetAuthStatus, "GET", "/get-auth-status?state="+url.QueryEscape(stateID), "")
-	if status.Code != 200 || gjson.Get(status.Body.String(), "status").String() != "ok" {
+	if status.Code != 200 || ojson.Get(status.Body.String(), "status").String() != "ok" {
 		t.Fatal(status.Body.String())
 	}
 	if exchanges.Load() != 1 {

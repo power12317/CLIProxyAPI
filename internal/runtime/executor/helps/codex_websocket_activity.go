@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // CodexWebsocketActivity tracks only the native response boundary of one topic.
@@ -62,8 +62,8 @@ func (a *CodexWebsocketActivity) Release() { <-a.gate }
 func (a *CodexWebsocketActivity) Sent(payload []byte) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	parent := gjson.GetBytes(payload, "previous_response_id").String()
-	switch gjson.GetBytes(payload, "type").String() {
+	parent := ojson.GetBytes(payload, "previous_response_id").String()
+	switch ojson.GetBytes(payload, "type").String() {
 	case "response.create":
 		a.consumeSuccessor(parent)
 		a.pending = append(a.pending, parent)
@@ -90,10 +90,10 @@ func (a *CodexWebsocketActivity) consumeSuccessor(parent string) {
 func (a *CodexWebsocketActivity) Received(payload []byte) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	id := gjson.GetBytes(payload, "response.id").String()
-	switch gjson.GetBytes(payload, "type").String() {
+	id := ojson.GetBytes(payload, "response.id").String()
+	switch ojson.GetBytes(payload, "type").String() {
 	case "response.created":
-		parent := gjson.GetBytes(payload, "response.previous_response_id").String()
+		parent := ojson.GetBytes(payload, "response.previous_response_id").String()
 		if len(a.pending) > 0 {
 			if parent == "" {
 				parent = a.pending[0]
@@ -109,14 +109,14 @@ func (a *CodexWebsocketActivity) Received(payload []byte) {
 		a.active[id] = struct{}{}
 		a.lastResponse = id
 	case "response.steer.accepted", "response.steer.failed":
-		parent := gjson.GetBytes(payload, "steer.previous_response_id").String()
-		steer := gjson.GetBytes(payload, "steer.id").String()
+		parent := ojson.GetBytes(payload, "steer.previous_response_id").String()
+		steer := ojson.GetBytes(payload, "steer.id").String()
 		if a.steers[parent] > 1 {
 			a.steers[parent]--
 		} else {
 			delete(a.steers, parent)
 		}
-		if gjson.GetBytes(payload, "type").String() == "response.steer.accepted" {
+		if ojson.GetBytes(payload, "type").String() == "response.steer.accepted" {
 			if a.accepted == nil {
 				a.accepted = make(map[string]string)
 			}
@@ -125,15 +125,15 @@ func (a *CodexWebsocketActivity) Received(payload []byte) {
 			delete(a.accepted, steer)
 		}
 	case "response.steer.pending":
-		if gjson.GetBytes(payload, "reason").String() == "waiting_for_required_input" {
+		if ojson.GetBytes(payload, "reason").String() == "waiting_for_required_input" {
 			if a.waiting == nil {
 				a.waiting = make(map[string]bool)
 			}
-			a.waiting[gjson.GetBytes(payload, "steer.previous_response_id").String()] = true
+			a.waiting[ojson.GetBytes(payload, "steer.previous_response_id").String()] = true
 		}
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "error":
 		if id == "" {
-			id = gjson.GetBytes(payload, "response_id").String()
+			id = ojson.GetBytes(payload, "response_id").String()
 		}
 		if _, ok := a.active[id]; ok {
 			delete(a.active, id)

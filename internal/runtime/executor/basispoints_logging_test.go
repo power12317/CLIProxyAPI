@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -19,7 +20,6 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsGinLogsUseCodexFieldsOnSuccessAndRejection(t *testing.T) {
@@ -43,7 +43,7 @@ func TestBasispointsGinLogsUseCodexFieldsOnSuccessAndRejection(t *testing.T) {
 					ctx := context.WithValue(c.Request.Context(), "gin", c)
 					ctx = context.WithValue(ctx, "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 						raw, _ := io.ReadAll(r.Body)
-						if r.Header.Get("X-Codex-Turn-State") != "" || gjson.GetBytes(raw, "client_metadata").Exists() {
+						if r.Header.Get("X-Codex-Turn-State") != "" || ojson.GetBytes(raw, "client_metadata").Exists() {
 							t.Fatal("logging changed the Basispoints wire request")
 						}
 						payload := fmt.Sprintf("data: {\"type\":\"response.metadata\",\"headers\":{\"x-codex-turn-state\":%q}}\n\n", strings.Repeat("y", 312)) + "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"model\":\"resolved-model\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
@@ -126,7 +126,7 @@ func TestBasispointsExplicitHostedToolsUseNativeCodexWithoutRemovingDeclarations
 				ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 					calls++
 					raw, _ := io.ReadAll(r.Body)
-					if r.URL.Host != "chatgpt.com" || gjson.GetBytes(raw, "tools.0.type").String() != kind {
+					if r.URL.Host != "chatgpt.com" || ojson.GetBytes(raw, "tools.0.type").String() != kind {
 						t.Fatalf("hosted tool removed or routed to wrong host: %s %s", r.URL, raw)
 					}
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n"))}, nil

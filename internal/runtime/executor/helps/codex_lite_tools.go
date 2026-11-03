@@ -6,13 +6,12 @@ import (
 	"encoding/json"
 	"strconv"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // CodexImageTool recognizes hosted, flattened and namespaced image declarations.
-func CodexImageTool(tool gjson.Result, namespace string) bool {
+func CodexImageTool(tool ojson.Result, namespace string) bool {
 	name := tool.Get("name").String()
 	if name == "" {
 		name = tool.Get("function.name").String()
@@ -23,9 +22,9 @@ func CodexImageTool(tool gjson.Result, namespace string) bool {
 	return tool.Get("type").String() == "image_generation" || name == "image_gen.imagegen" || name == "image_gen__imagegen" || namespace == "image_gen" && name == "imagegen"
 }
 
-func codexToolDeclarationLists(body []byte) []gjson.Result {
-	lists := []gjson.Result{gjson.GetBytes(body, "tools")}
-	for _, item := range gjson.GetBytes(body, "input").Array() {
+func codexToolDeclarationLists(body []byte) []ojson.Result {
+	lists := []ojson.Result{ojson.GetBytes(body, "tools")}
+	for _, item := range ojson.GetBytes(body, "input").Array() {
 		if item.Get("type").String() == "additional_tools" {
 			lists = append(lists, item.Get("tools"))
 		}
@@ -66,12 +65,12 @@ func codexHasHostedTool(body []byte, types ...string) bool {
 }
 
 func codexLiteItemID(body []byte, prefix string, content []byte) string {
-	thread := gjson.GetBytes(body, "client_metadata.thread_id").String()
+	thread := ojson.GetBytes(body, "client_metadata.thread_id").String()
 	if thread == "" {
-		thread = gjson.Parse(gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()).Get("thread_id").String()
+		thread = ojson.Parse(ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()).Get("thread_id").String()
 	}
 	if thread == "" {
-		thread = gjson.GetBytes(body, "prompt_cache_key").String()
+		thread = ojson.GetBytes(body, "prompt_cache_key").String()
 	}
 	sum := sha256.Sum256(append([]byte(thread+"\x00"), content...))
 	return prefix + "_" + hex.EncodeToString(sum[:16])
@@ -83,7 +82,7 @@ func codexDeclaredFunction(body []byte, namespace, name string) bool {
 }
 
 func codexLiteFunctionIdentity(body []byte, namespace, name string) (string, string) {
-	for _, tool := range util.CollectResponsesToolDescriptors(gjson.ParseBytes(body)) {
+	for _, tool := range util.CollectResponsesToolDescriptors(ojson.ParseBytes(body)) {
 		if tool.ToolType == "function" && (tool.Name == namespace+"__"+name || tool.Name == namespace+"."+name || tool.Namespace == namespace && tool.LocalName == name) {
 			return tool.Namespace, tool.LocalName
 		}
@@ -97,15 +96,15 @@ func codexLiteFunctionReference(body []byte, namespace, name string) []byte {
 		return nil
 	}
 	choice := []byte(`{"type":"function"}`)
-	choice, _ = sjson.SetBytes(choice, "name", declaredName)
+	choice, _ = ojson.SetBytes(choice, "name", declaredName)
 	if declaredNamespace != "" {
-		choice, _ = sjson.SetBytes(choice, "namespace", declaredNamespace)
+		choice, _ = ojson.SetBytes(choice, "namespace", declaredNamespace)
 	}
 	return choice
 }
 
 func normalizeCodexLiteToolChoice(body []byte) []byte {
-	convert := func(choice gjson.Result) []byte {
+	convert := func(choice ojson.Result) []byte {
 		switch choice.Get("type").String() {
 		case "image_generation":
 			return codexLiteFunctionReference(body, "image_gen", "imagegen")
@@ -114,13 +113,13 @@ func normalizeCodexLiteToolChoice(body []byte) []byte {
 		}
 		return nil
 	}
-	choice := gjson.GetBytes(body, "tool_choice")
+	choice := ojson.GetBytes(body, "tool_choice")
 	if raw := convert(choice); raw != nil {
-		body, _ = sjson.SetRawBytes(body, "tool_choice", raw)
+		body, _ = ojson.SetRawBytes(body, "tool_choice", raw)
 	} else if choices := choice.Get("tools"); choices.IsArray() {
 		for index, entry := range choices.Array() {
 			if raw := convert(entry); raw != nil {
-				body, _ = sjson.SetRawBytes(body, "tool_choice.tools."+strconv.Itoa(index), raw)
+				body, _ = ojson.SetRawBytes(body, "tool_choice.tools."+strconv.Itoa(index), raw)
 			}
 		}
 	}
@@ -131,11 +130,11 @@ func normalizeCodexLiteToolChoice(body []byte) []byte {
 // converts existing hosted image/search tools for Lite. Search is never added unrequested.
 // Client schemas are retained; tool execution remains the caller's responsibility.
 func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, originalRequests ...[]byte) ([]byte, error) {
-	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+	if !ojson.ValidBytes(body) || !ojson.ParseBytes(body).IsObject() {
 		return body, nil
 	}
 	for _, path := range []string{"input", "tools"} {
-		if value := gjson.GetBytes(body, path); value.Exists() && !value.IsArray() {
+		if value := ojson.GetBytes(body, path); value.Exists() && !value.IsArray() {
 			return body, nil
 		}
 	}
@@ -147,7 +146,7 @@ func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, origin
 	images := injectImages || codexHasHostedTool(body, "image_generation")
 	web := codexHasHostedTool(body, "web_search", "web_search_preview", "web_search_preview_2025_03_11")
 	// Remove hosted declarations before adding their client-executed counterparts.
-	transform := func(tools gjson.Result) ([]byte, bool) {
+	transform := func(tools ojson.Result) ([]byte, bool) {
 		if !tools.IsArray() {
 			return nil, false
 		}
@@ -176,14 +175,14 @@ func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, origin
 			continue
 		}
 		merged := false
-		child := gjson.Parse(spec.raw).Get("tools.0")
-		body = transformCodexToolLists(body, func(tools gjson.Result) ([]byte, bool) {
+		child := ojson.Parse(spec.raw).Get("tools.0")
+		body = transformCodexToolLists(body, func(tools ojson.Result) ([]byte, bool) {
 			if merged || !tools.IsArray() {
 				return nil, false
 			}
 			for index, tool := range tools.Array() {
 				if tool.Get("type").String() == "namespace" && tool.Get("name").String() == spec.namespace {
-					raw, err := sjson.SetRaw(tools.Raw, strconv.Itoa(index)+".tools.-1", child.Raw)
+					raw, err := ojson.SetRaw(tools.Raw, strconv.Itoa(index)+".tools.-1", child.Raw)
 					if err == nil {
 						merged = true
 						return []byte(raw), true
@@ -197,45 +196,45 @@ func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, origin
 		}
 	}
 	// Move compatibility top-level declarations to a stable additional_tools item.
-	top := gjson.GetBytes(body, "tools")
+	top := ojson.GetBytes(body, "tools")
 	if top.IsArray() {
 		for _, tool := range top.Array() {
 			additions = append(additions, json.RawMessage(tool.Raw))
 		}
-		body, _ = sjson.DeleteBytes(body, "tools")
+		body, _ = ojson.DeleteBytes(body, "tools")
 	}
 	if len(additions) > 0 {
 		// Merge namespace children, keeping original declarations when names collide.
 		additions = mergeCodexLiteNamespaces(additions)
 		raw, _ := json.Marshal(additions)
 		item := []byte(`{"type":"additional_tools","role":"developer"}`)
-		item, _ = sjson.SetRawBytes(item, "tools", raw)
-		item, _ = sjson.SetBytes(item, "id", codexLiteItemID(body, "at", raw))
-		input := gjson.GetBytes(body, "input")
+		item, _ = ojson.SetRawBytes(item, "tools", raw)
+		item, _ = ojson.SetBytes(item, "id", codexLiteItemID(body, "at", raw))
+		input := ojson.GetBytes(body, "input")
 		items := []json.RawMessage{item}
 		for _, value := range input.Array() {
 			items = append(items, json.RawMessage(value.Raw))
 		}
 		rawInput, _ := json.Marshal(items)
-		body, _ = sjson.SetRawBytes(body, "input", rawInput)
+		body, _ = ojson.SetRawBytes(body, "input", rawInput)
 	}
-	if instructions := gjson.GetBytes(body, "instructions"); instructions.Type == gjson.String {
+	if instructions := ojson.GetBytes(body, "instructions"); instructions.Type == ojson.String {
 		if instructions.String() != "" {
 			item := []byte(`{"type":"message","role":"developer","content":[{"type":"input_text","text":""}]}`)
-			item, _ = sjson.SetBytes(item, "content.0.text", instructions.String())
-			item, _ = sjson.SetBytes(item, "id", codexLiteItemID(body, "msg", []byte(instructions.String())))
+			item, _ = ojson.SetBytes(item, "content.0.text", instructions.String())
+			item, _ = ojson.SetBytes(item, "id", codexLiteItemID(body, "msg", []byte(instructions.String())))
 			items := []json.RawMessage{item}
-			for _, value := range gjson.GetBytes(body, "input").Array() {
+			for _, value := range ojson.GetBytes(body, "input").Array() {
 				items = append(items, json.RawMessage(value.Raw))
 			}
 			raw, _ := json.Marshal(items)
-			body, _ = sjson.SetRawBytes(body, "input", raw)
+			body, _ = ojson.SetRawBytes(body, "input", raw)
 		}
-		body, _ = sjson.DeleteBytes(body, "instructions")
+		body, _ = ojson.DeleteBytes(body, "instructions")
 	}
 	body = normalizeCodexLiteToolChoice(body)
 	// Reverse the known compatibility names emitted by Chat Completions translation.
-	for i, item := range gjson.GetBytes(body, "input").Array() {
+	for i, item := range ojson.GetBytes(body, "input").Array() {
 		if item.Get("type").String() != "function_call" || item.Get("namespace").String() != "" {
 			continue
 		}
@@ -244,8 +243,8 @@ func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, origin
 			namespace, declaredName := codexLiteFunctionIdentity(body, pair[0], pair[1])
 			if (name == pair[0]+"__"+pair[1] || name == pair[0]+"."+pair[1]) && namespace == pair[0] && declaredName == pair[1] {
 				path := "input." + strconv.Itoa(i)
-				body, _ = sjson.SetBytes(body, path+".namespace", pair[0])
-				body, _ = sjson.SetBytes(body, path+".name", pair[1])
+				body, _ = ojson.SetBytes(body, path+".namespace", pair[0])
+				body, _ = ojson.SetBytes(body, path+".name", pair[1])
 			}
 		}
 	}
@@ -256,7 +255,7 @@ func mergeCodexLiteNamespaces(tools []json.RawMessage) []json.RawMessage {
 	var result []json.RawMessage
 	indexes := map[string]int{}
 	for _, raw := range tools {
-		tool := gjson.ParseBytes(raw)
+		tool := ojson.ParseBytes(raw)
 		if tool.Get("type").String() != "namespace" {
 			result = append(result, raw)
 			continue
@@ -270,7 +269,7 @@ func mergeCodexLiteNamespaces(tools []json.RawMessage) []json.RawMessage {
 		}
 		combined := result[index]
 		seen := make(map[string]bool)
-		for _, child := range gjson.GetBytes(combined, "tools").Array() {
+		for _, child := range ojson.GetBytes(combined, "tools").Array() {
 			seen[child.Get("type").String()+"\x00"+child.Get("name").String()] = true
 		}
 		for _, child := range tool.Get("tools").Array() {
@@ -278,7 +277,7 @@ func mergeCodexLiteNamespaces(tools []json.RawMessage) []json.RawMessage {
 			if seen[key] {
 				continue
 			}
-			combined, _ = sjson.SetRawBytes(combined, "tools.-1", []byte(child.Raw))
+			combined, _ = ojson.SetRawBytes(combined, "tools.-1", []byte(child.Raw))
 			seen[key] = true
 		}
 		result[index] = combined
@@ -286,19 +285,19 @@ func mergeCodexLiteNamespaces(tools []json.RawMessage) []json.RawMessage {
 	return result
 }
 
-func transformCodexToolLists(body []byte, transform func(gjson.Result) ([]byte, bool)) []byte {
-	if raw, changed := transform(gjson.GetBytes(body, "tools")); changed {
-		body, _ = sjson.SetRawBytes(body, "tools", raw)
+func transformCodexToolLists(body []byte, transform func(ojson.Result) ([]byte, bool)) []byte {
+	if raw, changed := transform(ojson.GetBytes(body, "tools")); changed {
+		body, _ = ojson.SetRawBytes(body, "tools", raw)
 	}
-	for i, item := range gjson.GetBytes(body, "input").Array() {
+	for i, item := range ojson.GetBytes(body, "input").Array() {
 		if item.Get("type").String() != "additional_tools" {
 			continue
 		}
 		if raw, changed := transform(item.Get("tools")); changed {
 			path := "input." + strconv.Itoa(i)
-			body, _ = sjson.SetRawBytes(body, path+".tools", raw)
+			body, _ = ojson.SetRawBytes(body, path+".tools", raw)
 			if item.Get("id").Exists() {
-				body, _ = sjson.SetBytes(body, path+".id", codexLiteItemID(body, "at", raw))
+				body, _ = ojson.SetBytes(body, path+".id", codexLiteItemID(body, "at", raw))
 			}
 		}
 	}
@@ -307,8 +306,8 @@ func transformCodexToolLists(body []byte, transform func(gjson.Result) ([]byte, 
 
 // StripCodexImageTools removes declarations only, never function-call history or schemas.
 func StripCodexImageTools(body []byte) []byte {
-	var filter func(gjson.Result, string) ([]byte, bool)
-	filter = func(tools gjson.Result, namespace string) ([]byte, bool) {
+	var filter func(ojson.Result, string) ([]byte, bool)
+	filter = func(tools ojson.Result, namespace string) ([]byte, bool) {
 		if !tools.IsArray() {
 			return nil, false
 		}
@@ -327,7 +326,7 @@ func StripCodexImageTools(body []byte) []byte {
 					if string(children) == "[]" {
 						continue
 					}
-					raw, _ = sjson.SetRawBytes(raw, "tools", children)
+					raw, _ = ojson.SetRawBytes(raw, "tools", children)
 				}
 			}
 			kept = append(kept, raw)
@@ -335,15 +334,15 @@ func StripCodexImageTools(body []byte) []byte {
 		raw, _ := json.Marshal(kept)
 		return raw, changed
 	}
-	body = transformCodexToolLists(body, func(tools gjson.Result) ([]byte, bool) { return filter(tools, "") })
-	choice := gjson.GetBytes(body, "tool_choice")
-	if CodexImageTool(choice, "") || choice.Type == gjson.String && (choice.String() == "image_generation" || choice.String() == "image_gen.imagegen" || choice.String() == "image_gen__imagegen") {
-		body, _ = sjson.DeleteBytes(body, "tool_choice")
+	body = transformCodexToolLists(body, func(tools ojson.Result) ([]byte, bool) { return filter(tools, "") })
+	choice := ojson.GetBytes(body, "tool_choice")
+	if CodexImageTool(choice, "") || choice.Type == ojson.String && (choice.String() == "image_generation" || choice.String() == "image_gen.imagegen" || choice.String() == "image_gen__imagegen") {
+		body, _ = ojson.DeleteBytes(body, "tool_choice")
 	} else if raw, changed := filter(choice.Get("tools"), ""); changed {
 		if string(raw) == "[]" {
-			body, _ = sjson.DeleteBytes(body, "tool_choice")
+			body, _ = ojson.DeleteBytes(body, "tool_choice")
 		} else {
-			body, _ = sjson.SetRawBytes(body, "tool_choice.tools", raw)
+			body, _ = ojson.SetRawBytes(body, "tool_choice.tools", raw)
 		}
 	}
 	return body

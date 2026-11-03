@@ -3,9 +3,9 @@ package executor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/MoeForge/moego/base64"
 	"io"
 	"mime/multipart"
 	"net"
@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
@@ -32,8 +33,6 @@ import (
 	openaihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // This exercises the real master and child worker with fake credentials and a local upstream.
@@ -157,8 +156,8 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				}
 				workerCalls.Add(1)
 				requests <- nativeRuntimeExchange{path: r.URL.Path, body: body, headers: r.Header.Clone(), websocket: true, node: node}
-				lite := gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() == "true"
-				if lite && gjson.GetBytes(body, "parallel_tool_calls").Type != gjson.False ||
+				lite := ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() == "true"
+				if lite && ojson.GetBytes(body, "parallel_tool_calls").Type != ojson.False ||
 					bytes.Contains(body, []byte("native-lite-parallel-probe")) && !lite {
 					t.Error("worker sent an invalid native WebSocket Lite/parallel combination")
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":400,"error":{"message":"native Lite requires parallel_tool_calls=false","type":"invalid_request_error"}}`))
@@ -177,7 +176,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 				if bytes.Contains(body, []byte("cancel-response")) {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_cancel"}}`))
 					_, next, errRead := conn.ReadMessage()
-					if errRead == nil && gjson.GetBytes(next, "type").String() != "response.cancel" {
+					if errRead == nil && ojson.GetBytes(next, "type").String() != "response.cancel" {
 						t.Error("native request was replayed after cancellation")
 					}
 					cancelled <- struct{}{}
@@ -216,7 +215,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		requests <- nativeRuntimeExchange{path: r.URL.Path, body: body, headers: r.Header.Clone()}
 		if r.URL.Path == "/v1/responses" {
 			lite := r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite") == "true"
-			if lite && gjson.GetBytes(body, "parallel_tool_calls").Type != gjson.False ||
+			if lite && ojson.GetBytes(body, "parallel_tool_calls").Type != ojson.False ||
 				bytes.Contains(body, []byte("native-lite-parallel-probe")) && !lite {
 				t.Error("worker sent an invalid native HTTP Lite/parallel combination")
 				w.WriteHeader(http.StatusBadRequest)
@@ -231,7 +230,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			t.Error("caller cookie reached worker upstream")
 		}
 		w.Header().Set("X-Request-Id", "image-upstream-trace")
-		prompt := gjson.GetBytes(body, "prompt").String()
+		prompt := ojson.GetBytes(body, "prompt").String()
 		if prompt == "fail" {
 			w.WriteHeader(429)
 			_, _ = io.WriteString(w, `{"error":{"message":"image quota failure"}}`)
@@ -275,7 +274,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			}
 			return
 		}
-		if gjson.GetBytes(body, "stream").Bool() {
+		if ojson.GetBytes(body, "stream").Bool() {
 			liveImage.serve(r.Context(), w, r.URL.Path, prompt == "live-image-stream")
 			return
 		}
@@ -582,7 +581,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					t.Fatal(err)
 				}
 				received := readExchange(t)
-				ticket := gjson.GetBytes(received.body, "client_metadata.x-codex-turn-state").String()
+				ticket := ojson.GetBytes(received.body, "client_metadata.x-codex-turn-state").String()
 				fields, ok := logging.CodexTurnStateLogFieldsForContext(ginContext)
 				if !ok || len(ticket) != index*780 || fields.RequestTurnStateLen != index*780 || fields.ResponseTurnStateLen != 780 || index == 1 && ticket != strings.Repeat("T", 780) {
 					t.Fatalf("ticket or correlated log lost: actual=%d log=%+v", len(ticket), fields)
@@ -618,16 +617,16 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 						t.Fatalf("status=%d CPA=%d worker=%d body=%s", rec.Code, cpaCalls.Load(), workerCalls.Load()-before, rec.Body.String())
 					}
 					received := readExchange(t)
-					if received.path != path || gjson.GetBytes(received.body, "prompt").String() != "configured-native-prompt" || gjson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || gjson.GetBytes(received.body, "quality").Exists() {
+					if received.path != path || ojson.GetBytes(received.body, "prompt").String() != "configured-native-prompt" || ojson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || ojson.GetBytes(received.body, "quality").Exists() {
 						t.Fatalf("native image DTO lost supported business input: path=%s body=%s", received.path, received.body)
 					}
-					if (!stream && gjson.GetBytes(received.body, "stream").Type != gjson.False) || gjson.GetBytes(received.body, "stream").Bool() != stream || gjson.GetBytes(received.body, "partial_images").Int() != 2 || gjson.GetBytes(received.body, "output_format").String() != "jpeg" || gjson.GetBytes(received.body, "output_compression").Int() != 80 {
+					if (!stream && ojson.GetBytes(received.body, "stream").Type != ojson.False) || ojson.GetBytes(received.body, "stream").Bool() != stream || ojson.GetBytes(received.body, "partial_images").Int() != 2 || ojson.GetBytes(received.body, "output_format").String() != "jpeg" || ojson.GetBytes(received.body, "output_compression").Int() != 80 {
 						t.Fatalf("native Images options were lost: %s", received.body)
 					}
-					if path == codexImagesEditsPath && (gjson.GetBytes(received.body, "images.#").Int() != 1 || !strings.HasSuffix(gjson.GetBytes(received.body, "images.0.image_url").String(), "AQID")) {
+					if path == codexImagesEditsPath && (ojson.GetBytes(received.body, "images.#").Int() != 1 || !strings.HasSuffix(ojson.GetBytes(received.body, "images.0.image_url").String(), "AQID")) {
 						t.Fatal("native image edit lost its input image", string(received.body))
 					}
-					if path == codexImagesEditsPath && !strings.HasSuffix(gjson.GetBytes(received.body, "mask.image_url").String(), "BAUG") {
+					if path == codexImagesEditsPath && !strings.HasSuffix(ojson.GetBytes(received.body, "mask.image_url").String(), "BAUG") {
 						t.Fatalf("native image edit lost its mask: %s", received.body)
 					}
 					if stream && (!strings.Contains(rec.Body.String(), "completed") || !strings.Contains(rec.Body.String(), "native-image-partial-1") || !strings.Contains(rec.Body.String(), "native-image-partial-2")) {
@@ -678,14 +677,14 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			for _, stream := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/stream=%t", field, stream), func(t *testing.T) {
 					payload, _ := nativeRuntimeImagePayload(t, codexImagesEditsPath, stream, false)
-					payload, _ = sjson.SetRawBytes(payload, field, []byte(`{"large":9007199254740993,"nullable":null,"enabled":false}`))
+					payload, _ = ojson.SetRawBytes(payload, field, []byte(`{"large":9007199254740993,"nullable":null,"enabled":false}`))
 					before := workerCalls.Load()
 					_, err := runtimeImageResult(t, NewCodexAutoExecutor(cfg), context.Background(), auth, coreexecutor.Request{Model: "gpt-image-1.5", Payload: payload}, codexOpenAIImageTestOptions(codexImagesEditsPath, stream), stream)
 					if err != nil || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 {
 						t.Fatalf("native image extension did not reach the worker: field=%s worker=%d CPA=%d error=%v", field, workerCalls.Load()-before, cpaCalls.Load(), err)
 					}
 					received := readExchange(t)
-					equalRuntimeNativeJSON(t, []byte(gjson.GetBytes(payload, field).Raw), []byte(gjson.GetBytes(received.body, field).Raw))
+					equalRuntimeNativeJSON(t, []byte(ojson.GetBytes(payload, field).Raw), []byte(ojson.GetBytes(received.body, field).Raw))
 				})
 			}
 		}
@@ -707,7 +706,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					payload = []byte(`{"model":"gpt-6.1-sol","input":[{"type":"function_call","call_id":"call_shell","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"call_shell","output":"client shell result"},{"type":"custom_tool_call","call_id":"call_exec","name":"exec","input":"hello"},{"type":"custom_tool_call_output","call_id":"call_exec","output":"client exec result"}]}`)
 				}
 				for key, value := range map[string]string{"session_id": "client-session", "thread_id": "client-thread", "turn_id": mode + "-turn"} {
-					payload, _ = sjson.SetBytes(payload, "client_metadata."+key, value)
+					payload, _ = ojson.SetBytes(payload, "client_metadata."+key, value)
 				}
 				if mode == "summary" {
 					cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{
@@ -726,20 +725,20 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 					t.Fatalf("native Responses route failed: err=%v worker=%d CPA=%d", err, attempts, cpaCalls.Load())
 				}
 				received := readExchange(t)
-				if received.path != "/v1/responses" || received.websocket != (nativeTransport == "websocket") || received.websocket && gjson.GetBytes(received.body, "type").String() != "response.create" || !received.websocket && !gjson.GetBytes(received.body, "stream").Bool() {
+				if received.path != "/v1/responses" || received.websocket != (nativeTransport == "websocket") || received.websocket && ojson.GetBytes(received.body, "type").String() != "response.create" || !received.websocket && !ojson.GetBytes(received.body, "stream").Bool() {
 					t.Fatalf("native Responses request was not built: %s %s", received.path, received.body)
 				}
 				if mode == "summary" {
-					if !bytes.Contains(received.body, []byte("native-supported-instructions")) || gjson.GetBytes(received.body, "service_tier").String() != "priority" || gjson.GetBytes(received.body, "reasoning.effort").String() != "low" || gjson.GetBytes(received.body, "text.verbosity").String() != "low" {
+					if !bytes.Contains(received.body, []byte("native-supported-instructions")) || ojson.GetBytes(received.body, "service_tier").String() != "priority" || ojson.GetBytes(received.body, "reasoning.effort").String() != "low" || ojson.GetBytes(received.body, "text.verbosity").String() != "low" {
 						t.Fatalf("supported CPA payload rules were lost at the native entry: %s", received.body)
 					}
-					for _, item := range gjson.GetBytes(received.body, "input").Array() {
+					for _, item := range ojson.GetBytes(received.body, "input").Array() {
 						if item.Get("role").String() == "user" && (item.Get("type").String() != "message" || item.Get("content.0.type").String() != "input_text") {
 							t.Fatalf("worker did not normalize native message input: %s", item.Raw)
 						}
 					}
 				}
-				if mode == "native_lite" && (gjson.GetBytes(received.body, "reasoning.context").String() != "all_turns" || !bytes.Contains(received.body, []byte("additional_tools"))) {
+				if mode == "native_lite" && (ojson.GetBytes(received.body, "reasoning.context").String() != "all_turns" || !bytes.Contains(received.body, []byte("additional_tools"))) {
 					t.Fatalf("native Lite context or tool history was lost: %s", received.body)
 				}
 				if mode == "compaction_trigger" && (!bytes.Contains(received.body, []byte("compaction_trigger")) || !bytes.Contains(output, []byte("compact-result"))) {
@@ -795,7 +794,7 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 			if rec.Code != 200 || workerCalls.Load() != before+1 || cpaCalls.Load() != 0 || !strings.Contains(rec.Body.String(), "native result") {
 				t.Fatalf("Chat did not execute through native runtime: status=%d native=%d CPA=%d body=%s", rec.Code, workerCalls.Load()-before, cpaCalls.Load(), rec.Body.String())
 			}
-			if !stream && gjson.Get(rec.Body.String(), "choices.0.message.content").String() != "native result" {
+			if !stream && ojson.Get(rec.Body.String(), "choices.0.message.content").String() != "native result" {
 				t.Fatal("native output was not translated to Chat completions", rec.Body.String())
 			}
 			if stream && !strings.Contains(rec.Body.String(), "chat.completion.chunk") {
@@ -979,7 +978,7 @@ func nativeRuntimeImagePayload(t *testing.T, path string, stream, form bool) ([]
 func nativeRuntimeResponseEvents(t *testing.T, home string, body []byte) [][]byte {
 	t.Helper()
 	output := `[{"type":"message","id":"msg_native","role":"assistant","status":"completed","content":[{"type":"output_text","text":"native result"}]}]`
-	if gjson.GetBytes(body, "generate").Type == gjson.False {
+	if ojson.GetBytes(body, "generate").Type == ojson.False {
 		output = `[]`
 	}
 	if bytes.Contains(body, []byte("compaction_trigger")) {
@@ -1016,10 +1015,10 @@ func nativeRuntimeResponseEvents(t *testing.T, home string, body []byte) [][]byt
 	if bytes.Contains(body, []byte("draw-hosted")) {
 		events = append(events, map[string]any{"type": "response.image_generation_call.partial_image", "partial_image_b64": "hosted-partial", "partial_image_index": 0})
 	}
-	for index, item := range gjson.Parse(output).Array() {
+	for index, item := range ojson.Parse(output).Array() {
 		added := []byte(item.Raw)
 		if item.Get("type").String() == "message" {
-			added, _ = sjson.SetBytes(added, "content", []any{})
+			added, _ = ojson.SetBytes(added, "content", []any{})
 		}
 		events = append(events, map[string]any{"type": "response.output_item.added", "output_index": index, "item": json.RawMessage(added)})
 		if item.Get("type").String() == "message" {

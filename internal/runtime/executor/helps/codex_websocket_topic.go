@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 const CodexTopicSessionPrefix = "codex-topic/"
@@ -18,9 +18,9 @@ const CodexTopicSessionPrefix = "codex-topic/"
 // Per-frame metadata takes precedence over an older downstream handshake.
 // Parent IDs and cache keys must never merge distinct child threads.
 func CodexWebsocketTopic(payload []byte, headers http.Header) string {
-	root := gjson.ParseBytes(payload)
-	metadata := gjson.Parse(root.Get("client_metadata.x-codex-turn-metadata").String())
-	headerMetadata := gjson.Parse(topicHeader(headers, "X-Codex-Turn-Metadata"))
+	root := ojson.ParseBytes(payload)
+	metadata := ojson.Parse(root.Get("client_metadata.x-codex-turn-metadata").String())
+	headerMetadata := ojson.Parse(topicHeader(headers, "X-Codex-Turn-Metadata"))
 	first := func(values ...string) string {
 		for _, value := range values {
 			if value = strings.TrimSpace(value); value != "" {

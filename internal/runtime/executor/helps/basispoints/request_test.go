@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // The wire fields and history shapes follow both reference adapters. Ordinary
@@ -50,8 +50,8 @@ func TestPrepareUsesBasispointsRequestSchema(t *testing.T) {
 	if len(input) != 4 {
 		t.Fatalf("want instruction, catalog, user and encrypted reasoning; got %s", body)
 	}
-	if gjson.GetBytes(body, "input.0.content.0.text").String() != "Answer briefly." ||
-		gjson.GetBytes(body, "input.2.internal_chat_message_metadata_passthrough").Exists() {
+	if ojson.GetBytes(body, "input.0.content.0.text").String() != "Answer briefly." ||
+		ojson.GetBytes(body, "input.2.internal_chat_message_metadata_passthrough").Exists() {
 		t.Fatalf("instructions or message metadata not translated: %s", body)
 	}
 	wantReasoning := object{"type": "reasoning", "summary": []any{}, "encrypted_content": "opaque-state"}
@@ -90,7 +90,7 @@ func TestPrepareOptionalWireFields(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := gjson.GetBytes(body, tc.key).Raw; got != tc.want {
+			if got := ojson.GetBytes(body, tc.key).Raw; got != tc.want {
 				t.Fatalf("wire %s = %s, want %s", tc.key, got, tc.want)
 			}
 		})
@@ -109,7 +109,7 @@ func TestPrepareMetadataLimitsDoNotSplitUnicodeOrRoundNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := gjson.GetBytes(body, "metadata").Map()
+	metadata := ojson.GetBytes(body, "metadata").Map()
 	if len(metadata) != 6 || metadata["large"].String() != "9007199254740993" || metadata[strings.Repeat("界", 64)].String() != strings.Repeat("界", 512) {
 		t.Fatalf("metadata is not wire-safe: %s", body)
 	}

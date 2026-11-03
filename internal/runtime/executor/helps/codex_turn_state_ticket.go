@@ -13,12 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const (
@@ -162,8 +161,8 @@ func ApplyCodexTurnStateTicketBody(auth *cliproxyauth.Auth, cfg config.CodexTurn
 	if !ticket.valid(time.Now()) {
 		return body
 	}
-	body, _ = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
-	updated, errSet := sjson.SetBytes(body, "client_metadata.x-codex-turn-state", ticket.State)
+	body, _ = ojson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
+	updated, errSet := ojson.SetBytes(body, "client_metadata.x-codex-turn-state", ticket.State)
 	if errSet != nil {
 		return body
 	}
@@ -195,13 +194,13 @@ func RecordCodexTurnStateTicketOnEvent(auth *cliproxyauth.Auth, cfg config.Codex
 	if len(payload) == 0 || !cfg.Enabled || !isCodexTurnStateTicketAccount(auth) || !codexTurnStateTicketModelManaged(cfg, model) {
 		return false
 	}
-	kind := gjson.GetBytes(payload, "type").String()
+	kind := ojson.GetBytes(payload, "type").String()
 	if kind != "response.metadata" && kind != "codex.response.metadata" {
 		return false
 	}
 	value := ""
-	gjson.GetBytes(payload, "headers").ForEach(func(key, item gjson.Result) bool {
-		if strings.EqualFold(key.String(), CodexTurnStateTicketHeader) && item.Type == gjson.String {
+	ojson.GetBytes(payload, "headers").ForEach(func(key, item ojson.Result) bool {
+		if strings.EqualFold(key.String(), CodexTurnStateTicketHeader) && item.Type == ojson.String {
 			value = strings.TrimSpace(item.String())
 			return false
 		}

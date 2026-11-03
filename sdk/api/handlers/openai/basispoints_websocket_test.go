@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsWebsocketReplaysHistoryOverHTTP(t *testing.T) {
@@ -46,12 +46,12 @@ func TestBasispointsWebsocketReplaysHistoryOverHTTP(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, response, errRead := conn.ReadMessage()
-		if errRead != nil || gjson.GetBytes(response, "type").String() != "response.completed" {
+		if errRead != nil || ojson.GetBytes(response, "type").String() != "response.completed" {
 			t.Fatalf("response=%s err=%v", response, errRead)
 		}
 	}
 	payloads := executor.Payloads()
-	if len(payloads) != 2 || gjson.GetBytes(payloads[1], "previous_response_id").Exists() || len(gjson.GetBytes(payloads[1], "input").Array()) != 3 {
+	if len(payloads) != 2 || ojson.GetBytes(payloads[1], "previous_response_id").Exists() || len(ojson.GetBytes(payloads[1], "input").Array()) != 3 {
 		t.Fatalf("missing full history: %q", payloads)
 	}
 }

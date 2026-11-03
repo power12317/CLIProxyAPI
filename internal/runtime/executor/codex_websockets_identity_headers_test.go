@@ -7,13 +7,13 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	auth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexWebsocketIdentityHeaderPriorityAndFallback(t *testing.T) {
@@ -108,7 +108,7 @@ func TestCodexWebsocketIdentityHeaderPriorityAndFallback(t *testing.T) {
 				}
 				frame, gotHeaders := <-frames, <-headersSeen
 				if kind == "no_ids_native_random" {
-					wantCache = gjson.GetBytes(frame, "prompt_cache_key").String()
+					wantCache = ojson.GetBytes(frame, "prompt_cache_key").String()
 					if _, err := uuid.Parse(wantCache); err != nil {
 						t.Fatal("existing native UUID fallback was lost")
 					}
@@ -119,7 +119,7 @@ func TestCodexWebsocketIdentityHeaderPriorityAndFallback(t *testing.T) {
 						t.Errorf("%s=%q, want %q", key, got, want)
 					}
 				}
-				if got := gjson.GetBytes(frame, "prompt_cache_key").String(); got != wantCache {
+				if got := ojson.GetBytes(frame, "prompt_cache_key").String(); got != wantCache {
 					t.Errorf("header restoration changed body cache identity: %q, want %q", got, wantCache)
 				}
 				if gotHeaders.Get("Session_id") != "" || gotHeaders.Get("Thread_id") != "" {

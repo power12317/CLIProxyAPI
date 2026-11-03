@@ -4,8 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 type modelInputKey struct{}
@@ -25,23 +24,30 @@ func IsModelInput(ctx context.Context) bool {
 // conversion into native model input. The native parser owns their types and
 // capabilities; a second list of supported native fields would silently lag it.
 // Explicit native values take precedence over translated aliases and defaults.
-func PreserveModelInputFields(converted []byte, source gjson.Result, consumed ...string) []byte {
-	source.ForEach(func(key, value gjson.Result) bool {
+func PreserveModelInputFields(converted []byte, source ojson.Result, consumed ...string) []byte {
+	doc := ojson.NewDoc(converted)
+	PreserveModelInputFieldsDoc(doc, source, consumed...)
+	return doc.Bytes()
+}
+
+// PreserveModelInputFieldsDoc carries unconsumed native fields into one document.
+func PreserveModelInputFieldsDoc(doc *ojson.Doc, source ojson.Result, consumed ...string) {
+	if doc == nil {
+		return
+	}
+	source.ForEach(func(key, value ojson.Result) bool {
 		for _, name := range consumed {
 			if key.String() == name {
 				return true
 			}
 		}
 		path := strings.NewReplacer("\\", "\\\\", ".", "\\.", ":", "\\:").Replace(key.String())
-		current := gjson.GetBytes(converted, path)
+		current := doc.Get(path)
 		raw := []byte(value.Raw)
 		if current.IsObject() && value.IsObject() {
 			raw = PreserveModelInputFields([]byte(current.Raw), value)
 		}
-		if updated, errSet := sjson.SetRawBytes(converted, path, raw); errSet == nil {
-			converted = updated
-		}
+		_ = doc.SetRawBytes(path, raw)
 		return true
 	})
-	return converted
 }

@@ -7,13 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexExecutorExecuteResponsesLiteHeaderInjectsFunctionImageTool(t *testing.T) {
@@ -51,13 +51,13 @@ func TestCodexExecutorExecuteResponsesLiteHeaderInjectsFunctionImageTool(t *test
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if tools := gjson.GetBytes(gotBody, "tools"); tools.Exists() {
+	if tools := ojson.GetBytes(gotBody, "tools"); tools.Exists() {
 		t.Fatalf("unexpected tools in responses-lite upstream payload: %s", tools.Raw)
 	}
 	if !helps.HasCodexImageTool(gotBody) || util.ClassifyCodexResponsesLiteTools(gotBody) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("missing Lite image function: %s", gotBody)
 	}
-	parallelToolCalls := gjson.GetBytes(gotBody, "parallel_tool_calls")
+	parallelToolCalls := ojson.GetBytes(gotBody, "parallel_tool_calls")
 	if !parallelToolCalls.Exists() || parallelToolCalls.Bool() {
 		t.Fatalf("responses-lite parallel_tool_calls should be false: %s", gotBody)
 	}
@@ -84,13 +84,13 @@ func TestCodexOfficialRequestPreservesLiteBodyAcrossTranslation(t *testing.T) {
 	if got := gotHeaders.Get(codexResponsesLiteHeader); got != "true" {
 		t.Fatalf("Lite header = %q, want reconstructed Lite header; body=%s", got, gotBody)
 	}
-	if got := gjson.GetBytes(gotBody, "reasoning.context").String(); got != "all_turns" {
+	if got := ojson.GetBytes(gotBody, "reasoning.context").String(); got != "all_turns" {
 		t.Fatalf("reasoning.context = %q, want all_turns", got)
 	}
-	if got := gjson.GetBytes(gotBody, "parallel_tool_calls"); got.Type != gjson.False {
+	if got := ojson.GetBytes(gotBody, "parallel_tool_calls"); got.Type != ojson.False {
 		t.Fatalf("parallel_tool_calls = %s, want final true fixture", got.Raw)
 	}
-	if got := util.CollectResponsesToolWinners(gjson.ParseBytes(gotBody)); got["exec"].ToolType != "function" || got["image_gen__imagegen"].ToolType != "function" {
+	if got := util.CollectResponsesToolWinners(ojson.ParseBytes(gotBody)); got["exec"].ToolType != "function" || got["image_gen__imagegen"].ToolType != "function" {
 		t.Fatalf("expected original and image function declarations: %s", gotBody)
 	}
 }
@@ -131,7 +131,7 @@ func TestCodexResponsesLiteRequiresExplicitIntent(t *testing.T) {
 				t.Fatalf("header enabled = %t, want %t", gotHeader, test.want)
 			}
 			mirrored := ensureCodexResponsesLiteMirror(body, nil)
-			gotMirror := gjson.GetBytes(mirrored, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() == "true"
+			gotMirror := ojson.GetBytes(mirrored, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() == "true"
 			if gotMirror != test.want {
 				t.Fatalf("mirror enabled = %t, want %t; body=%s", gotMirror, test.want, mirrored)
 			}
@@ -142,7 +142,7 @@ func TestCodexResponsesLiteRequiresExplicitIntent(t *testing.T) {
 func TestCodexOfficialRequestInjectsImageToolWhenEnabled(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"turn-1\"}"},"input":[]}`)
 	got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", true)
-	if gjson.GetBytes(got, "tools.0.type").String() != "image_generation" {
+	if ojson.GetBytes(got, "tools.0.type").String() != "image_generation" {
 		t.Fatalf("official Codex request missing image tool: %s", got)
 	}
 }
@@ -150,10 +150,10 @@ func TestCodexOfficialRequestInjectsImageToolWhenEnabled(t *testing.T) {
 func TestDisableImageGenerationRemovesLiteAdditionalTool(t *testing.T) {
 	body := []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"image_generation"},{"type":"function","name":"exec"}]}],"tool_choice":{"type":"image_generation"}}`)
 	got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}}, nil, "/v1/responses", true)
-	if gjson.GetBytes(got, "input.0.tools.0.type").String() != "function" {
-		t.Fatalf("remaining tool = %s, want function; body=%s", gjson.GetBytes(got, "input.0.tools.0.type").Raw, got)
+	if ojson.GetBytes(got, "input.0.tools.0.type").String() != "function" {
+		t.Fatalf("remaining tool = %s, want function; body=%s", ojson.GetBytes(got, "input.0.tools.0.type").Raw, got)
 	}
-	if gjson.GetBytes(got, "tool_choice").Exists() {
+	if ojson.GetBytes(got, "tool_choice").Exists() {
 		t.Fatalf("image tool choice was not removed: %s", got)
 	}
 }
@@ -171,7 +171,7 @@ func TestCodexLiteHeaderIsPreservedWhenToolShapeIsNotLite(t *testing.T) {
 func TestCodexLiteMirrorIsPreservedWhenAlreadyPresent(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-luna","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"false"}}`)
 	got := ensureCodexResponsesLiteMirror(body, nil)
-	if value := gjson.GetBytes(got, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String(); value != "false" {
+	if value := ojson.GetBytes(got, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String(); value != "false" {
 		t.Fatalf("existing mirror = %q, want false", value)
 	}
 }
@@ -226,7 +226,7 @@ func TestCodexExecutorExecuteStreamResponsesLiteHeaderForcesParallelToolCallsFal
 		}
 	}
 
-	parallelToolCalls := gjson.GetBytes(gotBody, "parallel_tool_calls")
+	parallelToolCalls := ojson.GetBytes(gotBody, "parallel_tool_calls")
 	if !parallelToolCalls.Exists() || parallelToolCalls.Bool() {
 		t.Fatalf("responses-lite parallel_tool_calls should be false: %s", gotBody)
 	}
@@ -236,7 +236,7 @@ func TestCodexImagePolicy_ResponsesLiteMetadataInjectsFunction(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},"input":[{"role":"user","content":"hello"}]}`)
 	result := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, &config.Config{}, nil, "/v1/responses", false)
 
-	if !helps.HasCodexImageTool(result) || gjson.GetBytes(result, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(result) != util.CodexResponsesLiteToolsCompatible {
+	if !helps.HasCodexImageTool(result) || ojson.GetBytes(result, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(result) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatalf("expected Lite image function in additional_tools: %s", result)
 	}
 }
@@ -265,7 +265,7 @@ func TestEnsureImageGenerationTool_ResponsesLiteFalseMetadataStillInjectsTool(t 
 	body := []byte(`{"model":"gpt-5.6-sol","client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"false"},"input":"hello"}`)
 	result := ensureImageGenerationTool(body, "gpt-5.6-sol", nil)
 
-	if got := gjson.GetBytes(result, "tools.0.type").String(); got != "image_generation" {
+	if got := ojson.GetBytes(result, "tools.0.type").String(); got != "image_generation" {
 		t.Fatalf("tools.0.type = %q, want image_generation; body=%s", got, result)
 	}
 }
@@ -274,7 +274,7 @@ func TestEnsureImageGenerationTool_NoTools(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","input":"draw a cat"}`)
 	result := ensureImageGenerationTool(body, "gpt-5.4", nil)
 
-	tools := gjson.GetBytes(result, "tools")
+	tools := ojson.GetBytes(result, "tools")
 	if !tools.IsArray() {
 		t.Fatalf("expected tools array, got %v", tools.Type)
 	}
@@ -294,7 +294,7 @@ func TestEnsureImageGenerationTool_ExistingToolsWithoutImageGen(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"function","name":"get_weather","parameters":{}}]}`)
 	result := ensureImageGenerationTool(body, "gpt-5.4", nil)
 
-	tools := gjson.GetBytes(result, "tools")
+	tools := ojson.GetBytes(result, "tools")
 	arr := tools.Array()
 	if len(arr) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(arr))
@@ -311,7 +311,7 @@ func TestEnsureImageGenerationTool_AlreadyPresent(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"image_generation","output_format":"webp"},{"type":"function","name":"f1"}]}`)
 	result := ensureImageGenerationTool(body, "gpt-5.4", nil)
 
-	tools := gjson.GetBytes(result, "tools")
+	tools := ojson.GetBytes(result, "tools")
 	arr := tools.Array()
 	if len(arr) != 2 {
 		t.Fatalf("expected 2 tools (no duplicate), got %d", len(arr))
@@ -343,7 +343,7 @@ func TestEnsureImageGenerationTool_SimilarNamespaceStillInjectsTool(t *testing.T
 	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"namespace","name":"image_tools","tools":[{"type":"function","name":"imagegen","parameters":{}}]}]}`)
 	result := ensureImageGenerationTool(body, "gpt-5.4", nil)
 
-	tools := gjson.GetBytes(result, "tools").Array()
+	tools := ojson.GetBytes(result, "tools").Array()
 	if len(tools) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(tools))
 	}
@@ -356,7 +356,7 @@ func TestEnsureImageGenerationTool_EmptyToolsArray(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","tools":[]}`)
 	result := ensureImageGenerationTool(body, "gpt-5.4", nil)
 
-	tools := gjson.GetBytes(result, "tools")
+	tools := ojson.GetBytes(result, "tools")
 	arr := tools.Array()
 	if len(arr) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(arr))
@@ -370,7 +370,7 @@ func TestEnsureImageGenerationTool_WebSearchAndImageGen(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"web_search"}]}`)
 	result := ensureImageGenerationTool(body, "gpt-5.4", nil)
 
-	tools := gjson.GetBytes(result, "tools")
+	tools := ojson.GetBytes(result, "tools")
 	arr := tools.Array()
 	if len(arr) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(arr))
@@ -390,8 +390,8 @@ func TestEnsureImageGenerationTool_GPT53CodexSparkDoesNotInjectTool(t *testing.T
 	if string(result) != string(body) {
 		t.Fatalf("expected body to be unchanged, got %s", string(result))
 	}
-	if gjson.GetBytes(result, "tools").Exists() {
-		t.Fatalf("expected no tools for gpt-5.3-codex-spark, got %s", gjson.GetBytes(result, "tools").Raw)
+	if ojson.GetBytes(result, "tools").Exists() {
+		t.Fatalf("expected no tools for gpt-5.3-codex-spark, got %s", ojson.GetBytes(result, "tools").Raw)
 	}
 }
 
@@ -406,7 +406,7 @@ func TestEnsureImageGenerationTool_FreeCodexAuthDoesNotInjectTool(t *testing.T) 
 	if string(result) != string(body) {
 		t.Fatalf("expected body to be unchanged, got %s", string(result))
 	}
-	if gjson.GetBytes(result, "tools").Exists() {
-		t.Fatalf("expected no tools for free codex auth, got %s", gjson.GetBytes(result, "tools").Raw)
+	if ojson.GetBytes(result, "tools").Exists() {
+		t.Fatalf("expected no tools for free codex auth, got %s", ojson.GetBytes(result, "tools").Raw)
 	}
 }

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexTurnStateLogUpdatesPreserveResponseModelAndResetAttempts(t *testing.T) {
@@ -65,7 +65,7 @@ func TestCodexTurnStatePrefersStandardMetadataAcrossRequests(t *testing.T) {
 				state.firstValue = firstValue
 				state.ObserveEvent([]byte(fmt.Sprintf(`{"type":%q,"headers":{"X-Codex-Turn-State":%q}}`, step.kind, step.value)))
 				reader := cache.request(auth, target, body, nil)
-				if got := gjson.GetBytes(reader.ApplyWebsocketBody(body), "client_metadata.x-codex-turn-state").String(); got != step.want {
+				if got := ojson.GetBytes(reader.ApplyWebsocketBody(body), "client_metadata.x-codex-turn-state").String(); got != step.want {
 					t.Fatalf("after %s=%q: state=%q, want %q", step.kind, step.value, got, step.want)
 				}
 			}
@@ -194,7 +194,7 @@ func TestCodexTurnStateObservesWebsocketMetadataAndMirrorsBody(t *testing.T) {
 	state.observe("ts-1")
 
 	updated := state.ApplyWebsocketBody([]byte(`{"type":"response.create","client_metadata":{"turn_id":"turn-1"}}`))
-	if got := gjson.GetBytes(updated, "client_metadata.x-codex-turn-state").String(); got != "ts-1" {
+	if got := ojson.GetBytes(updated, "client_metadata.x-codex-turn-state").String(); got != "ts-1" {
 		t.Fatalf("websocket body state = %q, want ts-1", got)
 	}
 

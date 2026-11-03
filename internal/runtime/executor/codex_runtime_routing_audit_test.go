@@ -10,13 +10,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 // Regression tests adapted from the external routing audit: all runtime failures must remain local-network only.
@@ -132,7 +132,7 @@ func TestRuntimeRoutingAuditCompactionTriggerUsesResponses(t *testing.T) {
 			t.Errorf("operation = %s", req.Operation)
 		}
 		found := false
-		for _, item := range gjson.GetBytes(req.Request, "input").Array() {
+		for _, item := range ojson.GetBytes(req.Request, "input").Array() {
 			found = found || item.Get("type").String() == "compaction_trigger"
 		}
 		if !found {
@@ -153,8 +153,8 @@ func TestRuntimeRoutingAuditCompactionTriggerUsesResponses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inferenceCalls.Load() != 1 || nativeCalls.Load() != 0 || gjson.GetBytes(response.Payload, "output.0.type").String() != "compaction" {
-		t.Fatalf("inference=%d native=%d output type=%s", inferenceCalls.Load(), nativeCalls.Load(), gjson.GetBytes(response.Payload, "output.0.type").String())
+	if inferenceCalls.Load() != 1 || nativeCalls.Load() != 0 || ojson.GetBytes(response.Payload, "output.0.type").String() != "compaction" {
+		t.Fatalf("inference=%d native=%d output type=%s", inferenceCalls.Load(), nativeCalls.Load(), ojson.GetBytes(response.Payload, "output.0.type").String())
 	}
 	t.Logf("operation=responses, compaction_trigger preserved, inference/start=%d, CPA upstream HTTP=%d, output=compaction", inferenceCalls.Load(), nativeCalls.Load())
 }

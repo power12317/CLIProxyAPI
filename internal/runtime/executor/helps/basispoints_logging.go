@@ -9,13 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // RecordBasispointsFailure promotes this failed request to full local error
@@ -53,9 +52,9 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 	}
 	// Print the decoded transport input as well as its JSON envelope, so raw
 	// newlines, quotes and the exact failing code need no manual unescaping.
-	output := gjson.GetBytes(upstream, "response.output")
+	output := ojson.GetBytes(upstream, "response.output")
 	if !output.IsArray() {
-		output = gjson.GetBytes(upstream, "output")
+		output = ojson.GetBytes(upstream, "output")
 	}
 	var tools strings.Builder
 	for _, item := range output.Array() {
@@ -69,11 +68,11 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 			continue
 		}
 		arguments := item.Get("arguments")
-		if arguments.Type == gjson.String {
-			arguments = gjson.Parse(arguments.String())
+		if arguments.Type == ojson.String {
+			arguments = ojson.Parse(arguments.String())
 		}
 		fmt.Fprintf(&tools, "Arguments:\n%s\n", item.Get("arguments").String())
-		if code := arguments.Get("code"); code.Type == gjson.String {
+		if code := arguments.Get("code"); code.Type == ojson.String {
 			fmt.Fprintf(&tools, "Transport code:\n%s\n", code.String())
 		}
 	}
@@ -93,16 +92,16 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 // The identity body is for logging only, never sent to Basispoints.
 func NewBasispointsLogState(ctx context.Context, auth *coreauth.Auth, target string, original, wire []byte, clientHeaders http.Header, model string) *CodexTurnState {
 	body := original
-	nested := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
-	if nested.Type == gjson.String {
-		nested = gjson.Parse(nested.String())
+	nested := ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
+	if nested.Type == ojson.String {
+		nested = ojson.Parse(nested.String())
 	}
-	if gjson.GetBytes(body, "client_metadata.session_id").String() == "" && nested.Get("session_id").String() == "" {
-		session := firstString(codexTurnHeaderValue(clientHeaders, "Session-Id"), codexTurnHeaderValue(clientHeaders, "Session_id"), gjson.GetBytes(body, "prompt_cache_key").String(), gjson.GetBytes(wire, "metadata.task_id").String())
-		body, _ = sjson.SetBytes(body, "client_metadata.session_id", session)
+	if ojson.GetBytes(body, "client_metadata.session_id").String() == "" && nested.Get("session_id").String() == "" {
+		session := firstString(codexTurnHeaderValue(clientHeaders, "Session-Id"), codexTurnHeaderValue(clientHeaders, "Session_id"), ojson.GetBytes(body, "prompt_cache_key").String(), ojson.GetBytes(wire, "metadata.task_id").String())
+		body, _ = ojson.SetBytes(body, "client_metadata.session_id", session)
 	}
-	if gjson.GetBytes(body, "client_metadata.turn_id").String() == "" && nested.Get("turn_id").String() == "" {
-		body, _ = sjson.SetBytes(body, "client_metadata.turn_id", gjson.GetBytes(wire, "metadata.turn_id").String())
+	if ojson.GetBytes(body, "client_metadata.turn_id").String() == "" && nested.Get("turn_id").String() == "" {
+		body, _ = ojson.SetBytes(body, "client_metadata.turn_id", ojson.GetBytes(wire, "metadata.turn_id").String())
 	}
 	return NewCodexTurnState(ctx, auth, target, body, clientHeaders, model, clientHeaders)
 }
@@ -112,12 +111,12 @@ func NewBasispointsLogState(ctx context.Context, auth *coreauth.Auth, target str
 func LogBasispointsRejection(ctx context.Context, status int, wire []byte, headers http.Header) {
 	log.WithFields(log.Fields{
 		"request_id": logging.GetRequestID(ctx), "status": status,
-		"model":               gjson.GetBytes(wire, "model").String(),
-		"reasoning_effort":    gjson.GetBytes(wire, "reasoning_effort").String(),
-		"service_tier":        gjson.GetBytes(wire, "service_tier").String(),
-		"input_items":         gjson.GetBytes(wire, "input.#").Int(),
+		"model":               ojson.GetBytes(wire, "model").String(),
+		"reasoning_effort":    ojson.GetBytes(wire, "reasoning_effort").String(),
+		"service_tier":        ojson.GetBytes(wire, "service_tier").String(),
+		"input_items":         ojson.GetBytes(wire, "input.#").Int(),
 		"upstream_request_id": headers.Get("X-Request-Id"),
-	}).Warnf("Basispoints rejected request: status=%d effort=%q tier=%q input_items=%d upstream_request_id=%q", status, gjson.GetBytes(wire, "reasoning_effort").String(), gjson.GetBytes(wire, "service_tier").String(), gjson.GetBytes(wire, "input.#").Int(), headers.Get("X-Request-Id"))
+	}).Warnf("Basispoints rejected request: status=%d effort=%q tier=%q input_items=%d upstream_request_id=%q", status, ojson.GetBytes(wire, "reasoning_effort").String(), ojson.GetBytes(wire, "service_tier").String(), ojson.GetBytes(wire, "input.#").Int(), headers.Get("X-Request-Id"))
 }
 
 func LogBasispointsNativeToolRoute(ctx context.Context, reason string) {

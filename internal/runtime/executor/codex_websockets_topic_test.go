@@ -8,12 +8,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	auth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexTopicReusesAcrossConnectionsTurnsModelsAndReload(t *testing.T) {
@@ -32,7 +33,7 @@ func TestCodexTopicReusesAcrossConnectionsTurnsModelsAndReload(t *testing.T) {
 				return
 			}
 			frames <- payload
-			name := gjson.GetBytes(payload, "input.0.content").String()
+			name := ojson.GetBytes(payload, "input.0.content").String()
 			if name == "overload" {
 				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","status":503,"error":{"code":"server_is_overloaded","message":"busy"}}`))
 				continue
@@ -88,14 +89,14 @@ func TestCodexTopicReusesAcrossConnectionsTurnsModelsAndReload(t *testing.T) {
 	replacement.store = e.store
 	e = replacement
 	second := execute("second", "root", "turn-1", "model-b", "downstream-2", false)
-	if gjson.GetBytes(second, "model").String() != "model-b" {
+	if ojson.GetBytes(second, "model").String() != "model-b" {
 		t.Fatal("reused OAuth connection did not send the new model")
 	}
-	if got := gjson.GetBytes(second, "client_metadata.x-codex-turn-state").String(); got != "standard-state" {
+	if got := ojson.GetBytes(second, "client_metadata.x-codex-turn-state").String(); got != "standard-state" {
 		t.Fatalf("metadata priority lost: %q", got)
 	}
 	third := execute("third", "root", "turn-2", "model-a", "downstream-3", false)
-	if got := gjson.GetBytes(third, "client_metadata.x-codex-turn-state").String(); got != "" {
+	if got := ojson.GetBytes(third, "client_metadata.x-codex-turn-state").String(); got != "" {
 		t.Fatalf("turn state leaked: %q", got)
 	}
 	execute("overload", "root", "turn-3", "model-a", "downstream-4", true)
@@ -125,7 +126,7 @@ func TestCodexTopicCancellationDrainsBeforeNextRequest(t *testing.T) {
 			if errRead != nil {
 				return
 			}
-			name := gjson.GetBytes(payload, "input.0.content").String()
+			name := ojson.GetBytes(payload, "input.0.content").String()
 			sent <- name
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.created","response":{"id":%q}}`, name)))
 			if name == "first" {
@@ -246,7 +247,24 @@ func TestCodexTopicReconnectsOnlyAfterPhysicalDisconnect(t *testing.T) {
 	}
 	peer := <-peers
 	_ = peer.Close()
-	<-sess.upstreamDisconnectCh
+	// Recoverable transport loss is recorded without closing the downstream session.
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		sess.connMu.Lock()
+		disconnected := sess.conn == nil
+		sess.connMu.Unlock()
+		if disconnected {
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("physical disconnect was not recorded")
+		}
+	}
 	// A closed upstream does not trigger a background dial.
 	if connections.Load() != 1 {
 		t.Fatal("background reconnect")

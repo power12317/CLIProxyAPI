@@ -2,7 +2,6 @@ package basispoints
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"image"
@@ -14,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestAttachmentSupportedFormatsAndFilenames(t *testing.T) {
@@ -74,7 +75,7 @@ func TestAttachmentSupportedFormatsAndFilenames(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				result := gjson.GetBytes(wire, path)
+				result := ojson.GetBytes(wire, path)
 				if toolResult {
 					want := "data:" + tc.canonical + ";base64," + base64.StdEncoding.EncodeToString(tc.data)
 					if result.Get("image_url").String() != want || result.Get("file_id").Exists() {

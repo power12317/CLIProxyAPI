@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func clientSearchSource() object {
@@ -43,15 +43,15 @@ func TestClientToolSearchDiscoveryAndReplay(t *testing.T) {
 		if _, exists := next.tools["local.edit_sheet"]; !exists {
 			t.Fatal("discovered tool missing from callable catalog")
 		}
-		if gjson.GetBytes(wire, "input.2.type").String() != "function_call" || gjson.GetBytes(wire, "input.3.type").String() != "function_call_output" {
+		if ojson.GetBytes(wire, "input.2.type").String() != "function_call" || ojson.GetBytes(wire, "input.3.type").String() != "function_call_output" {
 			t.Fatalf("discovery history was not relayed: %s", wire)
 		}
-		output := gjson.Parse(gjson.GetBytes(wire, "input.3.output").String())
+		output := ojson.Parse(ojson.GetBytes(wire, "input.3.output").String())
 		if output.Get("tools.0.name").String() != "local" || output.Get("call_id").String() != "search-call" {
 			t.Fatal("discovery output lost original tools or identity")
 		}
 		if scope == "account-a" {
-			got, _ := decode([]byte(gjson.GetBytes(wire, "input.2").Raw))
+			got, _ := decode([]byte(ojson.GetBytes(wire, "input.2").Raw))
 			if !reflect.DeepEqual(got, native) {
 				t.Fatal("cached native search item changed")
 			}
@@ -83,7 +83,7 @@ func TestClientToolSearchStreamingEvents(t *testing.T) {
 		t.Fatal("client discovery was not emitted exactly once")
 	}
 	final := CompletedResponse(out.Bytes()[strings.LastIndex(out.String(), "event: response.completed"):])
-	if gjson.GetBytes(final, "output.0.arguments.query").String() != "spreadsheet editor" || gjson.GetBytes(final, "output.0.execution").String() != "client" {
+	if ojson.GetBytes(final, "output.0.arguments.query").String() != "spreadsheet editor" || ojson.GetBytes(final, "output.0.execution").String() != "client" {
 		t.Fatalf("client discovery shape changed: %s", final)
 	}
 }

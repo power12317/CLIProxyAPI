@@ -4,15 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
-	"github.com/tidwall/gjson"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
 // A warmup that cannot open WS must not become a billable HTTP generation.
 func CodexWebsocketPrewarmFallback(ctx context.Context, req cliproxyexecutor.Request) *cliproxyexecutor.StreamResult {
-	generate := gjson.GetBytes(req.Payload, "generate")
+	generate := ojson.GetBytes(req.Payload, "generate")
 	if !cliproxyexecutor.DownstreamWebsocket(ctx) || !generate.Exists() || generate.Bool() {
 		return nil
 	}

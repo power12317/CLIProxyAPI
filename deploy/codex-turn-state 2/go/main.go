@@ -78,10 +78,10 @@ extern void cliproxyPluginShutdown(void);
 import "C"
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/MoeForge/moego/base64"
 	"log"
 	"net/http"
 	"net/url"

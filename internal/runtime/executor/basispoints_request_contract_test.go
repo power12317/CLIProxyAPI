@@ -9,12 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestBasispointsSerializedRequestContract(t *testing.T) {
@@ -68,7 +67,7 @@ func TestBasispointsSerializedRequestContract(t *testing.T) {
 					})))
 					body := []byte(`{"model":"gpt-6-astra","instructions":"Reply OK","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}],"reasoning":{"effort":"low","summary":"auto"},"include":["reasoning.encrypted_content"],"text":{"verbosity":"low"},"max_output_tokens":1234,"context_management":null,"metadata":{"attempt":2},"prompt_cache_retention":"24h","client_metadata":{"x-codex-turn-metadata":"{}"}}`)
 					if tc.tier != "" {
-						body, _ = sjson.SetRawBytes(body, "service_tier", []byte(tc.tier))
+						body, _ = ojson.SetRawBytes(body, "service_tier", []byte(tc.tier))
 					}
 					req := coreexecutor.Request{Model: "gpt-6-astra", Payload: body}
 					opts := coreexecutor.Options{SourceFormat: format}
@@ -89,7 +88,7 @@ func TestBasispointsSerializedRequestContract(t *testing.T) {
 					} else {
 						var result coreexecutor.Response
 						result, err = executor.Execute(ctx, auth, req, opts)
-						if err == nil && gjson.GetBytes(result.Payload, "status").String() != "completed" {
+						if err == nil && ojson.GetBytes(result.Payload, "status").String() != "completed" {
 							t.Fatalf("unexpected JSON response: %s", result.Payload)
 						}
 					}

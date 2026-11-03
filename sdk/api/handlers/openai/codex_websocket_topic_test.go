@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	config "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -17,7 +18,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	auth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexWebsocketTopicSurvivesDownstreamReconnect(t *testing.T) {
@@ -39,7 +39,7 @@ func TestCodexWebsocketTopicSurvivesDownstreamReconnect(t *testing.T) {
 						return
 					}
 					observed <- number
-					if gjson.GetBytes(body, "type").String() != "response.create" {
+					if ojson.GetBytes(body, "type").String() != "response.create" {
 						t.Errorf("unexpected request: %s", body)
 						return
 					}
@@ -89,7 +89,7 @@ func TestCodexWebsocketTopicSurvivesDownstreamReconnect(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					kind := gjson.GetBytes(payload, "type").String()
+					kind := ojson.GetBytes(payload, "type").String()
 					if kind == "error" {
 						t.Fatalf("websocket error: %s", payload)
 					}

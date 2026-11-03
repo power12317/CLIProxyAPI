@@ -8,14 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
@@ -44,14 +43,14 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 					wireEffort := effort
 					if model == "gpt-6-astra" && effort == "max" {
 						wireEffort = "xhigh"
-						if gjson.GetBytes(raw, "input.0.type").String() != "configuration_update" || gjson.GetBytes(raw, "input.0.reasoning.effort").String() != "max" {
+						if ojson.GetBytes(raw, "input.0.type").String() != "configuration_update" || ojson.GetBytes(raw, "input.0.reasoning.effort").String() != "max" {
 							t.Fatal("requested max configuration missing")
 						}
 					}
-					if gjson.GetBytes(raw, "model").String() != model || gjson.GetBytes(raw, "reasoning_effort").String() != wireEffort {
+					if ojson.GetBytes(raw, "model").String() != model || ojson.GetBytes(raw, "reasoning_effort").String() != wireEffort {
 						t.Fatalf("request changed: %s", raw)
 					}
-					if effort == "" && gjson.GetBytes(raw, "reasoning_effort").Exists() {
+					if effort == "" && ojson.GetBytes(raw, "reasoning_effort").Exists() {
 						t.Fatal("default effort inserted")
 					}
 					if r.Header.Get("X-Codex-Turn-State") != "" || r.Header.Get("Content-Encoding") != "" {
@@ -71,7 +70,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 					if err == nil || err.(interface{ StatusCode() int }).StatusCode() != 422 || err.Error() != `{"detail":"unsupported effort"}` {
 						t.Fatalf("upstream error changed: %v", err)
 					}
-				} else if err != nil || gjson.GetBytes(result.Payload, "model").String() != model {
+				} else if err != nil || ojson.GetBytes(result.Payload, "model").String() != model {
 					t.Fatalf("response = %s, %v", result.Payload, err)
 				}
 			})
@@ -106,7 +105,7 @@ func TestBasispointsManagerToolReplayAllowsAccountRotation(t *testing.T) {
 			if r.Header.Get("Chatgpt-Account-Id") == firstAccount {
 				t.Error("Basispoints must preserve normal account rotation")
 			}
-			if gjson.GetBytes(raw, "input.2.id").String() == "native_account_replay" || gjson.GetBytes(raw, "input.2.name").String() != "run_officejs" {
+			if ojson.GetBytes(raw, "input.2.id").String() == "native_account_replay" || ojson.GetBytes(raw, "input.2.name").String() != "run_officejs" {
 				t.Errorf("native item missing: %s", raw)
 			}
 		}
@@ -118,8 +117,8 @@ func TestBasispointsManagerToolReplayAllowsAccountRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ = sjson.SetRawBytes(body, "input.-1", []byte(gjson.GetBytes(first.Payload, "output.0").Raw))
-	body, _ = sjson.SetRawBytes(body, "input.-1", []byte(`{"type":"function_call_output","call_id":"call_account_replay","output":"18C"}`))
+	body, _ = ojson.SetRawBytes(body, "input.-1", []byte(ojson.GetBytes(first.Payload, "output.0").Raw))
+	body, _ = ojson.SetRawBytes(body, "input.-1", []byte(`{"type":"function_call_output","call_id":"call_account_replay","output":"18C"}`))
 	_, err = manager.Execute(ctx, []string{"codex"}, coreexecutor.Request{Model: model, Payload: body}, opts)
 	if err != nil {
 		t.Fatal(err)

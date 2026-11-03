@@ -6,14 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestCodexRuntimeCompatibleBusinessInput(t *testing.T) {
@@ -30,29 +29,29 @@ func TestCodexRuntimeCompatibleBusinessInput(t *testing.T) {
 				name := "query_inventory_" + strings.Repeat("x", 80)
 				schema := `{"type":"object","$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"code":{"type":"string","pattern":"\\p{L}+"},"limit":{"type":"integer","minimum":0,"default":3},"list":{"type":"array","maxItems":7}},"required":["code"],"additionalProperties":false}`
 				tool := []byte(`{"type":"function","name":"name","parameters":` + schema + `,"strict":false,"output_schema":{"type":"string"}}`)
-				tool, _ = sjson.SetBytes(tool, "name", name)
+				tool, _ = ojson.SetBytes(tool, "name", name)
 				body := []byte(`{"model":"runtime-model","input":"hello","tool_choice":"none","parallel_tool_calls":false,"include":[],"store":false,"background":false,"generate":false,"service_tier":"flex","max_output_tokens":25,"prompt_cache_retention":"24h","stream_options":{"include_usage":true},"client_metadata":{"optional_trace":{"name":"WorkBuddy"},"ws_request_header_x_openai_internal_codex_responses_lite":"true"}}`)
-				body, _ = sjson.SetRawBytes(body, "text", []byte(`{"format":{"type":"json_schema","name":"source_result","strict":false,"schema":{"type":"string"}}}`))
+				body, _ = ojson.SetRawBytes(body, "text", []byte(`{"format":{"type":"json_schema","name":"source_result","strict":false,"schema":{"type":"string"}}}`))
 				if source == sdktranslator.FormatOpenAI {
-					function, _ := sjson.DeleteBytes(tool, "type")
-					body, _ = sjson.DeleteBytes(body, "input")
-					body, _ = sjson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"hello"}]`))
+					function, _ := ojson.DeleteBytes(tool, "type")
+					body, _ = ojson.DeleteBytes(body, "input")
+					body, _ = ojson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"hello"}]`))
 					tool = append(append([]byte(`{"type":"function","function":`), function...), '}')
 				}
 				if source == sdktranslator.FormatClaude {
-					body, _ = sjson.SetRawBytes(body, "output_config.format", []byte(gjson.GetBytes(body, "text.format").Raw))
-					body, _ = sjson.DeleteBytes(body, "input")
-					body, _ = sjson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"hello"}]`))
-					body, _ = sjson.SetRawBytes(body, "tool_choice", []byte(`{"type":"none"}`))
-					tool, _ = sjson.SetRawBytes(tool, "input_schema", []byte(schema))
-					tool, _ = sjson.DeleteBytes(tool, "parameters")
+					body, _ = ojson.SetRawBytes(body, "output_config.format", []byte(ojson.GetBytes(body, "text.format").Raw))
+					body, _ = ojson.DeleteBytes(body, "input")
+					body, _ = ojson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"hello"}]`))
+					body, _ = ojson.SetRawBytes(body, "tool_choice", []byte(`{"type":"none"}`))
+					tool, _ = ojson.SetRawBytes(tool, "input_schema", []byte(schema))
+					tool, _ = ojson.DeleteBytes(tool, "parameters")
 				}
 				if source == sdktranslator.FormatGemini {
-					body, _ = sjson.DeleteBytes(body, "input")
-					body, _ = sjson.SetRawBytes(body, "contents", []byte(`[{"role":"user","parts":[{"text":"hello"}]}]`))
+					body, _ = ojson.DeleteBytes(body, "input")
+					body, _ = ojson.SetRawBytes(body, "contents", []byte(`[{"role":"user","parts":[{"text":"hello"}]}]`))
 					tool = append(append([]byte(`{"functionDeclarations":[`), tool...), ']', '}')
 				}
-				body, _ = sjson.SetRawBytes(body, "tools", append(append([]byte{'['}, tool...), ']'))
+				body, _ = ojson.SetRawBytes(body, "tools", append(append([]byte{'['}, tool...), ']'))
 				opts := runtimeTestOptions()
 				opts.SourceFormat, opts.Stream = source, stream
 				req := coreexecutor.Request{Model: "runtime-model", Payload: body}
@@ -75,15 +74,15 @@ func TestCodexRuntimeCompatibleBusinessInput(t *testing.T) {
 					if source == sdktranslator.FormatClaude && field == "tool_choice" {
 						continue
 					}
-					equalRuntimeJSON(t, []byte(gjson.GetBytes(body, field).Raw), []byte(gjson.GetBytes(actual, field).Raw))
+					equalRuntimeJSON(t, []byte(ojson.GetBytes(body, field).Raw), []byte(ojson.GetBytes(actual, field).Raw))
 				}
-				if gjson.GetBytes(actual, "tool_choice").String() != "none" {
+				if ojson.GetBytes(actual, "tool_choice").String() != "none" {
 					t.Fatal("source tool choice was not mapped to none")
 				}
-				if gjson.GetBytes(actual, "tools.#").Int() != 1 || gjson.GetBytes(actual, "tools.0.name").String() != name || gjson.GetBytes(actual, "tools.0.strict").Type != gjson.False || gjson.GetBytes(actual, "tools.0.output_schema.type").String() != "string" {
+				if ojson.GetBytes(actual, "tools.#").Int() != 1 || ojson.GetBytes(actual, "tools.0.name").String() != name || ojson.GetBytes(actual, "tools.0.strict").Type != ojson.False || ojson.GetBytes(actual, "tools.0.output_schema.type").String() != "string" {
 					t.Fatalf("caller declaration was replaced or renamed: %s", actual)
 				}
-				equalRuntimeJSON(t, []byte(schema), []byte(gjson.GetBytes(actual, "tools.0.parameters").Raw))
+				equalRuntimeJSON(t, []byte(schema), []byte(ojson.GetBytes(actual, "tools.0.parameters").Raw))
 			})
 		}
 	}
@@ -120,7 +119,7 @@ func TestCodexRuntimeChatCallRelationships(t *testing.T) {
 				t.Fatal(errTranslate)
 			}
 			calls := map[string]string{}
-			for _, item := range gjson.GetBytes(actual, "input").Array() {
+			for _, item := range ojson.GetBytes(actual, "input").Array() {
 				switch item.Get("type").String() {
 				case "function_call":
 					calls[item.Get("call_id").String()] = item.Get("name").String()
@@ -156,10 +155,10 @@ func TestCodexRuntimeTranslationDefaultsAndIdempotence(t *testing.T) {
 		if errTranslate != nil {
 			t.Fatal(errTranslate)
 		}
-		if gjson.GetBytes(actual, "reasoning.effort").Exists() || gjson.GetBytes(actual, "include").Exists() {
+		if ojson.GetBytes(actual, "reasoning.effort").Exists() || ojson.GetBytes(actual, "include").Exists() {
 			t.Fatalf("%s imposed Agent defaults on missing controls: %s", source, actual)
 		}
-		if gjson.GetBytes(actual, "tools.#").Int() != 1 || gjson.GetBytes(actual, "tools.0.name").String() != "Read" || gjson.GetBytes(actual, "tools.0.strict").Type != gjson.False {
+		if ojson.GetBytes(actual, "tools.#").Int() != 1 || ojson.GetBytes(actual, "tools.0.name").String() != "Read" || ojson.GetBytes(actual, "tools.0.strict").Type != ojson.False {
 			t.Fatalf("%s lost the caller's parameterless declaration: %s", source, actual)
 		}
 	}
@@ -168,7 +167,7 @@ func TestCodexRuntimeTranslationDefaultsAndIdempotence(t *testing.T) {
 	if errTranslate != nil {
 		t.Fatal(errTranslate)
 	}
-	if gjson.GetBytes(actual, "tool_choice").String() != "none" {
+	if ojson.GetBytes(actual, "tool_choice").String() != "none" {
 		t.Fatalf("explicit Claude tool choice was lost without declarations: %s", actual)
 	}
 	for _, format := range []string{`"response_format":{"type":"json_object"}`, `"response_format":{"type":"json_schema","json_schema":{"name":"client_result","strict":false,"schema":{"type":"string"}}}`, `"text":{"format":{"type":"json_schema","name":"client_result","strict":false,"schema":{"type":"string"}}}`} {
@@ -178,10 +177,10 @@ func TestCodexRuntimeTranslationDefaultsAndIdempotence(t *testing.T) {
 			t.Fatal(errTranslate)
 		}
 		if strings.Contains(format, "json_object") {
-			if gjson.GetBytes(actual, "text.format.type").String() != "json_object" {
+			if ojson.GetBytes(actual, "text.format.type").String() != "json_object" {
 				t.Fatalf("Chat JSON-object format was lost: %s", actual)
 			}
-		} else if gjson.GetBytes(actual, "text.format.name").String() != "client_result" || gjson.GetBytes(actual, "text.format.strict").Type != gjson.False || gjson.GetBytes(actual, "text.format.schema.type").String() != "string" {
+		} else if ojson.GetBytes(actual, "text.format.name").String() != "client_result" || ojson.GetBytes(actual, "text.format.strict").Type != ojson.False || ojson.GetBytes(actual, "text.format.schema.type").String() != "string" {
 			t.Fatalf("Chat structured output contract was lost: %s", actual)
 		}
 	}
@@ -202,7 +201,7 @@ func TestCodexRuntimePayloadRulesFollowCompatibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual := (<-captured).Request
-	if gjson.GetBytes(actual, "tools").Exists() || gjson.GetBytes(actual, "client_metadata.optional_trace").Exists() || gjson.GetBytes(actual, "tool_choice").String() != "none" || gjson.GetBytes(actual, "parallel_tool_calls").Type != gjson.False || gjson.GetBytes(actual, "include").Raw != "[]" {
+	if ojson.GetBytes(actual, "tools").Exists() || ojson.GetBytes(actual, "client_metadata.optional_trace").Exists() || ojson.GetBytes(actual, "tool_choice").String() != "none" || ojson.GetBytes(actual, "parallel_tool_calls").Type != ojson.False || ojson.GetBytes(actual, "include").Raw != "[]" {
 		t.Fatalf("final payload semantics were rewritten: %s", actual)
 	}
 }

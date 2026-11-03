@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
@@ -25,7 +26,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	openaihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 // Each upstream phase is released only after a real HTTP client receives the
@@ -47,7 +47,7 @@ func (p *nativeRuntimeStreamProbe) serve(ctx context.Context, write func([]byte)
 	for {
 		select {
 		case event := <-p.events:
-			if err := write(event); err != nil || gjson.GetBytes(event, "type").String() == "response.completed" {
+			if err := write(event); err != nil || ojson.GetBytes(event, "type").String() == "response.completed" {
 				return
 			}
 		case <-p.stop:
@@ -117,7 +117,7 @@ func testNativeRuntimeLiveHTTP(t *testing.T, handler http.Handler, probe *native
 	receive := func(kind string) []byte {
 		t.Helper()
 		frame, errRead := reader.Next()
-		if errRead != nil || gjson.GetBytes(frame.Data, "type").String() != kind {
+		if errRead != nil || ojson.GetBytes(frame.Data, "type").String() != kind {
 			t.Fatalf("expected live %s while upstream is paused: %s (%v)", kind, frame.Data, errRead)
 		}
 		return frame.Data
@@ -131,7 +131,7 @@ func testNativeRuntimeLiveHTTP(t *testing.T, handler http.Handler, probe *native
 	for index, part := range parts {
 		send(map[string]any{"type": "response.custom_tool_call_input.delta", "output_index": 0, "item_id": "ctc_live", "delta": part})
 		data := receive("response.custom_tool_call_input.delta")
-		if gjson.GetBytes(data, "delta").String() != part {
+		if ojson.GetBytes(data, "delta").String() != part {
 			t.Fatalf("tool argument delta changed: %s", data)
 		}
 		t.Logf("business delta %d received at %s; next phase and completion not released", index+1, time.Since(started))
@@ -144,7 +144,7 @@ func testNativeRuntimeLiveHTTP(t *testing.T, handler http.Handler, probe *native
 	receive("response.output_item.done")
 	send(map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_live", "status": "completed", "output": []any{item}, "usage": map[string]any{"input_tokens": 5, "output_tokens": 3, "total_tokens": 8}}})
 	terminal := receive("response.completed")
-	if gjson.GetBytes(terminal, "response.output.#").Int() != 1 || gjson.GetBytes(terminal, "response.output.0.call_id").String() != "call_live" {
+	if ojson.GetBytes(terminal, "response.output.#").Int() != 1 || ojson.GetBytes(terminal, "response.output.0.call_id").String() != "call_live" {
 		t.Fatalf("tool call duplicated or lost: %s", terminal)
 	}
 	if remaining, errRead := io.ReadAll(response.Body); errRead != nil || strings.TrimSpace(string(remaining)) != "" {
@@ -188,7 +188,7 @@ func testNativeRuntimeLiveWebsocket(t *testing.T, handler http.Handler, probe *n
 	receive := func(kind string) []byte {
 		t.Helper()
 		_, body, err := conn.ReadMessage()
-		if err != nil || gjson.GetBytes(body, "type").String() != kind {
+		if err != nil || ojson.GetBytes(body, "type").String() != kind {
 			t.Fatalf("WebSocket client did not receive %s before the next upstream phase: %s (%v)", kind, body, err)
 		}
 		return body
@@ -203,7 +203,7 @@ func testNativeRuntimeLiveWebsocket(t *testing.T, handler http.Handler, probe *n
 	for index, part := range parts {
 		send(map[string]any{"type": "response.custom_tool_call_input.delta", "output_index": 0, "item_id": "ctc_ws_live", "delta": part})
 		body := receive("response.custom_tool_call_input.delta")
-		if gjson.GetBytes(body, "delta").String() != part {
+		if ojson.GetBytes(body, "delta").String() != part {
 			t.Fatalf("WebSocket tool delta changed: %s", body)
 		}
 		t.Logf("WebSocket client delta %d received before next phase and completion", index+1)
@@ -224,11 +224,11 @@ func testNativeRuntimeLiveWebsocket(t *testing.T, handler http.Handler, probe *n
 		if err != nil {
 			t.Fatal("WebSocket did not accept the next request after completion", err)
 		}
-		if gjson.GetBytes(body, "type").String() == "response.completed" {
+		if ojson.GetBytes(body, "type").String() == "response.completed" {
 			t.Log("WebSocket client received the next request's completion on the same connection")
 			break
 		}
-		if gjson.GetBytes(body, "type").String() == "error" {
+		if ojson.GetBytes(body, "type").String() == "error" {
 			t.Fatalf("WebSocket followup failed: %s", body)
 		}
 	}
@@ -257,7 +257,7 @@ func testNativeRuntimeHTTPCancellation(t *testing.T, handler http.Handler, cance
 	}
 	defer func() { _ = response.Body.Close() }()
 	frame, err := bridge.NewSSEReader(response.Body).Next()
-	if err != nil || gjson.GetBytes(frame.Data, "type").String() != "response.created" {
+	if err != nil || ojson.GetBytes(frame.Data, "type").String() != "response.created" {
 		t.Fatalf("generation event missing: %s (%v)", frame.Data, err)
 	}
 	cancel()
@@ -298,7 +298,7 @@ func testNativeRuntimeHTTPFailure(t *testing.T, handler http.Handler, marker str
 		if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "delivered-partial") || !strings.Contains(string(body), `"type":"error"`) || strings.Contains(string(body), `"type":"response.completed"`) {
 			t.Fatalf("partial stream did not terminate with the native error: status=%d body=%s", response.StatusCode, body)
 		}
-	} else if response.StatusCode < 400 || gjson.GetBytes(body, "error.message").String() == "" || strings.Contains(string(body), "delivered-partial") {
+	} else if response.StatusCode < 400 || ojson.GetBytes(body, "error.message").String() == "" || strings.Contains(string(body), "delivered-partial") {
 		t.Fatalf("native error was replaced with success or partial output: status=%d body=%s", response.StatusCode, body)
 	}
 	if expectedMessage != "" && !strings.Contains(string(body), expectedMessage) {
@@ -408,7 +408,7 @@ func testCodexRuntimeCPARetryDoesNotWaitForDiagnostics(t *testing.T, sameWorker 
 	reader := bridge.NewSSEReader(response.Body)
 	for _, kind := range []string{"response.created", "response.completed"} {
 		frame, errRead := reader.Next()
-		if errRead != nil || gjson.GetBytes(frame.Data, "type").String() != kind {
+		if errRead != nil || ojson.GetBytes(frame.Data, "type").String() != kind {
 			t.Fatalf("CPA retry did not deliver %s while diagnostics were held: %s (%v)", kind, frame.Data, errRead)
 		}
 	}

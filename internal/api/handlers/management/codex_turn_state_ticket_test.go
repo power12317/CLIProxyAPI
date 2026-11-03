@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexTicketCacheAllModelsManagementRoundTrip(t *testing.T) {
@@ -19,12 +19,12 @@ func TestCodexTicketCacheAllModelsManagementRoundTrip(t *testing.T) {
 		ctx, _ := gin.CreateTestContext(rec)
 		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/codex-turn-state-ticket", nil)
 		h.GetCodexTurnStateTicket(ctx)
-		value := gjson.GetBytes(rec.Body.Bytes(), "cache_all_models")
+		value := ojson.GetBytes(rec.Body.Bytes(), "cache_all_models")
 		if rec.Code != http.StatusOK || !value.Exists() || value.Bool() != want {
 			t.Fatalf("GET cache_all_models = %s, want %v (status %d)", value.Raw, want, rec.Code)
 		}
 		for _, field := range []string{"target_length", "personal_target_length", "team_target_length"} {
-			if gjson.GetBytes(rec.Body.Bytes(), field).Int() != 780 {
+			if ojson.GetBytes(rec.Body.Bytes(), field).Int() != 780 {
 				t.Fatalf("%s must use the fixed 780-byte shape", field)
 			}
 		}
@@ -101,13 +101,13 @@ func TestCodexTicketManagementIndependentOfBasispoints(t *testing.T) {
 		ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/codex-turn-state-ticket", nil)
 		h.GetCodexTurnStateTicket(ctx)
 		body := rec.Body.Bytes()
-		if rec.Code != http.StatusOK || gjson.GetBytes(body, "enabled").Bool() != wantEnabled {
+		if rec.Code != http.StatusOK || ojson.GetBytes(body, "enabled").Bool() != wantEnabled {
 			t.Fatalf("ticket enabled must remain independent of Basispoints: %s", body)
 		}
-		if gjson.GetBytes(body, "probe_interval_seconds").Int() != wantInterval ||
-			gjson.GetBytes(body, "ttl_seconds").Int() != 1800 ||
-			gjson.GetBytes(body, "models.0").String() != "gpt-6-astra" ||
-			!gjson.GetBytes(body, "accounts").IsArray() {
+		if ojson.GetBytes(body, "probe_interval_seconds").Int() != wantInterval ||
+			ojson.GetBytes(body, "ttl_seconds").Int() != 1800 ||
+			ojson.GetBytes(body, "models.0").String() != "gpt-6-astra" ||
+			!ojson.GetBytes(body, "accounts").IsArray() {
 			t.Fatalf("ticket settings or status missing: %s", body)
 		}
 	}

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 // CodexTurnMetadataHeader leaves the unbounded tool inventory in the body,
@@ -35,8 +35,8 @@ func RestoreCodexMetadataHeaders(headers http.Header, body []byte) {
 		if headers.Get(key) != "" {
 			continue
 		}
-		value := gjson.GetBytes(body, "client_metadata."+strings.ToLower(key))
-		if value.Type != gjson.String || value.String() == "" {
+		value := ojson.GetBytes(body, "client_metadata."+strings.ToLower(key))
+		if value.Type != ojson.String || value.String() == "" {
 			continue
 		}
 		raw := value.String()
@@ -69,8 +69,8 @@ func RestoreCodexWebsocketIdentityHeaders(headers, source http.Header, body []by
 	if headers == nil {
 		return
 	}
-	root := gjson.ParseBytes(body)
-	metadata := gjson.Parse(root.Get("client_metadata.x-codex-turn-metadata").String())
+	root := ojson.ParseBytes(body)
+	metadata := ojson.Parse(root.Get("client_metadata.x-codex-turn-metadata").String())
 	sessionID := firstString(
 		topicHeader(source, "Session-Id", "Session_id"),
 		topicHeader(headers, "Session-Id", "Session_id"),

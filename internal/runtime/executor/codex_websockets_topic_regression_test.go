@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	auth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexTopicConnectionCompatibility(t *testing.T) {
@@ -203,7 +203,7 @@ func TestCodexTopicLookupPreservesWireIdentity(t *testing.T) {
 					t.Fatal(err)
 				}
 				frame, wireHeaders := <-frames, <-headersSeen
-				if got := gjson.GetBytes(frame, "prompt_cache_key").String(); got != wantCache {
+				if got := ojson.GetBytes(frame, "prompt_cache_key").String(); got != wantCache {
 					t.Fatalf("topic lookup changed wire cache identity: %q, want %q", got, wantCache)
 				}
 				sessionHeader := "Session-Id"
@@ -215,7 +215,7 @@ func TestCodexTopicLookupPreservesWireIdentity(t *testing.T) {
 					}
 				} else {
 					for key, want := range map[string]string{"thread_id": "native-thread", "session_id": "native-session", "turn_id": "native-turn"} {
-						if gjson.GetBytes(frame, "client_metadata."+key).String() != want {
+						if ojson.GetBytes(frame, "client_metadata."+key).String() != want {
 							t.Errorf("caller %s changed", key)
 						}
 					}

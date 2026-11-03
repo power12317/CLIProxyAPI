@@ -2,14 +2,15 @@ package helps
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 // CodexOwnerFingerprint distinguishes credential owners without retaining tokens.
@@ -26,7 +27,7 @@ func CodexOwnerFingerprint(auth *cliproxyauth.Auth) string {
 	if token := strings.Split(CodexOAuthAccessToken(auth), "."); len(token) == 3 {
 		if payload, err := base64.RawURLEncoding.DecodeString(token[1]); err == nil {
 			for _, path := range []string{"sub", "https://api\\.openai\\.com/auth.chatgpt_account_id", "https://api\\.openai\\.com/auth.chatgpt_user_id"} {
-				parts = append(parts, gjson.GetBytes(payload, path).String())
+				parts = append(parts, ojson.GetBytes(payload, path).String())
 			}
 		}
 	}

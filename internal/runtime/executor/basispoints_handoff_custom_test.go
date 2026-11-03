@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsHandoffAndCustomExecThroughExecutor(t *testing.T) {
@@ -43,13 +43,13 @@ func TestBasispointsHandoffAndCustomExecThroughExecutor(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if gjson.GetBytes(wire, "model").String() != "gpt-5.6-luna" || gjson.GetBytes(wire, "reasoning_effort").String() != "medium" {
+				if ojson.GetBytes(wire, "model").String() != "gpt-5.6-luna" || ojson.GetBytes(wire, "reasoning_effort").String() != "medium" {
 					t.Fatal("model or effort changed")
 				}
-				if gjson.GetBytes(wire, "input.2.type").String() != "message" || gjson.GetBytes(wire, "input.2.content.0.text").String() != "Tool output from codex_app__create_thread:\n"+handoff {
+				if ojson.GetBytes(wire, "input.2.type").String() != "message" || ojson.GetBytes(wire, "input.2.content.0.text").String() != "Tool output from codex_app__create_thread:\n"+handoff {
 					t.Fatal("upstream handoff is still an orphan result")
 				}
-				if !strings.Contains(gjson.GetBytes(wire, "input.0.content.0.text").String(), "tools.exec_command") {
+				if !strings.Contains(ojson.GetBytes(wire, "input.0.content.0.text").String(), "tools.exec_command") {
 					t.Fatal("custom invocation guide missing from upstream request")
 				}
 				code, _ := json.Marshal(map[string]any{"name": "functions.exec", "arguments": map[string]any{"cmd": "pwd", "workdir": "/tmp/project", "yield_time_ms": 10000, "max_output_tokens": 12000}})
@@ -91,7 +91,7 @@ func TestBasispointsHandoffAndCustomExecThroughExecutor(t *testing.T) {
 			if calls != 1 {
 				t.Fatalf("unexpected retry: %d", calls)
 			}
-			if gjson.GetBytes(completed, "output.0.type").String() != "custom_tool_call" || gjson.GetBytes(completed, "output.0.name").String() != "exec" || !strings.Contains(gjson.GetBytes(completed, "output.0.input").String(), "await tools.exec_command(") {
+			if ojson.GetBytes(completed, "output.0.type").String() != "custom_tool_call" || ojson.GetBytes(completed, "output.0.name").String() != "exec" || !strings.Contains(ojson.GetBytes(completed, "output.0.input").String(), "await tools.exec_command(") {
 				t.Fatalf("client tool conversion failed: %s", completed)
 			}
 		})

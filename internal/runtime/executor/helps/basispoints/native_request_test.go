@@ -1,11 +1,12 @@
 package basispoints
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestNativeAccountHeaders(t *testing.T) {
@@ -41,11 +42,11 @@ func TestNativeToolsVersionDefaultAndOverride(t *testing.T) {
 		if want == "" {
 			want = ToolsVersionID
 		}
-		if gjson.GetBytes(body, "metadata.bps_tools_version_id").String() != want {
+		if ojson.GetBytes(body, "metadata.bps_tools_version_id").String() != want {
 			t.Fatalf("tools version not selected: %s", body)
 		}
 		for _, key := range []string{"context_management", "prompt_cache_key", "service_tier"} {
-			if gjson.GetBytes(body, key).Exists() {
+			if ojson.GetBytes(body, key).Exists() {
 				t.Fatalf("unrequested field added: %s", key)
 			}
 		}
@@ -66,10 +67,10 @@ func TestAgentIterationCountsParallelToolRounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := gjson.GetBytes(body, "metadata.agent_iteration").Int(); got != int64(round) {
+			if got := ojson.GetBytes(body, "metadata.agent_iteration").Int(); got != int64(round) {
 				t.Fatalf("round=%d retry=%d iteration=%d", round, retry, got)
 			}
-			id := gjson.GetBytes(body, "metadata.turn_id").String()
+			id := ojson.GetBytes(body, "metadata.turn_id").String()
 			if turnID == "" {
 				turnID = id
 			}
@@ -86,7 +87,7 @@ func TestAgentIterationCountsParallelToolRounds(t *testing.T) {
 	input = append(input, message("user", "next turn"))
 	raw, _ := json.Marshal(object{"model": "original", "input": input})
 	body, _, err := Prepare(raw, "scope", "session", &Cache{})
-	if err != nil || gjson.GetBytes(body, "metadata.agent_iteration").String() != "1" || gjson.GetBytes(body, "metadata.turn_id").String() == turnID {
+	if err != nil || ojson.GetBytes(body, "metadata.agent_iteration").String() != "1" || ojson.GetBytes(body, "metadata.turn_id").String() == turnID {
 		t.Fatalf("new turn not reset: %s %v", body, err)
 	}
 }

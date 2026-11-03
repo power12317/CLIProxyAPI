@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -15,7 +16,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 type runtimeWebsocketCaptureExecutor struct {
@@ -83,7 +83,7 @@ func TestCodexRuntimeWebsocketMaterializesClientContinuation(t *testing.T) {
 							t.Fatal(err)
 						}
 						_, response, err := conn.ReadMessage()
-						if err != nil || gjson.GetBytes(response, "type").String() != "response.completed" {
+						if err != nil || ojson.GetBytes(response, "type").String() != "response.completed" {
 							t.Fatalf("round %d: response=%s err=%v", index+1, response, err)
 						}
 						payloads := executor.Payloads()
@@ -91,7 +91,7 @@ func TestCodexRuntimeWebsocketMaterializesClientContinuation(t *testing.T) {
 							t.Fatalf("round %d: calls=%d", index+1, len(payloads))
 						}
 						body := payloads[index]
-						if gjson.GetBytes(body, "previous_response_id").Exists() || gjson.GetBytes(body, "input.#").Int() != int64(request.items) {
+						if ojson.GetBytes(body, "previous_response_id").Exists() || ojson.GetBytes(body, "input.#").Int() != int64(request.items) {
 							t.Fatalf("round %d: history was not materialized: %s", index+1, body)
 						}
 					}

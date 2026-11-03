@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 	"gopkg.in/yaml.v3"
 )
 
@@ -14,7 +14,7 @@ func TestBasispointsConfigRoundTripAndTicketIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value := gjson.GetBytes(raw, "codex.basispoints.enabled"); !value.Exists() || value.Bool() {
+	if value := ojson.GetBytes(raw, "codex.basispoints.enabled"); !value.Exists() || value.Bool() {
 		t.Fatal("default capability is not exposed as false")
 	}
 	if err = yaml.Unmarshal([]byte("codex:\n  basispoints:\n    enabled: true\n  force-websocket: true\n  turn-state-ticket:\n    enabled: true\n"), &cfg); err != nil {

@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
@@ -27,7 +29,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func basispointsTestDial(target string) basispoints.WebsocketDial {
@@ -64,10 +65,10 @@ func TestBasispointsWebsocketTransportSelectionAndToolConversion(t *testing.T) {
 					var wsCalls, sseCalls atomic.Int32
 					const completed = `{"type":"response.completed","response":{"id":"resp_bps","model":"gpt-6-astra","status":"completed","output":[{"type":"function_call","id":"native_ws","call_id":"call_ws","name":"run_officejs","arguments":"{\"code\":\"{\\\"name\\\":\\\"weather\\\",\\\"arguments\\\":{\\\"city\\\":\\\"Paris\\\"}}\"}"}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`
 					checkBody := func(raw []byte) {
-						if gjson.GetBytes(raw, "metadata.bps_tools_version_id").String() != basispoints.ToolsVersionID || gjson.GetBytes(raw, "reasoning_effort").String() != "low" {
+						if ojson.GetBytes(raw, "metadata.bps_tools_version_id").String() != basispoints.ToolsVersionID || ojson.GetBytes(raw, "reasoning_effort").String() != "low" {
 							t.Errorf("wrong wire metadata or effort: %s", raw)
 						}
-						if gjson.GetBytes(raw, "context_management.0.compact_threshold").Int() != 400000 || gjson.GetBytes(raw, "prompt_cache_key").String() != "cache-key" || gjson.GetBytes(raw, "service_tier").Exists() {
+						if ojson.GetBytes(raw, "context_management.0.compact_threshold").Int() != 400000 || ojson.GetBytes(raw, "prompt_cache_key").String() != "cache-key" || ojson.GetBytes(raw, "service_tier").Exists() {
 							t.Errorf("existing optional fields changed: %s", raw)
 						}
 					}
@@ -96,7 +97,7 @@ func TestBasispointsWebsocketTransportSelectionAndToolConversion(t *testing.T) {
 							return
 						}
 						checkBody(raw)
-						if gjson.GetBytes(raw, "type").String() != "response.create" || gjson.GetBytes(raw, "basispoints_request_id").String() == "" || !strings.HasPrefix(gjson.GetBytes(raw, "basispoints_resume_token").String(), "resume_") {
+						if ojson.GetBytes(raw, "type").String() != "response.create" || ojson.GetBytes(raw, "basispoints_request_id").String() == "" || !strings.HasPrefix(ojson.GetBytes(raw, "basispoints_resume_token").String(), "resume_") {
 							t.Error("wrong native response.create envelope")
 						}
 						_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"basispoints.response.heartbeat"}`))
@@ -148,7 +149,7 @@ func TestBasispointsWebsocketTransportSelectionAndToolConversion(t *testing.T) {
 						}
 						final = result.Payload
 					}
-					if gjson.GetBytes(final, "output.0.name").String() != "weather" || gjson.GetBytes(final, "output.0.encrypted_function_args").Raw != "[]" || !strings.Contains(gjson.GetBytes(final, "output.0.arguments").String(), "Paris") {
+					if ojson.GetBytes(final, "output.0.name").String() != "weather" || ojson.GetBytes(final, "output.0.encrypted_function_args").Raw != "[]" || !strings.Contains(ojson.GetBytes(final, "output.0.arguments").String(), "Paris") {
 						t.Fatalf("tool conversion lost: %s", final)
 					}
 					wantWS := forced || downstream
@@ -180,12 +181,12 @@ func TestBasispointsWebsocketResumeUsesNativeTokenAndCursor(t *testing.T) {
 		}
 		if attempt == 1 {
 			affinity.Store(r.URL.Query().Get("bps_ws_affinity"))
-			id := gjson.GetBytes(raw, "basispoints_request_id").String()
+			id := ojson.GetBytes(raw, "basispoints_request_id").String()
 			_ = conn.WriteJSON(map[string]any{"type": "basispoints.response.resume_token", "request_id": id, "resume_token": "resume_server_token"})
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.output_text.delta","delta":"A","basispoints_replay_cursor":0}`))
 			return
 		}
-		if attempt != 2 || affinity.Load() != r.URL.Query().Get("bps_ws_affinity") || gjson.GetBytes(raw, "type").String() != "basispoints.response.resume" || gjson.GetBytes(raw, "resume_token").String() != "resume_server_token" || gjson.GetBytes(raw, "after_cursor").Int() != 0 {
+		if attempt != 2 || affinity.Load() != r.URL.Query().Get("bps_ws_affinity") || ojson.GetBytes(raw, "type").String() != "basispoints.response.resume" || ojson.GetBytes(raw, "resume_token").String() != "resume_server_token" || ojson.GetBytes(raw, "after_cursor").Int() != 0 {
 			t.Errorf("wrong recovery: %s", raw)
 		}
 		for _, frame := range []string{
@@ -313,7 +314,7 @@ func TestBasispointsWebsocketErrorsKeepLogsAndCooldown(t *testing.T) {
 						t.Error(err)
 						return
 					}
-					resume.Store(gjson.GetBytes(frame, "basispoints_resume_token").String())
+					resume.Store(ojson.GetBytes(frame, "basispoints_resume_token").String())
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(rejected))
 				}))
 				defer server.Close()

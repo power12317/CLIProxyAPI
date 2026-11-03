@@ -5,7 +5,6 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/MoeForge/moego/base64"
 
 	log "github.com/sirupsen/logrus"
 )

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
-	"github.com/tidwall/gjson"
 )
 
 // WebsocketActivity uses the existing Codex request-ownership gate.
@@ -159,7 +159,7 @@ func (c *websocketConnection) readLoop() {
 		if exchange == nil {
 			continue
 		}
-		switch gjson.GetBytes(raw, "type").String() {
+		switch ojson.GetBytes(raw, "type").String() {
 		case "error", "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled":
 			exchange.terminal.Store(true)
 		}

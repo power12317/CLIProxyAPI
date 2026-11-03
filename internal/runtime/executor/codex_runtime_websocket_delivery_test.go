@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -17,7 +18,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	openaihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexRuntimeWebsocketNextRequestDoesNotWaitForDiagnostics(t *testing.T) {
@@ -76,7 +76,7 @@ func TestCodexRuntimeWebsocketNextRequestDoesNotWaitForDiagnostics(t *testing.T)
 			t.Fatal(err)
 		}
 		_, body, err := conn.ReadMessage()
-		if err != nil || gjson.GetBytes(body, "type").String() != "response.completed" {
+		if err != nil || ojson.GetBytes(body, "type").String() != "response.completed" {
 			t.Fatalf("request %d waited for previous diagnostics: %s (%v)", index+1, body, err)
 		}
 	}

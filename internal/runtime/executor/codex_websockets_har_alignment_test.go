@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexOAuthWebsocketHandshakeAndPrewarmFidelity(t *testing.T) {
@@ -79,10 +79,10 @@ func TestCodexOAuthWebsocketHandshakeAndPrewarmFidelity(t *testing.T) {
 				if gotHeaders.Get("Session-Id") != "fixture-session" || gotHeaders.Get("Authorization") != "Bearer fixture-token" || gotHeaders.Get("OpenAI-Beta") != codexResponsesWebsocketBetaHeaderValue {
 					t.Errorf("missing required handshake fields: %v", gotHeaders)
 				}
-				if gjson.GetBytes(frame, "client_metadata.turn_id").String() != "" || gjson.Get(gjson.GetBytes(frame, "client_metadata.x-codex-turn-metadata").String(), "turn_id").String() != "" {
+				if ojson.GetBytes(frame, "client_metadata.turn_id").String() != "" || ojson.Get(ojson.GetBytes(frame, "client_metadata.x-codex-turn-metadata").String(), "turn_id").String() != "" {
 					t.Errorf("prewarm gained turn identity: %s", frame)
 				}
-				if gjson.GetBytes(frame, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" || gjson.GetBytes(frame, "generate").Type != gjson.False {
+				if ojson.GetBytes(frame, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" || ojson.GetBytes(frame, "generate").Type != ojson.False {
 					t.Errorf("lost frame-only settings: %s", frame)
 				}
 			})

@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 type nativeRuntimeImageProbe struct {
@@ -58,7 +57,7 @@ func testNativeRuntimeLiveImage(t *testing.T, router http.Handler, probe *native
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	payload, _ := nativeRuntimeImagePayload(t, path, true, false)
-	payload, _ = sjson.SetBytes(payload, "prompt", "live-image-stream")
+	payload, _ = ojson.SetBytes(payload, "prompt", "live-image-stream")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+path, bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
@@ -81,14 +80,14 @@ func testNativeRuntimeLiveImage(t *testing.T, router http.Handler, probe *native
 		if errNext != nil {
 			t.Fatal(errNext)
 		}
-		if !strings.HasSuffix(gjson.GetBytes(frame.Data, "type").String(), ".partial_image") || gjson.GetBytes(frame.Data, "b64_json").String() != fmt.Sprintf("native-image-partial-%d", index+1) {
+		if !strings.HasSuffix(ojson.GetBytes(frame.Data, "type").String(), ".partial_image") || ojson.GetBytes(frame.Data, "b64_json").String() != fmt.Sprintf("native-image-partial-%d", index+1) {
 			t.Fatalf("image increment was not delivered before its next phase: %s", frame.Data)
 		}
 		t.Logf("client image event %d arrived at %s while upstream completion was blocked", index+1, time.Since(started))
 		probe.release <- struct{}{}
 	}
 	frame, err := reader.Next()
-	if err != nil || !strings.HasSuffix(gjson.GetBytes(frame.Data, "type").String(), ".completed") {
+	if err != nil || !strings.HasSuffix(ojson.GetBytes(frame.Data, "type").String(), ".completed") {
 		t.Fatalf("image completion=%s error=%v", frame.Data, err)
 	}
 }

@@ -3,7 +3,6 @@ package basispoints
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +16,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 )
 
 type attachmentTransport func(*http.Request) (*http.Response, error)
@@ -65,21 +66,21 @@ func TestInlineImagesUploadAndAccountRotation(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, path := range []string{"input.1.content.1"} {
-			part := gjson.GetBytes(wire, path)
+			part := ojson.GetBytes(wire, path)
 			if part.Get("file_id").String() != "file-"+account || part.Get("image_url").Exists() {
 				t.Fatalf("image not converted: %s", wire)
 			}
 		}
-		if gjson.GetBytes(wire, "input.1.content.0.text").String() != dataURL || gjson.GetBytes(wire, "input.1.content.2.image_url").String() != "https://cdn.example/img.png" || gjson.GetBytes(wire, "input.1.content.3.file_id").String() != "existing-file" {
+		if ojson.GetBytes(wire, "input.1.content.0.text").String() != dataURL || ojson.GetBytes(wire, "input.1.content.2.image_url").String() != "https://cdn.example/img.png" || ojson.GetBytes(wire, "input.1.content.3.file_id").String() != "existing-file" {
 			t.Fatal("unrelated content changed")
 		}
-		if gjson.GetBytes(wire, "input.1.content.1.detail").String() != "high" || gjson.GetBytes(wire, "input.2.output.0.detail").Exists() || gjson.GetBytes(wire, "input.3.output.0.detail").String() != "original" {
+		if ojson.GetBytes(wire, "input.1.content.1.detail").String() != "high" || ojson.GetBytes(wire, "input.2.output.0.detail").Exists() || ojson.GetBytes(wire, "input.3.output.0.detail").String() != "original" {
 			t.Fatal("image detail changed")
 		}
-		if gjson.GetBytes(wire, "input.2.output.0.image_url").String() != dataURL || gjson.GetBytes(wire, "input.3.output.0.image_url").String() != dataURL {
+		if ojson.GetBytes(wire, "input.2.output.0.image_url").String() != dataURL || ojson.GetBytes(wire, "input.3.output.0.image_url").String() != dataURL {
 			t.Fatal("native tool-result images changed")
 		}
-		if gjson.GetBytes(wire, "metadata.number").Raw != "9007199254740993" || gjson.GetBytes(wire, "metadata.turn_id").String() != "same-turn" || gjson.GetBytes(wire, "input.0.reasoning.effort").String() != "max" {
+		if ojson.GetBytes(wire, "metadata.number").Raw != "9007199254740993" || ojson.GetBytes(wire, "metadata.turn_id").String() != "same-turn" || ojson.GetBytes(wire, "input.0.reasoning.effort").String() != "max" {
 			t.Fatal("request metadata or reasoning changed")
 		}
 		want := 1
@@ -90,7 +91,7 @@ func TestInlineImagesUploadAndAccountRotation(t *testing.T) {
 			t.Fatalf("uploads=%d want=%d", uploads, want)
 		}
 	}
-	if gjson.GetBytes(raw, "input.1.content.1.image_url").String() != dataURL {
+	if ojson.GetBytes(raw, "input.1.content.1.image_url").String() != dataURL {
 		t.Fatal("caller body mutated")
 	}
 }

@@ -2,9 +2,9 @@
 package basispoints
 
 import (
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
-	"github.com/tidwall/sjson"
 )
 
 type Applier struct{}
@@ -14,11 +14,11 @@ func init() { thinking.RegisterProvider("basispoints", Applier{}) }
 // Apply preserves level values and leaves upstream validation to Basispoints.
 func (Applier) Apply(body []byte, config thinking.ThinkingConfig, _ *registry.ModelInfo) ([]byte, error) {
 	var err error
-	body, err = sjson.DeleteBytes(body, "reasoning.effort")
+	body, err = ojson.DeleteBytes(body, "reasoning.effort")
 	if err != nil {
 		return body, err
 	}
-	body, err = sjson.DeleteBytes(body, "reasoning_effort")
+	body, err = ojson.DeleteBytes(body, "reasoning_effort")
 	if err != nil {
 		return body, err
 	}
@@ -40,5 +40,5 @@ func (Applier) Apply(body []byte, config thinking.ThinkingConfig, _ *registry.Mo
 	if value == nil {
 		return body, nil
 	}
-	return sjson.SetBytes(body, "reasoning_effort", value)
+	return ojson.SetBytes(body, "reasoning_effort", value)
 }

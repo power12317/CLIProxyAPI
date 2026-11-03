@@ -5,12 +5,11 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func mustApplyCodexImagePolicy(t *testing.T, body []byte, model string, auth *cliproxyauth.Auth, cfg *config.Config, headers http.Header, path string, official bool) []byte {
@@ -32,8 +31,8 @@ func TestCodexUnifiedImagePolicy(t *testing.T) {
 						headers := make(http.Header)
 						headers.Set(codexResponsesLiteHeader, fmt.Sprint(lite))
 						if existing {
-							body, _ = sjson.SetRawBytes(body, "tools", []byte(`[{"type":"image_generation"},{"type":"function","name":"exec","parameters":{}}]`))
-							body, _ = sjson.SetRawBytes(body, "tool_choice", []byte(`{"type":"image_generation"}`))
+							body, _ = ojson.SetRawBytes(body, "tools", []byte(`[{"type":"image_generation"},{"type":"function","name":"exec","parameters":{}}]`))
+							body, _ = ojson.SetRawBytes(body, "tool_choice", []byte(`{"type":"image_generation"}`))
 						}
 						cfg := &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: mode}}
 						got := mustApplyCodexImagePolicy(t, body, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", official)
@@ -46,20 +45,20 @@ func TestCodexUnifiedImagePolicy(t *testing.T) {
 						if helps.HasCodexImageTool(got) != (mode == config.DisableImageGenerationOff) {
 							t.Fatalf("incorrect image policy: %s", got)
 						}
-						if lite && (gjson.GetBytes(got, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(got) == util.CodexResponsesLiteToolsIncompatible) {
+						if lite && (ojson.GetBytes(got, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(got) == util.CodexResponsesLiteToolsIncompatible) {
 							t.Fatalf("invalid Lite declarations: %s", got)
 						}
-						tools := util.CollectResponsesToolWinners(gjson.ParseBytes(got))
+						tools := util.CollectResponsesToolWinners(ojson.ParseBytes(got))
 						if _, exists := tools["web__run"]; exists {
 							t.Fatalf("image setting added unsolicited search: %s", got)
 						}
 						if existing && tools["exec"].ToolType != "function" {
 							t.Fatalf("unrelated tool lost: %s", got)
 						}
-						if mode != config.DisableImageGenerationOff && gjson.GetBytes(got, "tool_choice").Exists() {
+						if mode != config.DisableImageGenerationOff && ojson.GetBytes(got, "tool_choice").Exists() {
 							t.Fatalf("disabled image choice survived: %s", got)
 						}
-						if !existing && gjson.GetBytes(got, "tool_choice").Exists() {
+						if !existing && ojson.GetBytes(got, "tool_choice").Exists() {
 							t.Fatalf("injection forced tool execution: %s", got)
 						}
 					})
@@ -77,7 +76,7 @@ func TestCodexUnifiedImagePolicyRetainsExistingDeclarations(t *testing.T) {
 		`{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen","description":"client schema"}]}`,
 	} {
 		body := []byte(`{"model":"gpt-5.5","input":[{"id":"at-client","type":"additional_tools","tools":[]}],"tool_choice":"auto"}`)
-		body, _ = sjson.SetRawBytes(body, "input.0.tools.-1", []byte(declaration))
+		body, _ = ojson.SetRawBytes(body, "input.0.tools.-1", []byte(declaration))
 		got := mustApplyCodexImagePolicy(t, body, "gpt-5.5", nil, &config.Config{}, nil, "/v1/responses", true)
 		if string(body) != string(got) {
 			t.Fatalf("existing additional_tools declaration changed: %s", got)
@@ -121,7 +120,7 @@ func TestCodexToolPolicyUsesConfiguredLiteOverride(t *testing.T) {
 		if headers.Get(codexResponsesLiteHeader) != fmt.Sprint(enabled) || source.Get(codexResponsesLiteHeader) != fmt.Sprint(!enabled) {
 			t.Fatalf("incorrect override/source mutation: %v %v", headers, source)
 		}
-		if hosted := gjson.GetBytes(got, "tools.0.type").String() == "image_generation"; hosted == enabled || !helps.HasCodexImageTool(got) {
+		if hosted := ojson.GetBytes(got, "tools.0.type").String() == "image_generation"; hosted == enabled || !helps.HasCodexImageTool(got) {
 			t.Fatalf("tool shape conflicts with configured header: %s", got)
 		}
 	}

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/tidwall/gjson"
 )
 
 // WebsocketDial accepts the native bearer subprotocol separately from log headers.
@@ -309,10 +309,10 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 			}
 			continue
 		}
-		if !gjson.ValidBytes(raw) || !gjson.ParseBytes(raw).IsObject() {
+		if !ojson.ValidBytes(raw) || !ojson.ParseBytes(raw).IsObject() {
 			return 0, failure(502, "invalid_stream", "Basispoints WebSocket returned invalid JSON")
 		}
-		event := gjson.ParseBytes(raw)
+		event := ojson.ParseBytes(raw)
 		kind := event.Get("type").String()
 		if kind == "" {
 			return 0, failure(502, "invalid_stream", "Basispoints WebSocket event has no type")
@@ -343,7 +343,7 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 			}
 		}
 		r.responseObserved = true
-		if cursor := event.Get("basispoints_replay_cursor"); cursor.Type == gjson.Number {
+		if cursor := event.Get("basispoints_replay_cursor"); cursor.Type == ojson.Number {
 			if cursor.Int() <= r.cursor {
 				continue
 			}

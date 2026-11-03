@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -17,8 +18,6 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestCodexPlanAOutboundHeaders(t *testing.T) {
@@ -126,10 +125,10 @@ func TestCodexPlanAOutboundHeaders(t *testing.T) {
 				}
 				body := []byte(`{"model":"stale-client-alias","input":[{"role":"user","content":"hello"}],"client_metadata":{"x-codex-turn-metadata":"{}"}}`)
 				if tc.compat {
-					body, _ = sjson.DeleteBytes(body, "client_metadata")
+					body, _ = ojson.DeleteBytes(body, "client_metadata")
 				}
 				if tc.tier != "" {
-					body, _ = sjson.SetBytes(body, "service_tier", tc.tier)
+					body, _ = ojson.SetBytes(body, "service_tier", tc.tier)
 				}
 				headers := make(http.Header)
 				if tc.clientUA != "" {
@@ -164,10 +163,10 @@ func TestCodexPlanAOutboundHeaders(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := <-captured
-				if gjson.GetBytes(got.body, "model").String() != model || gjson.GetBytes(got.body, "service_tier").String() != tc.wantTier {
+				if ojson.GetBytes(got.body, "model").String() != model || ojson.GetBytes(got.body, "service_tier").String() != tc.wantTier {
 					t.Fatalf("unexpected final model/tier: %s", got.body)
 				}
-				if tc.wantTier == "" && gjson.GetBytes(got.body, "service_tier").Exists() {
+				if tc.wantTier == "" && ojson.GetBytes(got.body, "service_tier").Exists() {
 					t.Fatalf("ordinary requests must omit service_tier: %s", got.body)
 				}
 				wantHint := "model=" + model

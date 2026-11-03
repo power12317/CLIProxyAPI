@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexFastModeOverrides(t *testing.T) {
@@ -33,14 +33,14 @@ func TestCodexFastModeOverrides(t *testing.T) {
 						t.Fatal("auto must preserve the body byte for byte")
 					}
 				}
-				tier := gjson.GetBytes(got, "service_tier")
+				tier := ojson.GetBytes(got, "service_tier")
 				if tier.String() != want || (want == "" && tier.Exists()) {
 					t.Fatalf("tier=%s want=%q", tier.Raw, want)
 				}
 				if !bytes.Equal(body, original) {
 					t.Fatal("source payload changed")
 				}
-				if gjson.GetBytes(got, "model").String() != "gpt-6-astra" || !gjson.GetBytes(got, "input").IsArray() {
+				if ojson.GetBytes(got, "model").String() != "gpt-6-astra" || !ojson.GetBytes(got, "input").IsArray() {
 					t.Fatal("unrelated fields changed")
 				}
 			})

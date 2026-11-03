@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
-	"github.com/tidwall/gjson"
 )
 
 func TestResponsesWebsocketOverloadDoesNotCloseDownstream(t *testing.T) {
@@ -47,14 +47,14 @@ func TestResponsesWebsocketOverloadDoesNotCloseDownstream(t *testing.T) {
 			}
 			defer func() { _ = conn.Close() }()
 			_, payload, err := conn.ReadMessage()
-			if err != nil || gjson.GetBytes(payload, "error.code").String() != "server_is_overloaded" {
+			if err != nil || ojson.GetBytes(payload, "error.code").String() != "server_is_overloaded" {
 				t.Fatalf("overload was not delivered: %s %v", payload, err)
 			}
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","input":[]}`)); err != nil {
 				t.Fatal(err)
 			}
 			_, payload, err = conn.ReadMessage()
-			if err != nil || gjson.GetBytes(payload, "response.id").String() != "next" {
+			if err != nil || ojson.GetBytes(payload, "response.id").String() != "next" {
 				t.Fatalf("follow-up failed: %s %v", payload, err)
 			}
 			if err := <-done; err != nil {

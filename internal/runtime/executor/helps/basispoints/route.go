@@ -1,6 +1,6 @@
 package basispoints
 
-import "github.com/tidwall/gjson"
+import "github.com/MoeForge/moego/ojson"
 
 func nativeToolKind(kind string) bool {
 	switch kind {
@@ -10,14 +10,14 @@ func nativeToolKind(kind string) bool {
 	return false
 }
 
-func clientToolSearch(tool gjson.Result) bool {
+func clientToolSearch(tool ojson.Result) bool {
 	return tool.Get("type").String() == "tool_search" && tool.Get("execution").String() == "client"
 }
 
 // Include discovered tools without treating their declaration as an invocation.
-func eachDeclaredTool(raw []byte, visit func(gjson.Result)) {
-	var scan func(gjson.Result)
-	scan = func(tools gjson.Result) {
+func eachDeclaredTool(raw []byte, visit func(ojson.Result)) {
+	var scan func(ojson.Result)
+	scan = func(tools ojson.Result) {
 		for _, tool := range tools.Array() {
 			if tool.Get("type").String() == "namespace" {
 				scan(tool.Get("tools"))
@@ -26,8 +26,8 @@ func eachDeclaredTool(raw []byte, visit func(gjson.Result)) {
 			}
 		}
 	}
-	scan(gjson.GetBytes(raw, "tools"))
-	for _, item := range gjson.GetBytes(raw, "input").Array() {
+	scan(ojson.GetBytes(raw, "tools"))
+	for _, item := range ojson.GetBytes(raw, "input").Array() {
 		kind := item.Get("type").String()
 		if kind == "additional_tools" || kind == "tool_search_output" && item.Get("execution").String() == "client" {
 			scan(item.Get("tools"))
@@ -38,7 +38,7 @@ func eachDeclaredTool(raw []byte, visit func(gjson.Result)) {
 // NativeToolReason makes only decisions known before contacting Basispoints.
 // Optional capabilities stay available through the bridge's native-route marker.
 func NativeToolReason(raw []byte) string {
-	for _, item := range gjson.GetBytes(raw, "input").Array() {
+	for _, item := range ojson.GetBytes(raw, "input").Array() {
 		switch kind := item.Get("type").String(); kind {
 		case "web_search_call", "file_search_call", "image_generation_call", "code_interpreter_call", "computer_call", "mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response":
 			// Completed hosted items are historical context from an earlier native
@@ -56,12 +56,12 @@ func NativeToolReason(raw []byte) string {
 			}
 		}
 	}
-	choice := gjson.GetBytes(raw, "tool_choice")
+	choice := ojson.GetBytes(raw, "tool_choice")
 	if choice.String() == "none" {
 		return ""
 	}
 	firstNative, hasClient, clientSearch := "", false, false
-	eachDeclaredTool(raw, func(tool gjson.Result) {
+	eachDeclaredTool(raw, func(tool ojson.Result) {
 		kind := tool.Get("type").String()
 		if clientToolSearch(tool) {
 			clientSearch, hasClient = true, true
@@ -99,12 +99,12 @@ func OptionalNativeTools(raw []byte) bool {
 	if NativeToolReason(raw) != "" {
 		return false
 	}
-	choice := gjson.GetBytes(raw, "tool_choice")
+	choice := ojson.GetBytes(raw, "tool_choice")
 	if choice.IsObject() || choice.String() == "none" {
 		return false
 	}
 	found := false
-	eachDeclaredTool(raw, func(tool gjson.Result) {
+	eachDeclaredTool(raw, func(tool ojson.Result) {
 		if nativeToolKind(tool.Get("type").String()) && !clientToolSearch(tool) {
 			found = true
 		}

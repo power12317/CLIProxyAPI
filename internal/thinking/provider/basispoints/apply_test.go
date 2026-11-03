@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
-	"github.com/tidwall/gjson"
 )
 
 func TestPassthroughKeepsEffortAndSuffixPrecedence(t *testing.T) {
@@ -16,10 +16,10 @@ func TestPassthroughKeepsEffortAndSuffixPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := gjson.GetBytes(body, "reasoning_effort").String(); got != effort {
+			if got := ojson.GetBytes(body, "reasoning_effort").String(); got != effort {
 				t.Fatalf("effort = %q, want %q", got, effort)
 			}
-			if gjson.GetBytes(body, "reasoning.effort").Exists() {
+			if ojson.GetBytes(body, "reasoning.effort").Exists() {
 				t.Fatal("nested effort remains")
 			}
 		})
@@ -28,7 +28,7 @@ func TestPassthroughKeepsEffortAndSuffixPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gjson.GetBytes(body, "reasoning_effort").String(); got != "high" {
+	if got := ojson.GetBytes(body, "reasoning_effort").String(); got != "high" {
 		t.Fatalf("suffix effort = %q", got)
 	}
 	if _, supported := thinking.ParseLevelSuffix("ultra"); supported {
@@ -38,7 +38,7 @@ func TestPassthroughKeepsEffortAndSuffixPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gjson.GetBytes(body, "reasoning_effort").Exists() || gjson.GetBytes(body, "reasoning.effort").Exists() {
+	if ojson.GetBytes(body, "reasoning_effort").Exists() || ojson.GetBytes(body, "reasoning.effort").Exists() {
 		t.Fatalf("injected default remains: %s", body)
 	}
 }

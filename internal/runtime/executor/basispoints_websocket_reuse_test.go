@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 type basispointsIdleCloseHook struct {
@@ -62,10 +62,10 @@ func TestBasispointsWebsocketReusesSessionAcrossTurnsModelsAndReload(t *testing.
 				return
 			}
 			frames <- raw
-			if gjson.GetBytes(raw, "type").String() != "response.create" {
+			if ojson.GetBytes(raw, "type").String() != "response.create" {
 				t.Errorf("new turn did not send response.create: %s", raw)
 			}
-			response := fmt.Sprintf(`{"type":"response.completed","basispoints_replay_cursor":0,"response":{"id":%q,"model":%q,"status":"completed","output":[]}}`, gjson.GetBytes(raw, "metadata.turn_id").String(), gjson.GetBytes(raw, "model").String())
+			response := fmt.Sprintf(`{"type":"response.completed","basispoints_replay_cursor":0,"response":{"id":%q,"model":%q,"status":"completed","output":[]}}`, ojson.GetBytes(raw, "metadata.turn_id").String(), ojson.GetBytes(raw, "model").String())
 			if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(response)); errWrite != nil {
 				return
 			}
@@ -127,9 +127,9 @@ func TestBasispointsWebsocketReusesSessionAcrossTurnsModelsAndReload(t *testing.
 		cancel()
 		<-pongs
 		frame := <-frames
-		requestID := gjson.GetBytes(frame, "basispoints_request_id").String()
-		resumeToken := gjson.GetBytes(frame, "basispoints_resume_token").String()
-		turn := gjson.GetBytes(frame, "metadata.turn_id").String()
+		requestID := ojson.GetBytes(frame, "basispoints_request_id").String()
+		resumeToken := ojson.GetBytes(frame, "basispoints_resume_token").String()
+		turn := ojson.GetBytes(frame, "metadata.turn_id").String()
 		if i == 0 {
 			firstRequestID, firstResumeToken, firstTurn = requestID, resumeToken, turn
 		}
@@ -162,7 +162,7 @@ func TestBasispointsWebsocketConcurrentRequestsAndAccountRotation(t *testing.T) 
 			if errRead != nil {
 				return
 			}
-			id := gjson.GetBytes(frame, "input.1.content.0.text").String()
+			id := ojson.GetBytes(frame, "input.1.content.0.text").String()
 			response := fmt.Sprintf(`{"type":"response.completed","basispoints_replay_cursor":0,"response":{"id":%q,"status":"completed","output":[]}}`, r.Header.Get("ChatGPT-Account-ID")+"/"+id)
 			if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(response)); errWrite != nil {
 				return
@@ -184,7 +184,7 @@ func TestBasispointsWebsocketConcurrentRequestsAndAccountRotation(t *testing.T) 
 		if err != nil {
 			return err
 		}
-		if got := gjson.GetBytes(result.Payload, "id").String(); got != fmt.Sprint(auth.Metadata["account_id"])+"/"+fmt.Sprint(i) {
+		if got := ojson.GetBytes(result.Payload, "id").String(); got != fmt.Sprint(auth.Metadata["account_id"])+"/"+fmt.Sprint(i) {
 			return fmt.Errorf("request %d received another response: %s", i, got)
 		}
 		return nil

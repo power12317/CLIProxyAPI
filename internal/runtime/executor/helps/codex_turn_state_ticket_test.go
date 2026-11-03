@@ -12,9 +12,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func testTicketState(length int) string {
@@ -65,7 +65,7 @@ func TestCodexTicketCacheAllModelsCaptureAndOverrides(t *testing.T) {
 				if tc.capture {
 					want = value
 				}
-				if headers.Get(CodexTurnStateTicketHeader) != want || gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != want {
+				if headers.Get(CodexTurnStateTicketHeader) != want || ojson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != want {
 					t.Fatal("header/body ticket override did not follow capture policy")
 				}
 				if tc.capture && tc.model != "gpt-6-astra" {
@@ -128,7 +128,7 @@ func TestCodexTurnStateTicketConfiguredModelInjection(t *testing.T) {
 		t.Fatalf("ungated model was blocked: %v", errApply)
 	}
 	body := ApplyCodexTurnStateTicketBody(auth, cfg, "gpt-6-astra", []byte(`{"client_metadata":{}}`))
-	if got := gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != state {
+	if got := ojson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != state {
 		t.Fatalf("websocket ticket = %q", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestCodexTurnStateTicketFailOpenPreservesPassiveStateBeforeSending(t *testi
 		t.Fatalf("fail-open request did not preserve passive header %q", got)
 	}
 	body := ApplyCodexTurnStateTicketBody(auth, cfg, "gpt-6-astra", []byte(`{"client_metadata":{"x-codex-turn-state":"passive-state"}}`))
-	if got := gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != "passive-state" {
+	if got := ojson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != "passive-state" {
 		t.Fatalf("fail-open websocket body did not preserve passive state %q", got)
 	}
 }
@@ -247,15 +247,15 @@ func TestHarvestCodexTurnStateTicketMatchesConversationInstallation(t *testing.T
 				if errRead != nil {
 					t.Fatal(errRead)
 				}
-				if got := gjson.GetBytes(body, "input.0.content.0.text").String(); got != "ping" {
+				if got := ojson.GetBytes(body, "input.0.content.0.text").String(); got != "ping" {
 					t.Errorf("probe input = %q, want ping", got)
 				}
-				metadata := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()
+				metadata := ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()
 				if got := req.Header.Get("X-Codex-Turn-Metadata"); got != metadata || got == "" {
 					t.Errorf("turn metadata header = %q, want body metadata %q", got, metadata)
 				}
-				outerID := gjson.GetBytes(body, "client_metadata.x-codex-installation-id")
-				nestedID := gjson.Get(metadata, "installation_id")
+				outerID := ojson.GetBytes(body, "client_metadata.x-codex-installation-id")
+				nestedID := ojson.Get(metadata, "installation_id")
 				if tc.wantFixed {
 					if outerID.String() != identity.InstallationID || nestedID.String() != identity.InstallationID {
 						t.Errorf("probe installation IDs = %q/%q, normal conversation = %q", outerID.String(), nestedID.String(), identity.InstallationID)
@@ -263,12 +263,12 @@ func TestHarvestCodexTurnStateTicketMatchesConversationInstallation(t *testing.T
 				} else if outerID.Exists() || nestedID.Exists() {
 					t.Errorf("disabled convergence added installation IDs: %s/%s", outerID.Raw, nestedID.Raw)
 				}
-				sessionID, turnID := gjson.Get(metadata, "session_id").String(), gjson.Get(metadata, "turn_id").String()
+				sessionID, turnID := ojson.Get(metadata, "session_id").String(), ojson.Get(metadata, "turn_id").String()
 				if sessionID == "" || turnID == "" || sessions[sessionID] || turns[turnID] {
 					t.Errorf("probe must use fresh session/turn IDs: %q/%q", sessionID, turnID)
 				}
 				sessions[sessionID], turns[turnID] = true, true
-				if sessionID != req.Header.Get("Session-Id") || sessionID != gjson.GetBytes(body, "client_metadata.session_id").String() {
+				if sessionID != req.Header.Get("Session-Id") || sessionID != ojson.GetBytes(body, "client_metadata.session_id").String() {
 					t.Error("probe session ID differs between body and headers")
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{CodexTurnStateTicketHeader: {state}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
@@ -342,7 +342,7 @@ func TestCodexTurnStateTicketResponseRetentionAndReplacement(t *testing.T) {
 					t.Fatal("header did not switch to the replacement")
 				}
 				body := ApplyCodexTurnStateTicketBody(auth, cfg, "gpt-6-astra", []byte(`{"client_metadata":{"turn_id":"new-turn"}}`))
-				if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != second {
+				if ojson.GetBytes(body, "client_metadata.x-codex-turn-state").String() != second {
 					t.Fatal("new turn did not use replacement")
 				}
 				if !codexTurnStateTicketForAuth(auth, "gpt-6-astra").ExpiresAt.Equal(updated.ExpiresAt) {
@@ -368,7 +368,7 @@ func TestCodexTurnStateTicketLegacyValuesAreNotInjected(t *testing.T) {
 			t.Fatalf("legacy length %d injected", length)
 		}
 		body := ApplyCodexTurnStateTicketBody(auth, cfg, "gpt-6-astra", []byte(`{}`))
-		if gjson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
+		if ojson.GetBytes(body, "client_metadata.x-codex-turn-state").Exists() {
 			t.Fatal("legacy ticket injected in body")
 		}
 		statuses := CodexTurnStateTicketStatuses(auth, cfg, time.Now())
