@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func fastModeExpectedTier(mode, input string) string {
@@ -60,7 +60,7 @@ func TestCodexFastModeHTTPAndBasispoints(t *testing.T) {
 								if errRead != nil {
 									return nil, errRead
 								}
-								captured.serviceTier = gjson.GetBytes(sent, "service_tier")
+								captured.serviceTier = ojson.GetBytes(sent, "service_tier")
 								payload := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"model\":\"gpt-6-astra\",\"output\":[]}}\n\n"
 								return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(payload))}, nil
 							})))
@@ -102,7 +102,7 @@ func TestCodexFastModeHTTPAndBasispoints(t *testing.T) {
 								t.Fatalf("routing hint=%q want=%q", captured.routingHint, hint)
 							}
 						}
-						if gjson.GetBytes(req.Payload, "service_tier").String() != input {
+						if ojson.GetBytes(req.Payload, "service_tier").String() != input {
 							t.Fatal("client payload changed")
 						}
 					})
@@ -182,7 +182,7 @@ func TestCodexFastModeWebSocket(t *testing.T) {
 				}
 				select {
 				case body := <-requests:
-					tier := gjson.GetBytes(body, "service_tier")
+					tier := ojson.GetBytes(body, "service_tier")
 					want := fastModeExpectedTier(mode, "priority")
 					if tier.String() != want || (want == "" && tier.Exists()) {
 						t.Fatalf("websocket tier=%s want=%q", tier.Raw, want)

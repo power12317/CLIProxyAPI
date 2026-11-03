@@ -7,12 +7,11 @@ import (
 	"io"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func (e *CodexRuntimeExecutor) executeImageViaMaster(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter, body []byte, imageAPI string, prepared codexOpenAIImagePreparedRequest) (resp coreexecutor.Response, err error) {
@@ -62,18 +61,18 @@ func (e *CodexRuntimeExecutor) executeImageViaMaster(ctx context.Context, auth *
 		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(event, e.cfg.Codex.ModelLevelCooling); ok {
 			return resp, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()}
 		}
-		kind := gjson.GetBytes(event, "type").String()
+		kind := ojson.GetBytes(event, "type").String()
 		if imageAPI == "images" {
 			if kind == "image_generation.completed" || kind == "image_edit.completed" {
-				item, _ := sjson.DeleteBytes(event, "type")
+				item, _ := ojson.DeleteBytes(event, "type")
 				for _, key := range []string{"created", "created_at", "usage", "background", "size", "quality", "output_format"} {
-					if value := gjson.GetBytes(event, key); value.Exists() {
+					if value := ojson.GetBytes(event, key); value.Exists() {
 						target := key
 						if target == "created_at" {
 							target = "created"
 						}
-						imageResult, _ = sjson.SetRawBytes(imageResult, target, []byte(value.Raw))
-						item, _ = sjson.DeleteBytes(item, key)
+						imageResult, _ = ojson.SetRawBytes(imageResult, target, []byte(value.Raw))
+						item, _ = ojson.DeleteBytes(item, key)
 					}
 				}
 				images = append(images, item)
@@ -96,7 +95,7 @@ func (e *CodexRuntimeExecutor) executeImageViaMaster(ctx context.Context, auth *
 		if errMarshal != nil {
 			return resp, errMarshal
 		}
-		output, err = sjson.SetRawBytes(imageResult, "data", data)
+		output, err = ojson.SetRawBytes(imageResult, "data", data)
 		reporter.Publish(ctx, helps.ParseOpenAIUsage(output))
 	} else {
 		if len(terminal) == 0 {
@@ -161,7 +160,7 @@ func (e *CodexRuntimeExecutor) executeImageStreamViaMaster(ctx context.Context, 
 				send(nil, errRead)
 				return
 			}
-			if !json.Valid(data) || !gjson.GetBytes(data, "data").IsArray() {
+			if !json.Valid(data) || !ojson.GetBytes(data, "data").IsArray() {
 				send(nil, runtimeError(502, "Invalid image JSON response from Codex runtime"))
 				return
 			}
@@ -169,15 +168,15 @@ func (e *CodexRuntimeExecutor) executeImageStreamViaMaster(ctx context.Context, 
 			if strings.HasSuffix(helps.PayloadRequestPath(opts), codexImagesEditsPath) {
 				kind = "image_edit.completed"
 			}
-			for _, item := range gjson.GetBytes(data, "data").Array() {
-				event, _ := sjson.SetBytes([]byte(item.Raw), "type", kind)
+			for _, item := range ojson.GetBytes(data, "data").Array() {
+				event, _ := ojson.SetBytes([]byte(item.Raw), "type", kind)
 				for _, key := range []string{"created", "usage", "background", "size", "quality", "output_format"} {
-					if value := gjson.GetBytes(data, key); value.Exists() {
+					if value := ojson.GetBytes(data, key); value.Exists() {
 						target := key
 						if target == "created" {
 							target = "created_at"
 						}
-						event, _ = sjson.SetRawBytes(event, target, []byte(value.Raw))
+						event, _ = ojson.SetRawBytes(event, target, []byte(value.Raw))
 					}
 				}
 				if !send(codexBuildSSEFrame(kind, event), nil) {
@@ -212,7 +211,7 @@ func (e *CodexRuntimeExecutor) executeImageStreamViaMaster(ctx context.Context, 
 				send(nil, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody, ResponseHeaders: client.Headers.Clone()})
 				return
 			}
-			kind := gjson.GetBytes(event, "type").String()
+			kind := ojson.GetBytes(event, "type").String()
 			if imageAPI == "images" {
 				terminal = terminal || kind == "image_generation.completed" || kind == "image_edit.completed"
 				if kind == "image_generation.completed" || kind == "image_edit.completed" {
@@ -270,8 +269,8 @@ func (e *CodexRuntimeExecutor) translateImageJSON(ctx context.Context, reporter 
 	if err != nil {
 		return nil, err
 	}
-	if gjson.GetBytes(data, "status").String() == "failed" {
-		terminal, _ = sjson.SetBytes(terminal, "type", "response.failed")
+	if ojson.GetBytes(data, "status").String() == "failed" {
+		terminal, _ = ojson.SetBytes(terminal, "type", "response.failed")
 		if failure, failureBody, ok := codexTerminalFailureErrWithCooling(terminal, e.cfg.Codex.ModelLevelCooling); ok {
 			return nil, &bridge.Error{Status: failure.StatusCode(), Message: failure.Error(), Body: failureBody}
 		}

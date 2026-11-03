@@ -7,8 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 const codexContinuationMaxBytes = 8 << 20
@@ -32,7 +31,7 @@ func codexContinuationRequest(body []byte) (map[string]any, []any, bool) {
 		return nil, nil, false
 	}
 	input, ok := request["input"].([]any)
-	if !ok || gjson.GetBytes(body, "previous_response_id").String() != "" {
+	if !ok || ojson.GetBytes(body, "previous_response_id").String() != "" {
 		return nil, nil, false
 	}
 	for _, key := range []string{"input", "client_metadata", "stream", "stream_options", "background", "generate", "type", "previous_response_id"} {
@@ -54,11 +53,11 @@ func (s *CodexContinuation) Prepare(body []byte) []byte {
 	if s.responseID == "" || !reflect.DeepEqual(properties, s.properties) || len(input) < len(s.input) || !reflect.DeepEqual(input[:len(s.input)], s.input) {
 		return body
 	}
-	updated, errSet := sjson.SetBytes(body, "previous_response_id", s.responseID)
+	updated, errSet := ojson.SetBytes(body, "previous_response_id", s.responseID)
 	if errSet != nil {
 		return body
 	}
-	updated, errSet = sjson.SetBytes(updated, "input", input[len(s.input):])
+	updated, errSet = ojson.SetBytes(updated, "input", input[len(s.input):])
 	if errSet != nil {
 		return body
 	}
@@ -75,7 +74,7 @@ func (s *CodexContinuation) Complete(request, event []byte) {
 	if len(request)+len(event) > codexContinuationMaxBytes {
 		return
 	}
-	kind := gjson.GetBytes(event, "type").String()
+	kind := ojson.GetBytes(event, "type").String()
 	if kind != "response.completed" && kind != "response.done" {
 		return
 	}
@@ -83,14 +82,14 @@ func (s *CodexContinuation) Complete(request, event []byte) {
 	if !ok {
 		return
 	}
-	output := gjson.GetBytes(event, "response.output")
+	output := ojson.GetBytes(event, "response.output")
 	var items []any
 	decoder := json.NewDecoder(strings.NewReader(output.Raw))
 	decoder.UseNumber()
 	if !output.IsArray() || decoder.Decode(&items) != nil {
 		return
 	}
-	id := gjson.GetBytes(event, "response.id").String()
+	id := ojson.GetBytes(event, "response.id").String()
 	if id == "" {
 		return
 	}
@@ -100,7 +99,7 @@ func (s *CodexContinuation) Complete(request, event []byte) {
 // CodexWebsocketTransportBody follows codex-rs ResponseCreateWsRequest, which
 // retains stream and stream_options despite the public API guide's simplified example.
 func CodexWebsocketTransportBody(body []byte) []byte {
-	body, _ = sjson.DeleteBytes(body, "background")
+	body, _ = ojson.DeleteBytes(body, "background")
 	body = SetBoolIfDifferent(body, "stream", true)
 	return body
 }

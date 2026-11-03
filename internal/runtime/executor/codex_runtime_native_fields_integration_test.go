@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -19,8 +20,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func testCodexRuntimeLiteParallelCalls(t *testing.T, cfg *config.Config, auth *coreauth.Auth, readUpstream func(*testing.T) []byte) int {
@@ -34,7 +33,7 @@ func testCodexRuntimeLiteParallelCalls(t *testing.T, cfg *config.Config, auth *c
 					body = []byte(`{"messages":[{"role":"user","content":"native-lite-parallel-probe"}]}`)
 				}
 				if setting != "omitted" {
-					body, _ = sjson.SetRawBytes(body, "parallel_tool_calls", []byte(setting))
+					body, _ = ojson.SetRawBytes(body, "parallel_tool_calls", []byte(setting))
 				}
 				opts := runtimeTestOptions()
 				opts.SourceFormat = source
@@ -44,7 +43,7 @@ func testCodexRuntimeLiteParallelCalls(t *testing.T, cfg *config.Config, auth *c
 					t.Fatal(errExecute)
 				}
 				actual := readUpstream(t)
-				if gjson.GetBytes(actual, "parallel_tool_calls").Type != gjson.False {
+				if ojson.GetBytes(actual, "parallel_tool_calls").Type != ojson.False {
 					t.Fatalf("native Lite normalization was bypassed for %s: %s", setting, actual)
 				}
 				t.Logf("caller %s parallel=%s without Lite hint -> native Lite parallel=false", source, setting)
@@ -67,7 +66,7 @@ func testCodexRuntimeNativeFieldReplay(t *testing.T, cfg *config.Config, auth *c
 	if errRead != nil {
 		t.Fatal(errRead)
 	}
-	history := gjson.ParseBytes(raw)
+	history := ojson.ParseBytes(raw)
 	if !history.IsArray() {
 		history = history.Get("history")
 	}
@@ -80,7 +79,7 @@ func testCodexRuntimeNativeFieldReplay(t *testing.T, cfg *config.Config, auth *c
 		if errExpected != nil {
 			t.Fatal(errExpected)
 		}
-		expectedHistory = gjson.ParseBytes(expectedRaw)
+		expectedHistory = ojson.ParseBytes(expectedRaw)
 		if !expectedHistory.IsArray() {
 			t.Fatal("native formatter expectation must be a history array")
 		}
@@ -109,8 +108,8 @@ func testCodexRuntimeNativeFieldReplay(t *testing.T, cfg *config.Config, auth *c
 	client := &http.Client{Transport: transport}
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
-			body, _ := sjson.SetRawBytes([]byte(`{"model":"gpt-6.1-sol"}`), "input", []byte(history.Raw))
-			body, _ = sjson.SetBytes(body, "stream", stream)
+			body, _ := ojson.SetRawBytes([]byte(`{"model":"gpt-6.1-sol"}`), "input", []byte(history.Raw))
+			body, _ = ojson.SetBytes(body, "stream", stream)
 			req, errRequest := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+"/v1/responses", strings.NewReader(string(body)))
 			if errRequest != nil {
 				t.Fatal(errRequest)
@@ -126,7 +125,7 @@ func testCodexRuntimeNativeFieldReplay(t *testing.T, cfg *config.Config, auth *c
 				t.Fatalf("native field replay failed: status=%d err=%v body=%s", response.StatusCode, errBody, output)
 			}
 			actual := readUpstream(t)
-			items := gjson.GetBytes(actual, "input").Array()
+			items := ojson.GetBytes(actual, "input").Array()
 			next := 0
 			for index, expected := range expectedHistory.Array() {
 				found := -1

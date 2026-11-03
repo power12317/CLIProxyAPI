@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
@@ -18,8 +19,6 @@ import (
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // BasispointsExecutor shares the Codex credential lifecycle and changes only the
@@ -81,11 +80,11 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	body, err = sjson.SetBytes(body, "model", baseModel)
+	body, err = ojson.SetBytes(body, "model", baseModel)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	body, err = sjson.SetBytes(body, "stream", true)
+	body, err = ojson.SetBytes(body, "stream", true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -243,7 +242,7 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 	})
 	if err != nil {
 		if basispoints.RequestedNativeTool(err) != "" {
-			e.publish(ctx, reporter, []byte(gjson.GetBytes(bridge.LastEvent, "response").Raw))
+			e.publish(ctx, reporter, []byte(ojson.GetBytes(bridge.LastEvent, "response").Raw))
 			return result, err
 		}
 		e.observeError(ctx, err)
@@ -262,7 +261,7 @@ func (e *BasispointsExecutor) Execute(ctx context.Context, auth *coreauth.Auth, 
 	if format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex || format == "" {
 		result.Payload = completed
 	} else {
-		wrapped, _ := sjson.SetRawBytes([]byte(`{"type":"response.completed"}`), "response", completed)
+		wrapped, _ := ojson.SetRawBytes([]byte(`{"type":"response.completed"}`), "response", completed)
 		var param any
 		result.Payload = sdktranslator.TranslateNonStream(ctx, sdktranslator.FormatCodex, format, req.Model, opts.OriginalRequest, body, wrapped, &param)
 	}
@@ -317,7 +316,7 @@ func (e *BasispointsExecutor) ExecuteStream(ctx context.Context, auth *coreauth.
 		})
 		if errRead != nil {
 			if basispoints.RequestedNativeTool(errRead) != "" {
-				e.publish(ctx, reporter, []byte(gjson.GetBytes(bridge.LastEvent, "response").Raw))
+				e.publish(ctx, reporter, []byte(ojson.GetBytes(bridge.LastEvent, "response").Raw))
 			} else {
 				e.observeError(ctx, errRead)
 				original := req.Payload
@@ -358,22 +357,22 @@ func (e *BasispointsExecutor) read(ctx context.Context, auth *coreauth.Auth, res
 		helps.AppendAPIResponseChunk(ctx, e.cfg, raw)
 		// Use the same event path for JSON responses so tool events are consistent.
 		kind := "response.completed"
-		if status := gjson.GetBytes(raw, "status").String(); status == "failed" || status == "incomplete" {
+		if status := ojson.GetBytes(raw, "status").String(); status == "failed" || status == "incomplete" {
 			kind = "response." + status
 		}
-		wrapped, err := sjson.SetRawBytes([]byte(`{}`), "response", raw)
+		wrapped, err := ojson.SetRawBytes([]byte(`{}`), "response", raw)
 		if err != nil {
 			return err
 		}
-		wrapped, _ = sjson.SetBytes(wrapped, "type", kind)
+		wrapped, _ = ojson.SetBytes(wrapped, "type", kind)
 		return bridge.Stream(bytes.NewReader(append(append([]byte("data: "), wrapped...), '\n', '\n')), emit)
 	}
 	return bridge.Stream(response.Body, emit)
 }
 
 func (e *BasispointsExecutor) publish(ctx context.Context, reporter *helps.UsageReporter, response []byte) {
-	reporter.SetResponseModel(gjson.GetBytes(response, "model").String())
-	if gjson.GetBytes(response, "usage").Exists() {
+	reporter.SetResponseModel(ojson.GetBytes(response, "model").String())
+	if ojson.GetBytes(response, "usage").Exists() {
 		reporter.Publish(ctx, helps.ParseOpenAIUsage(response))
 	} else {
 		reporter.EnsurePublished(ctx)

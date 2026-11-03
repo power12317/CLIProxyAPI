@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
-	"github.com/tidwall/gjson"
 )
 
 func TestHarvestCodexTurnStateTicketLogsRawResponseLengths(t *testing.T) {
@@ -67,7 +67,7 @@ func TestHarvestCodexTurnStateTicketLogsRawResponseLengths(t *testing.T) {
 				if errRead != nil {
 					return nil, errRead
 				}
-				turnID = gjson.Get(gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String(), "turn_id").String()
+				turnID = ojson.Get(ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String(), "turn_id").String()
 				if tc.transportErr != nil {
 					return nil, tc.transportErr
 				}

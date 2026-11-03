@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,13 +16,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 	gorillaws "github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func basispointsTestPNG(t *testing.T) []byte {
@@ -119,13 +120,13 @@ func TestBasispointsImagesAndMaxThroughHTTP(t *testing.T) {
 						w.WriteHeader(400)
 						return
 					}
-					if gjson.GetBytes(raw, "reasoning_effort").String() != "xhigh" || gjson.GetBytes(raw, "input.0.type").String() != "configuration_update" || gjson.GetBytes(raw, "input.0.reasoning.effort").String() != "max" {
+					if ojson.GetBytes(raw, "reasoning_effort").String() != "xhigh" || ojson.GetBytes(raw, "input.0.type").String() != "configuration_update" || ojson.GetBytes(raw, "input.0.reasoning.effort").String() != "max" {
 						t.Error("exact max configuration missing")
 						w.WriteHeader(422)
 						return
 					}
 					found := false
-					for _, item := range gjson.GetBytes(raw, "input").Array() {
+					for _, item := range ojson.GetBytes(raw, "input").Array() {
 						if item.Get("role").String() != "user" {
 							continue
 						}

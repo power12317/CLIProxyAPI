@@ -10,13 +10,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func assertCodexReservedWireFixtures(t *testing.T, body []byte) {
@@ -31,7 +30,7 @@ func assertCodexReservedWireFixtures(t *testing.T, body []byte) {
 			t.Fatal(err)
 		}
 		found := false
-		for _, item := range gjson.GetBytes(body, "input").Array() {
+		for _, item := range ojson.GetBytes(body, "input").Array() {
 			if item.Get("type").String() != "additional_tools" {
 				continue
 			}
@@ -77,7 +76,7 @@ func TestCodexReservedSchemaConflictStopsBeforeUpstream(t *testing.T) {
 			case "ws-stream":
 				_, err = ws.ExecuteStream(context.Background(), codexTestAuth(server.URL), req, opts)
 			}
-			if err == nil || gjson.Get(err.Error(), "error.code").String() != "codex_reserved_tool_schema_conflict" {
+			if err == nil || ojson.Get(err.Error(), "error.code").String() != "codex_reserved_tool_schema_conflict" {
 				t.Fatalf("missing reserved-schema error: %v", err)
 			}
 			if calls.Load() != 0 || !err.(cliproxyexecutor.RequestScopedError).IsRequestScoped() {
@@ -101,7 +100,7 @@ func TestCodexReservedSchemaRespectsImagePolicyAndModel(t *testing.T) {
 		t.Fatal("non-Lite user declaration changed")
 	}
 	request := []byte(`{"model":"gpt-6-astra","input":[],"tools":[{"type":"web_search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false}`)
-	request, _ = sjson.SetBytes(request, "client_metadata.x-codex-turn-metadata", "{}")
+	request, _ = ojson.SetBytes(request, "client_metadata.x-codex-turn-metadata", "{}")
 	got = mustApplyCodexImagePolicy(t, request, "gpt-6-astra", nil, &config.Config{}, headers, "/v1/responses", true)
 	assertCodexReservedWireFixtures(t, got)
 	if util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {

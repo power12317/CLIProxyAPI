@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // ApplyCodexRuntimeImagePolicy applies the operator's hosted-image policy without
@@ -15,8 +14,8 @@ func ApplyCodexRuntimeImagePolicy(body []byte, strip bool) []byte {
 	if !strip {
 		return body
 	}
-	var filter func(gjson.Result) ([]byte, bool)
-	filter = func(list gjson.Result) ([]byte, bool) {
+	var filter func(ojson.Result) ([]byte, bool)
+	filter = func(list ojson.Result) ([]byte, bool) {
 		if !list.IsArray() {
 			return nil, false
 		}
@@ -30,7 +29,7 @@ func ApplyCodexRuntimeImagePolicy(body []byte, strip bool) []byte {
 			raw := []byte(tool.Raw)
 			if tool.Get("type").String() == "namespace" {
 				if children, updated := filter(tool.Get("tools")); updated {
-					raw, _ = sjson.SetRawBytes(raw, "tools", children)
+					raw, _ = ojson.SetRawBytes(raw, "tools", children)
 					changed = true
 				}
 			}
@@ -45,9 +44,9 @@ func ApplyCodexRuntimeImagePolicy(body []byte, strip bool) []byte {
 // NormalizeCodexRuntimeServiceTier maps a public alias while leaving other
 // explicit business values for native capability mapping.
 func NormalizeCodexRuntimeServiceTier(body []byte) []byte {
-	value := gjson.GetBytes(body, "service_tier")
-	if value.Type == gjson.String && strings.EqualFold(strings.TrimSpace(value.String()), "fast") {
-		body, _ = sjson.SetBytes(body, "service_tier", "priority")
+	value := ojson.GetBytes(body, "service_tier")
+	if value.Type == ojson.String && strings.EqualFold(strings.TrimSpace(value.String()), "fast") {
+		body, _ = ojson.SetBytes(body, "service_tier", "priority")
 	}
 	return body
 }
@@ -60,7 +59,7 @@ func ValidateCodexRuntimeChatCalls(body []byte) error {
 		consumed bool
 	}
 	var pending []pendingCall
-	for index, message := range gjson.GetBytes(body, "messages").Array() {
+	for index, message := range ojson.GetBytes(body, "messages").Array() {
 		if message.Get("role").String() != "tool" {
 			pending = nil
 			seen := map[string]bool{}

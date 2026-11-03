@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	authpkg "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 // Upstream withholds all completions until three creates arrive on the same
@@ -47,13 +47,13 @@ func TestCodexDuplexTurnStateReusedBeforeCompletion(t *testing.T) {
 					}
 					if ticketEnabled {
 						assertCodexReservedWireFixtures(t, body)
-						if !gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Bool() {
+						if !ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Bool() {
 							t.Error("duplex create lost Lite mirror")
 						}
 					}
 					if i > 0 {
 						want := strings.Repeat(string(rune('a'+i-1)), length)
-						if got := gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != want {
+						if got := ojson.GetBytes(body, "client_metadata.x-codex-turn-state").String(); got != want {
 							serverErrors <- fmt.Errorf("create %d state len=%d, want latest %d-byte state", i+1, len(got), length)
 							return
 						}
@@ -116,7 +116,7 @@ func TestCodexDuplexTurnStateReusedBeforeCompletion(t *testing.T) {
 					if chunk.Err != nil {
 						t.Fatal(chunk.Err)
 					}
-					switch gjson.GetBytes(chunk.Payload, "type").String() {
+					switch ojson.GetBytes(chunk.Payload, "type").String() {
 					case "codex.response.metadata":
 						metadataCount++
 						input <- core.WebsocketInput{Payload: payload(metadataCount + 1)}

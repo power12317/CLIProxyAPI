@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 // readWebsocket retries authoritative upstream failures on the same socket.
@@ -50,7 +50,7 @@ func (e *BasispointsExecutor) readWebsocket(ctx context.Context, auth *coreauth.
 			if index := bytes.Index(event, []byte("data:")); index >= 0 {
 				payload = bytes.TrimSpace(event[index+len("data:"):])
 			}
-			kind := gjson.GetBytes(payload, "type").String()
+			kind := ojson.GetBytes(payload, "type").String()
 			if !outputStarted && isCodexBootstrapBufferableEvent(kind, payload) && len(buffered) < codexBootstrapMaxBufferedFrames && bufferedBytes+len(event) <= codexBootstrapMaxBufferedBytes {
 				buffered = append(buffered, bytes.Clone(event))
 				bufferedBytes += len(event)

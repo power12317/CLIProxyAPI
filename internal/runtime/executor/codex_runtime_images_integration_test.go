@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -28,8 +30,6 @@ import (
 	openaihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func runtimeImageOperationPayload(t *testing.T, path string, multipartEdit bool) ([]byte, string) {
@@ -37,8 +37,8 @@ func runtimeImageOperationPayload(t *testing.T, path string, multipartEdit bool)
 	payload, contentType := runtimeImagePayload(t, multipartEdit)
 	if path == codexImagesGenerationsPath {
 		// Edit inputs are not a valid image-generation request.
-		payload, _ = sjson.DeleteBytes(payload, "images")
-		payload, _ = sjson.DeleteBytes(payload, "mask")
+		payload, _ = ojson.DeleteBytes(payload, "images")
+		payload, _ = ojson.DeleteBytes(payload, "mask")
 	}
 	return payload, contentType
 }
@@ -84,7 +84,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			t.Error("caller cookie reached worker upstream")
 		}
 		w.Header().Set("X-Request-Id", "image-upstream-trace")
-		prompt := gjson.GetBytes(body, "prompt").String()
+		prompt := ojson.GetBytes(body, "prompt").String()
 		if prompt == "fail" {
 			w.WriteHeader(429)
 			_, _ = io.WriteString(w, `{"error":{"message":"image quota failure"}}`)
@@ -104,7 +104,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			if bytes.Contains(body, []byte("compaction_trigger")) {
 				output = `[{"type":"compaction","encrypted_content":"compact-result"}]`
 			}
-			if value := gjson.GetBytes(body, "stream"); value.Exists() && !value.Bool() {
+			if value := ojson.GetBytes(body, "stream"); value.Exists() && !value.Bool() {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = fmt.Fprintf(w, `{"id":"response-image","status":"completed","output":%s}`, output)
 				return
@@ -112,7 +112,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-image\",\"status\":\"completed\",\"output\":%s}}\n\n", output)
 			return
 		}
-		if gjson.GetBytes(body, "stream").Bool() {
+		if ojson.GetBytes(body, "stream").Bool() {
 			w.Header().Set("Content-Type", "text/event-stream")
 			kind := "image_generation"
 			if r.URL.Path == "/v1/images/edits" {
@@ -230,10 +230,10 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 					if received.path != strings.TrimPrefix(path, "/v1") && received.path != "/v1"+strings.TrimPrefix(path, "/v1") {
 						t.Fatal(received.path)
 					}
-					if gjson.GetBytes(received.body, "prompt").String() != "final-prompt" || gjson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || gjson.GetBytes(received.body, "quality").Exists() || gjson.GetBytes(received.body, "prompt_cache_key").Exists() || gjson.GetBytes(received.body, "extension.number").Int() != 7 {
+					if ojson.GetBytes(received.body, "prompt").String() != "final-prompt" || ojson.GetBytes(received.body, "model").String() != "gpt-image-2.5" || ojson.GetBytes(received.body, "quality").Exists() || ojson.GetBytes(received.body, "prompt_cache_key").Exists() || ojson.GetBytes(received.body, "extension.number").Int() != 7 {
 						t.Fatalf("worker lost image request values: %s", received.body)
 					}
-					if form && (gjson.GetBytes(received.body, "images.#").Int() != 2 || !strings.HasSuffix(gjson.GetBytes(received.body, "mask.image_url").String(), "BAUG") || gjson.GetBytes(received.body, "extra.#").Int() != 2) {
+					if form && (ojson.GetBytes(received.body, "images.#").Int() != 2 || !strings.HasSuffix(ojson.GetBytes(received.body, "mask.image_url").String(), "BAUG") || ojson.GetBytes(received.body, "extra.#").Int() != 2) {
 						t.Fatal("worker lost images/mask/duplicate fields")
 					}
 					if cpaCalls.Load() != 0 || workerCalls.Load() != before+1 || !bytes.Contains(output, []byte("real-worker-image")) {
@@ -263,7 +263,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			t.Fatal(err)
 		}
 		received := <-requests
-		if !gjson.GetBytes(received.body, "stream").Bool() || gjson.GetBytes(output, "data.0.b64_json").String() != "real-worker-image" || !gjson.GetBytes(output, "created").Exists() {
+		if !ojson.GetBytes(received.body, "stream").Bool() || ojson.GetBytes(output, "data.0.b64_json").String() != "real-worker-image" || !ojson.GetBytes(output, "created").Exists() {
 			t.Fatal("stream override or image JSON conversion lost")
 		}
 	})
@@ -298,7 +298,7 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 									t.Fatal(err)
 								}
 							} else {
-								payload, _ = sjson.SetBytes(payload, "stream", true)
+								payload, _ = ojson.SetBytes(payload, "stream", true)
 							}
 						}
 						before := workerCalls.Load()
@@ -331,11 +331,11 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 		}
 		received := <-requests
 		for _, field := range []string{"mask", "quality"} {
-			if gjson.GetBytes(received.body, field).Exists() {
+			if ojson.GetBytes(received.body, field).Exists() {
 				t.Fatalf("image content filter lost: %s", field)
 			}
 		}
-		if gjson.GetBytes(received.body, "images.#").Int() != 1 || !bytes.Contains(output, []byte("image_edit.completed")) {
+		if ojson.GetBytes(received.body, "images.#").Int() != 1 || !bytes.Contains(output, []byte("image_edit.completed")) {
 			t.Fatal("filtered files or JSON-to-stream response was not preserved")
 		}
 	})
@@ -375,17 +375,17 @@ func TestCodexRuntimeImagesRealWorker(t *testing.T) {
 			if mode == "compaction_trigger" && (!bytes.Contains(received.body, []byte("compaction_trigger")) || !bytes.Contains(result.Payload, []byte("compact-result"))) {
 				t.Fatal("normal Responses compaction was lost")
 			}
-			if strings.HasPrefix(mode, "image_responses") && gjson.GetBytes(result.Payload, "data.0.b64_json").String() != "real-worker-image" {
+			if strings.HasPrefix(mode, "image_responses") && ojson.GetBytes(result.Payload, "data.0.b64_json").String() != "real-worker-image" {
 				t.Fatalf("native Responses image result lost: %s", result.Payload)
 			}
-			if mode == "image_responses_native_stream" && !gjson.GetBytes(received.body, "stream").Bool() {
+			if mode == "image_responses_native_stream" && !ojson.GetBytes(received.body, "stream").Bool() {
 				t.Fatalf("worker native streaming was overridden by CPA input: %s", received.body)
 			}
 			if mode == "image_responses_native_normalization" {
-				if gjson.GetBytes(received.body, "input.0.type").String() != "message" || gjson.GetBytes(received.body, "input.0.content.0.type").String() != "input_text" || gjson.GetBytes(received.body, "input.0.content.0.text").String() != "draw" {
+				if ojson.GetBytes(received.body, "input.0.type").String() != "message" || ojson.GetBytes(received.body, "input.0.content.0.type").String() != "input_text" || ojson.GetBytes(received.body, "input.0.content.0.text").String() != "draw" {
 					t.Fatalf("worker did not normalize the message: %s", received.body)
 				}
-				if gjson.GetBytes(received.body, "instructions").Exists() || gjson.GetBytes(received.body, "store").Type != gjson.False || gjson.GetBytes(received.body, "parallel_tool_calls").Type != gjson.True {
+				if ojson.GetBytes(received.body, "instructions").Exists() || ojson.GetBytes(received.body, "store").Type != ojson.False || ojson.GetBytes(received.body, "parallel_tool_calls").Type != ojson.True {
 					t.Fatalf("worker native defaults were suppressed: %s", received.body)
 				}
 				t.Log("worker normalized message type/content and applied native Responses defaults")

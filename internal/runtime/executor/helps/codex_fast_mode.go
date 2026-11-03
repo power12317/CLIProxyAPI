@@ -3,8 +3,8 @@ package helps
 import (
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	"github.com/tidwall/sjson"
 )
 
 func codexFastModeTier(cfg *config.Config) (string, bool) {
@@ -33,9 +33,9 @@ func ApplyCodexFastMode(body []byte, cfg *config.Config) []byte {
 	var updated []byte
 	var err error
 	if tier == "default" {
-		updated, err = sjson.DeleteBytes(body, "service_tier")
+		updated, err = ojson.DeleteBytes(body, "service_tier")
 	} else {
-		updated, err = sjson.SetBytes(body, "service_tier", tier)
+		updated, err = ojson.SetBytes(body, "service_tier", tier)
 	}
 	if err != nil {
 		return body
@@ -51,5 +51,21 @@ func (r *UsageReporter) SetCodexFastMode(cfg *config.Config) {
 	}
 	if tier, override := codexFastModeTier(cfg); override {
 		r.serviceTier = tier
+	}
+}
+
+// ApplyCodexFastModeDoc applies the operator override before final payload rules.
+func ApplyCodexFastModeDoc(doc *ojson.Doc, cfg *config.Config) {
+	if doc == nil {
+		return
+	}
+	tier, override := codexFastModeTier(cfg)
+	if !override {
+		return
+	}
+	if tier == "default" {
+		_ = doc.Delete("service_tier")
+	} else {
+		_ = doc.Set("service_tier", tier)
 	}
 }

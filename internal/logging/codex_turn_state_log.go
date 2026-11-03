@@ -3,8 +3,8 @@ package logging
 import (
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 const codexTurnStateLogKey = "__codex_turn_state_log__"
@@ -73,7 +73,7 @@ func CodexSessionLogID(c *gin.Context) string {
 	if c != nil && c.Request != nil {
 		headers := c.Request.Header
 		for _, value := range []string{
-			gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "session_id").String(),
+			ojson.Get(headers.Get("X-Codex-Turn-Metadata"), "session_id").String(),
 			headers.Get("Session-Id"), headers.Get("Session_id"), headers.Get("X-Session-Id"),
 		} {
 			if value = ShortCodexIdentifier(value); value != "" {

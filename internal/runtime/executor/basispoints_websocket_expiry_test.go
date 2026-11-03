@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsWebsocketConnectionLimitRenewal(t *testing.T) {
@@ -50,7 +50,7 @@ func TestBasispointsWebsocketConnectionLimitRenewal(t *testing.T) {
 						}
 						frames <- frame
 						if n == 1 || mode == "repeated_limit" {
-							_ = conn.WriteJSON(map[string]any{"type": "basispoints.response.resume_token", "request_id": gjson.GetBytes(frame, "basispoints_request_id").String(), "resume_token": "old-resume-token"})
+							_ = conn.WriteJSON(map[string]any{"type": "basispoints.response.resume_token", "request_id": ojson.GetBytes(frame, "basispoints_request_id").String(), "resume_token": "old-resume-token"})
 							cursor := 0
 							if mode == "after_output" {
 								_ = conn.WriteJSON(map[string]any{"type": "response.created", "basispoints_replay_cursor": cursor, "response": map[string]any{"id": "already-started"}})
@@ -120,10 +120,10 @@ func TestBasispointsWebsocketConnectionLimitRenewal(t *testing.T) {
 				requestLog := string(ginCtx.MustGet("API_REQUEST").([]byte))
 				responseLog := string(ginCtx.MustGet("API_RESPONSE").([]byte))
 				for _, frame := range [][]byte{first, second} {
-					if !strings.Contains(requestLog, gjson.GetBytes(frame, "basispoints_request_id").String()) {
+					if !strings.Contains(requestLog, ojson.GetBytes(frame, "basispoints_request_id").String()) {
 						t.Fatal("renewal request missing from upstream log")
 					}
-					if strings.Contains(requestLog, gjson.GetBytes(frame, "basispoints_resume_token").String()) {
+					if strings.Contains(requestLog, ojson.GetBytes(frame, "basispoints_resume_token").String()) {
 						t.Fatal("renewal log leaked resume token")
 					}
 				}

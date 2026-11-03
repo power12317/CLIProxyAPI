@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
@@ -15,7 +16,6 @@ import (
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 // Compare shared preprocessing at the HTTP and bridge boundaries. Native input
@@ -105,32 +105,32 @@ func TestCodexRuntimeUsesFullCPARequestPipeline(t *testing.T) {
 					t.Fatal("missing routing scope")
 				}
 				for _, field := range []string{"input", "model", "client_metadata", "prompt_cache_key"} {
-					equalRuntimeJSON(t, []byte(gjson.GetBytes(directBody, field).Raw), []byte(gjson.GetBytes(request.Request, field).Raw))
+					equalRuntimeJSON(t, []byte(ojson.GetBytes(directBody, field).Raw), []byte(ojson.GetBytes(request.Request, field).Raw))
 				}
-				if gjson.GetBytes(request.Request, "generate").Type != gjson.True || !gjson.GetBytes(request.Request, "previous_response_id").Exists() || gjson.GetBytes(request.Request, "previous_response_id").Type != gjson.Null || gjson.GetBytes(request.Request, "prompt_cache_retention").String() != "24h" {
+				if ojson.GetBytes(request.Request, "generate").Type != ojson.True || !ojson.GetBytes(request.Request, "previous_response_id").Exists() || ojson.GetBytes(request.Request, "previous_response_id").Type != ojson.Null || ojson.GetBytes(request.Request, "prompt_cache_retention").String() != "24h" {
 					t.Fatal("native controls were erased before adaptation")
 				}
 				if strings.Contains(string(request.Request), "Asia/Shanghai") || !strings.Contains(string(request.Request), "Asia/Singapore") {
 					t.Fatalf("CPA timezone processing was skipped: %s", request.Request)
 				}
-				if gjson.GetBytes(request.Request, "input.#").Int() != 1 {
+				if ojson.GetBytes(request.Request, "input.#").Int() != 1 {
 					t.Fatal("request preparation appended a message")
 				}
 				if withPayload {
 					for path, value := range map[string]string{"model": "configured-model", "service_tier": "flex", "prompt_cache_key": "configured-cache", "instructions": "configured-instructions", "configured_default": "default-value", "text.verbosity": "low"} {
-						if gjson.GetBytes(request.Request, path).String() != value {
+						if ojson.GetBytes(request.Request, path).String() != value {
 							t.Errorf("final payload rule lost: %s", path)
 						}
 					}
-					if !gjson.GetBytes(request.Request, "configured_raw.enabled").Bool() {
+					if !ojson.GetBytes(request.Request, "configured_raw.enabled").Bool() {
 						t.Error("default-raw was not applied")
 					}
 					for _, path := range []string{"tools", "parallel_tool_calls", "include", "client_metadata.x-codex-installation-id"} {
-						if gjson.GetBytes(request.Request, path).Exists() {
+						if ojson.GetBytes(request.Request, path).Exists() {
 							t.Errorf("filtered field was restored: %s", path)
 						}
 					}
-				} else if gjson.GetBytes(request.Request, "service_tier").String() != "priority" {
+				} else if ojson.GetBytes(request.Request, "service_tier").String() != "priority" {
 					t.Fatal("CPA Fast Mode did not reach the bridge")
 				}
 			})
@@ -142,7 +142,7 @@ func TestCodexRuntimeCPARequestRetainsCrossProtocolTranslation(t *testing.T) {
 	for _, source := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatClaude} {
 		t.Run(source.String(), func(t *testing.T) {
 			settings, auth := runtimeTestMaster(t, "translation", func(c *websocket.Conn, m runtimeTestRPC, request bridge.Request) {
-				if gjson.GetBytes(request.Request, "messages").Exists() || !gjson.GetBytes(request.Request, "input").IsArray() || gjson.GetBytes(request.Request, "instructions").String() != "configured" {
+				if ojson.GetBytes(request.Request, "messages").Exists() || !ojson.GetBytes(request.Request, "input").IsArray() || ojson.GetBytes(request.Request, "instructions").String() != "configured" {
 					t.Errorf("translation or final rules missing: %s", request.Request)
 				}
 				runtimeTestAccept(c, m, request)

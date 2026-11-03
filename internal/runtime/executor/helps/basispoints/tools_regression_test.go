@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func catalogRequest() []byte {
@@ -19,10 +19,10 @@ func TestAdditionalToolsAndCustomContractsAreAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bridge.tools) != 2 || gjson.GetBytes(wire, "input.#").Int() != 2 || bytes.Contains(wire, []byte(`"type":"additional_tools"`)) {
+	if len(bridge.tools) != 2 || ojson.GetBytes(wire, "input.#").Int() != 2 || bytes.Contains(wire, []byte(`"type":"additional_tools"`)) {
 		t.Fatalf("additional tools were not translated into the catalog: %s", wire)
 	}
-	catalog := gjson.GetBytes(wire, "input.0.content.0.text").String()
+	catalog := ojson.GetBytes(wire, "input.0.content.0.text").String()
 	for _, value := range []string{"functions.shell", "functions.exec", "Execute exact JavaScript", "start: CODE", `"required":["cmd"]`, `"additionalProperties":false`, "cpa.custom/functions.exec"} {
 		if !strings.Contains(catalog, value) {
 			t.Errorf("lost tool contract %q: %s", value, catalog)
@@ -75,7 +75,7 @@ func TestRawCustomAndDirectFunctionCallsRoundTripAcrossAccounts(t *testing.T) {
 			if errReplay != nil {
 				t.Fatalf("account rotation must remain allowed: %v", errReplay)
 			}
-			call, result := gjson.GetBytes(wire, "input.2"), gjson.GetBytes(wire, "input.3")
+			call, result := ojson.GetBytes(wire, "input.2"), ojson.GetBytes(wire, "input.3")
 			if call.Get("name").String() != "run_officejs" || result.Get("type").String() != "function_call_output" || result.Get("output").String() != "exact tool result" || call.Get("id").String() == result.Get("id").String() {
 				t.Fatalf("invalid tool history: %s", wire)
 			}
@@ -94,7 +94,7 @@ func TestNativePlanIsAdaptedToDeclaredClientTool(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		args := gjson.Parse(stringValue(call["arguments"]))
+		args := ojson.Parse(stringValue(call["arguments"]))
 		if call["name"] != "update_plan" || call["namespace"] != "functions" || args.Get("plan.0.step").String() != "Inspect files" || args.Get("plan.0.status").String() != "completed" || args.Get("explanation").String() != "Update" {
 			t.Fatalf("plan tool was lost or malformed: %#v", call)
 		}

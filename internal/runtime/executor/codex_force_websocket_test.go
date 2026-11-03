@@ -12,13 +12,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestCodexWebsocketRequestTooLargeUsesBoundaryLimit(t *testing.T) {
@@ -175,7 +174,7 @@ func testForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T, stand
 		}
 		body := []byte(fmt.Sprintf(`{"model":"gpt-5.4","input":%s,"stream":true,"stream_options":{"reasoning_summary_delivery":"auto"},"client_metadata":{"turn_id":%q}}`, input, turn))
 		if i == 0 {
-			body, _ = sjson.SetBytes(body, "generate", false)
+			body, _ = ojson.SetBytes(body, "generate", false)
 		}
 		opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: t.Name()}, Headers: http.Header{"User-Agent": {"codex_cli_rs/0.156.1"}, "X-Codex-Turn-Metadata": {`{"turn_id":"turn-1"}`}}}
 		ctx := cliproxyexecutor.WithCodexTransport(t.Context(), &cliproxyexecutor.CodexTransportState{})
@@ -194,25 +193,25 @@ func testForceWebsocketSequenceReuseTurnStateAndContinuation(t *testing.T, stand
 			t.Fatalf("missing SSE completion: %s", output.String())
 		}
 		frame := <-frames
-		if i == 0 && (!gjson.GetBytes(frame, "generate").Exists() || gjson.GetBytes(frame, "generate").Bool()) {
+		if i == 0 && (!ojson.GetBytes(frame, "generate").Exists() || ojson.GetBytes(frame, "generate").Bool()) {
 			t.Fatalf("warmup became generation: %s", frame)
 		}
-		if i > 0 && gjson.GetBytes(frame, "generate").Exists() {
+		if i > 0 && ojson.GetBytes(frame, "generate").Exists() {
 			t.Fatalf("warmup flag leaked to generation: %s", frame)
 		}
-		if gjson.GetBytes(frame, "type").String() != "response.create" || !gjson.GetBytes(frame, "stream").Bool() {
+		if ojson.GetBytes(frame, "type").String() != "response.create" || !ojson.GetBytes(frame, "stream").Bool() {
 			t.Fatalf("non-native frame: %s", frame)
 		}
-		if gjson.GetBytes(frame, "stream_options.reasoning_summary_delivery").String() != "auto" {
+		if ojson.GetBytes(frame, "stream_options.reasoning_summary_delivery").String() != "auto" {
 			t.Fatalf("lost WS stream_options: %s", frame)
 		}
-		state := gjson.GetBytes(frame, "client_metadata.x-codex-turn-state").String()
+		state := ojson.GetBytes(frame, "client_metadata.x-codex-turn-state").String()
 		if i == 1 {
 			wantState := "event-state"
 			if standardMetadata {
 				wantState = "standard-state"
 			}
-			if state != wantState || gjson.GetBytes(frame, "previous_response_id").String() != "r0" || len(gjson.GetBytes(frame, "input").Array()) != 1 {
+			if state != wantState || ojson.GetBytes(frame, "previous_response_id").String() != "r0" || len(ojson.GetBytes(frame, "input").Array()) != 1 {
 				t.Fatalf("bad continuation: %s", frame)
 			}
 		} else if state != "" {
@@ -308,7 +307,7 @@ func TestForceWebsocketIdleDisconnectRebuildsOnlyOnNextRequest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if gjson.GetBytes(<-frames, "previous_response_id").Exists() {
+		if ojson.GetBytes(<-frames, "previous_response_id").Exists() {
 			t.Fatal("new connection used an old response ID")
 		}
 		if i == 0 {
@@ -347,7 +346,7 @@ func TestForceWebsocketWarmupFallbackDoesNotGenerateOverHTTP(t *testing.T) {
 		if chunk.Err != nil {
 			t.Fatal(chunk.Err)
 		}
-		events = append(events, gjson.GetBytes(chunk.Payload, "type").String())
+		events = append(events, ojson.GetBytes(chunk.Payload, "type").String())
 	}
 	if strings.Join(events, ",") != "response.created,response.completed" {
 		t.Fatalf("warmup events: %v", events)

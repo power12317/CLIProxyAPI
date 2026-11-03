@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestDelegationContextPreservesCompleteHistory(t *testing.T) {
@@ -28,14 +28,14 @@ func TestDelegationContextPreservesCompleteHistory(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s/%s: %v", name, scope, err)
 			}
-			items := gjson.GetBytes(wire, "input").Array()
+			items := ojson.GetBytes(wire, "input").Array()
 			if len(items) != 5 || items[2].Get("role").String() != "user" || items[2].Get("type").String() != "message" || items[2].Get("content.0.text").String() != "Tool output from codex_app__"+name+":\n"+output {
 				t.Fatalf("handoff content or position changed: %s", wire)
 			}
 			if items[3].Get("call_id").String() != "call_weather" || items[3].Get("name").String() != "run_officejs" || items[4].Get("type").String() != "function_call_output" || items[4].Get("output").String() != "18C" {
 				t.Fatal("ordinary tool history changed")
 			}
-			if gjson.GetBytes(wire, "metadata.agent_iteration").String() != "2" {
+			if ojson.GetBytes(wire, "metadata.agent_iteration").String() != "2" {
 				t.Fatal("handoff was counted as an executed tool")
 			}
 		}
@@ -69,7 +69,7 @@ func TestDelegationContextLeavesPairedAndUnrelatedResultsUntouched(t *testing.T)
 	body["input"] = []any{message("user", "Continue"), object{"type": "function_call", "call_id": "paired-call", "namespace": "codex_app", "name": "create_thread", "arguments": "{}"}, paired}
 	raw, _ := json.Marshal(body)
 	wire, _, err := Prepare(raw, "account", "session", &Cache{})
-	if err != nil || gjson.GetBytes(wire, "input.3.type").String() != "function_call_output" || gjson.GetBytes(wire, "input.3.output").String() != original["output"] {
+	if err != nil || ojson.GetBytes(wire, "input.3.type").String() != "function_call_output" || ojson.GetBytes(wire, "input.3.output").String() != original["output"] {
 		t.Fatalf("paired result changed: %v %s", err, wire)
 	}
 }
@@ -82,7 +82,7 @@ func TestCustomExecCommandObjectsBecomeClientPrograms(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(gjson.GetBytes(wire, "input.0.content.0.text").String(), "const result = await tools.exec_command") {
+		if !strings.Contains(ojson.GetBytes(wire, "input.0.content.0.text").String(), "const result = await tools.exec_command") {
 			t.Fatal("upstream catalog lacks executable custom example")
 		}
 		native := nativeWeather()
@@ -127,12 +127,12 @@ func TestCustomExecCommandObjectsBecomeClientPrograms(t *testing.T) {
 			if errReplay != nil {
 				t.Fatalf("%s/%s: %v", field, scope, errReplay)
 			}
-			if gjson.GetBytes(replayed, "input.3.output").String() != "client result" {
+			if ojson.GetBytes(replayed, "input.3.output").String() != "client result" {
 				t.Fatal("tool result lost across accounts")
 			}
 			if scope == "account-b" {
-				args := gjson.Parse(gjson.GetBytes(replayed, "input.2.arguments").String())
-				if gjson.Parse(args.Get("code").String()).Get("input").String() != program {
+				args := ojson.Parse(ojson.GetBytes(replayed, "input.2.arguments").String())
+				if ojson.Parse(args.Get("code").String()).Get("input").String() != program {
 					t.Fatal("rebuilt custom input changed")
 				}
 			}
@@ -185,7 +185,7 @@ func TestCustomExecConversionPreservesStreamingProgress(t *testing.T) {
 	err = bridge.Stream(&upstream, func(raw []byte) error {
 		for _, line := range strings.Split(string(raw), "\n") {
 			if strings.HasPrefix(line, "data:") {
-				event := gjson.Parse(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+				event := ojson.Parse(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 				types = append(types, event.Get("type").String())
 			}
 		}

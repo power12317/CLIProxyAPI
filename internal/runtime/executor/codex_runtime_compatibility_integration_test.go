@@ -3,7 +3,6 @@ package executor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/base64"
+
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
@@ -30,8 +32,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // The real main-branch master/worker sends to a local upstream. Any model HTTP
@@ -79,7 +79,7 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 		workerCalls.Add(1)
 		requests <- body
 		lite := r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite") == "true"
-		if lite && gjson.GetBytes(body, "parallel_tool_calls").Type != gjson.False ||
+		if lite && ojson.GetBytes(body, "parallel_tool_calls").Type != ojson.False ||
 			bytes.Contains(body, []byte("native-lite-parallel-probe")) && !lite {
 			t.Error("worker sent an invalid native Lite/parallel combination")
 			w.WriteHeader(http.StatusBadRequest)
@@ -104,7 +104,7 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 				select {
 				case event := <-phase:
 					write(event)
-					if gjson.GetBytes(event, "type").String() == "response.completed" {
+					if ojson.GetBytes(event, "type").String() == "response.completed" {
 						return
 					}
 				case <-r.Context().Done():
@@ -154,25 +154,25 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 				tool := []byte(`{"type":"function","name":"query_inventory","parameters":` + schema + `,"strict":false,"output_schema":{"type":"string"}}`)
 				body := []byte(`{"input":"main compatible caller","tool_choice":"none","parallel_tool_calls":false,"include":[],"store":false,"background":false,"temperature":0,"top_p":0.7,"max_output_tokens":120,"service_tier":"flex","client_metadata":{"optional_trace":{"caller":"WorkBuddy"},"x-codex-client-timing":{"old":true}},"text":{"format":{"type":"json_schema","name":"inventory_contract","strict":false,"schema":` + schema + `}}}`)
 				if source == sdktranslator.FormatOpenAI || source == sdktranslator.FormatClaude {
-					body, _ = sjson.DeleteBytes(body, "input")
-					body, _ = sjson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"main compatible caller"}]`))
+					body, _ = ojson.DeleteBytes(body, "input")
+					body, _ = ojson.SetRawBytes(body, "messages", []byte(`[{"role":"user","content":"main compatible caller"}]`))
 				}
 				if source == sdktranslator.FormatOpenAI {
-					function, _ := sjson.DeleteBytes(tool, "type")
+					function, _ := ojson.DeleteBytes(tool, "type")
 					tool = []byte(`{"type":"function","function":` + string(function) + `}`)
 				}
 				if source == sdktranslator.FormatClaude {
-					body, _ = sjson.SetRawBytes(body, "tool_choice", []byte(`{"type":"none"}`))
-					body, _ = sjson.SetRawBytes(body, "output_config.format", []byte(gjson.GetBytes(body, "text.format").Raw))
-					tool, _ = sjson.SetRawBytes(tool, "input_schema", []byte(schema))
-					tool, _ = sjson.DeleteBytes(tool, "parameters")
+					body, _ = ojson.SetRawBytes(body, "tool_choice", []byte(`{"type":"none"}`))
+					body, _ = ojson.SetRawBytes(body, "output_config.format", []byte(ojson.GetBytes(body, "text.format").Raw))
+					tool, _ = ojson.SetRawBytes(tool, "input_schema", []byte(schema))
+					tool, _ = ojson.DeleteBytes(tool, "parameters")
 				}
 				if source == sdktranslator.FormatGemini {
-					body, _ = sjson.DeleteBytes(body, "input")
-					body, _ = sjson.SetRawBytes(body, "contents", []byte(`[{"role":"user","parts":[{"text":"main compatible caller"}]}]`))
+					body, _ = ojson.DeleteBytes(body, "input")
+					body, _ = ojson.SetRawBytes(body, "contents", []byte(`[{"role":"user","parts":[{"text":"main compatible caller"}]}]`))
 					tool = []byte(`{"functionDeclarations":[` + string(tool) + `]}`)
 				}
-				body, _ = sjson.SetRawBytes(body, "tools", []byte("["+string(tool)+"]"))
+				body, _ = ojson.SetRawBytes(body, "tools", []byte("["+string(tool)+"]"))
 				opts := runtimeTestOptions()
 				opts.SourceFormat = source
 				before := workerCalls.Load()
@@ -182,17 +182,17 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 				}
 				actual := read(t)
 				for key, expected := range map[string]string{"tool_choice": `"none"`, "parallel_tool_calls": "false", "include": "[]", "store": "false", "temperature": "0", "top_p": "0.7", "max_output_tokens": "120", "service_tier": `"flex"`} {
-					equalRuntimeJSON(t, []byte(expected), []byte(gjson.GetBytes(actual, key).Raw))
+					equalRuntimeJSON(t, []byte(expected), []byte(ojson.GetBytes(actual, key).Raw))
 				}
 				declaration := mainRuntimeToolDeclarations(actual)["query_inventory"]
-				if declaration.Get("strict").Type != gjson.False || declaration.Get("output_schema.type").String() != "string" || declaration.Get("parameters.properties.large.maximum").Raw != "9007199254740993" {
+				if declaration.Get("strict").Type != ojson.False || declaration.Get("output_schema.type").String() != "string" || declaration.Get("parameters.properties.large.maximum").Raw != "9007199254740993" {
 					t.Fatalf("tool declaration lost: %s", declaration.Raw)
 				}
 				equalRuntimeJSON(t, []byte(schema), []byte(declaration.Get("parameters").Raw))
-				if gjson.GetBytes(actual, "text.format.name").String() != "inventory_contract" || gjson.GetBytes(actual, "text.format.strict").Type != gjson.False {
+				if ojson.GetBytes(actual, "text.format.name").String() != "inventory_contract" || ojson.GetBytes(actual, "text.format.strict").Type != ojson.False {
 					t.Fatalf("structured output contract lost: %s", actual)
 				}
-				if gjson.GetBytes(actual, "client_metadata.x-codex-client-timing.old").Bool() {
+				if ojson.GetBytes(actual, "client_metadata.x-codex-client-timing.old").Bool() {
 					t.Fatal("stale transport timing was forwarded")
 				}
 				if cpaCalls.Load() != 0 || workerCalls.Load() != before+1 {
@@ -210,10 +210,10 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 			body: `{"input":[{"role":"assistant","content":"display history","status":"completed","metadata":{"ui":true}},{"type":"function_call","name":"lookup","namespace":"warehouse","call_id":"prior_call","arguments":"{}"},{"type":"function_call_output","name":"lookup","namespace":"warehouse","output":"found"},{"role":"user","content":"continue"}],"tools":[{"type":"namespace","name":"warehouse","description":"client tools","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"},"strict":false}]}],"tool_choice":{"type":"function","namespace":"warehouse","name":"lookup"}}`,
 			check: func(t *testing.T, actual []byte) {
 				declaration := mainRuntimeToolDeclarations(actual)["warehouse"]
-				if declaration.Get("tools.0.name").String() != "lookup" || gjson.GetBytes(actual, "tool_choice.namespace").String() != "warehouse" {
+				if declaration.Get("tools.0.name").String() != "lookup" || ojson.GetBytes(actual, "tool_choice.namespace").String() != "warehouse" {
 					t.Fatalf("namespace declaration or selection was lost: %s", actual)
 				}
-				for _, item := range gjson.GetBytes(actual, "input").Array() {
+				for _, item := range ojson.GetBytes(actual, "input").Array() {
 					if item.Get("type").String() == "function_call_output" && item.Get("call_id").String() == "prior_call" && item.Get("output").String() == "found" {
 						return
 					}
@@ -237,7 +237,7 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 			name: "json_object_and_explicit_store",
 			body: `{"input":"JSON object result","text":{"format":{"type":"json_object"}},"store":true,"include":[],"parallel_tool_calls":false,"generate":true,"previous_response_id":null}`,
 			check: func(t *testing.T, actual []byte) {
-				if gjson.GetBytes(actual, "text.format.type").String() != "json_object" || gjson.GetBytes(actual, "store").Type != gjson.True || gjson.GetBytes(actual, "include").Raw != "[]" || gjson.GetBytes(actual, "parallel_tool_calls").Type != gjson.False {
+				if ojson.GetBytes(actual, "text.format.type").String() != "json_object" || ojson.GetBytes(actual, "store").Type != ojson.True || ojson.GetBytes(actual, "include").Raw != "[]" || ojson.GetBytes(actual, "parallel_tool_calls").Type != ojson.False {
 					t.Fatalf("explicit model controls were replaced: %s", actual)
 				}
 			},
@@ -264,7 +264,7 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 			t.Fatal(err)
 		}
 		actual := read(t)
-		if len(mainRuntimeToolDeclarations(actual)) != 0 || gjson.GetBytes(actual, "client_metadata.optional_trace").Exists() || gjson.GetBytes(actual, "parallel_tool_calls").Type != gjson.False || gjson.GetBytes(actual, "tool_choice").String() != "none" || gjson.GetBytes(actual, "include").Raw != "[]" || gjson.GetBytes(actual, "temperature").Float() != 0.2 {
+		if len(mainRuntimeToolDeclarations(actual)) != 0 || ojson.GetBytes(actual, "client_metadata.optional_trace").Exists() || ojson.GetBytes(actual, "parallel_tool_calls").Type != ojson.False || ojson.GetBytes(actual, "tool_choice").String() != "none" || ojson.GetBytes(actual, "include").Raw != "[]" || ojson.GetBytes(actual, "temperature").Float() != 0.2 {
 			t.Fatalf("worker overwrote final CPA business rules: %s", actual)
 		}
 	})
@@ -336,7 +336,7 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 				send([]byte(`{"type":"response.completed","response":{"id":"resp_live","status":"completed","output":[]}}`))
 			}
 			frame, err := reader.Next()
-			if err != nil || gjson.GetBytes(frame.Data, "type").String() != kind {
+			if err != nil || ojson.GetBytes(frame.Data, "type").String() != kind {
 				t.Fatalf("event %d not delivered before next phase: %s %v", index, frame.Data, err)
 			}
 			t.Logf("client event=%s elapsed=%s; upstream next phase was not released", kind, time.Since(started))
@@ -463,10 +463,10 @@ func startCompatibleMainWorker(t *testing.T, binary, home, upstreamURL string) (
 	}
 }
 
-func mainRuntimeToolDeclarations(body []byte) map[string]gjson.Result {
-	declarations := map[string]gjson.Result{}
-	var add func(gjson.Result)
-	add = func(tools gjson.Result) {
+func mainRuntimeToolDeclarations(body []byte) map[string]ojson.Result {
+	declarations := map[string]ojson.Result{}
+	var add func(ojson.Result)
+	add = func(tools ojson.Result) {
 		for _, tool := range tools.Array() {
 			declarations[tool.Get("name").String()] = tool
 			if tool.Get("type").String() == "namespace" && tool.Get("name").String() == "functions" {
@@ -474,8 +474,8 @@ func mainRuntimeToolDeclarations(body []byte) map[string]gjson.Result {
 			}
 		}
 	}
-	add(gjson.GetBytes(body, "tools"))
-	for _, item := range gjson.GetBytes(body, "input").Array() {
+	add(ojson.GetBytes(body, "tools"))
+	for _, item := range ojson.GetBytes(body, "input").Array() {
 		if item.Get("type").String() == "additional_tools" {
 			add(item.Get("tools"))
 		}

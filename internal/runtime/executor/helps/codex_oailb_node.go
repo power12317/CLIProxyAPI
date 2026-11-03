@@ -2,10 +2,11 @@ package helps
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/MoeForge/moego/base64"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 )

@@ -6,14 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestForcedWebsocketWarmupRootAndImageToolException(t *testing.T) {
@@ -38,24 +37,24 @@ func TestForcedWebsocketWarmupRootAndImageToolException(t *testing.T) {
 			if errMsg != nil {
 				t.Fatal(errMsg)
 			}
-			if len(gjson.GetBytes(got, "input").Array()) != tc.want || string(retained) != string(got) {
+			if len(ojson.GetBytes(got, "input").Array()) != tc.want || string(retained) != string(got) {
 				t.Fatalf("root/retained input: %s / %s", got, retained)
 			}
-			if gjson.GetBytes(got, "previous_response_id").Exists() || gjson.GetBytes(got, "generate").Exists() || gjson.GetBytes(got, "model").String() != "force-bridge-model" {
+			if ojson.GetBytes(got, "previous_response_id").Exists() || ojson.GetBytes(got, "generate").Exists() || ojson.GetBytes(got, "model").String() != "force-bridge-model" {
 				t.Fatalf("warmup state leaked: %s", got)
 			}
 			// A normal later root never inherits a completed generation, even with image tools.
 			got, _, errMsg = normalizeResponsesWebsocketForcedRequest(root, retained, []byte(`[]`), "generation-response", nil, true)
-			if errMsg != nil || len(gjson.GetBytes(got, "input").Array()) != 7 {
+			if errMsg != nil || len(ojson.GetBytes(got, "input").Array()) != 7 {
 				t.Fatalf("later root inherited stale input: %s / %v", got, errMsg)
 			}
 			// Explicit parent continuations retain a full replay for fallback.
 			delta := []byte(`{"type":"response.create","previous_response_id":"generation-response","input":[{"type":"message","id":"delta","role":"user","content":"next"}]}`)
 			got, _, errMsg = normalizeResponsesWebsocketForcedRequest(delta, retained, []byte(`[]`), "generation-response", nil, true)
-			if errMsg != nil || len(gjson.GetBytes(got, "input").Array()) != tc.want+1 || gjson.GetBytes(got, "previous_response_id").Exists() {
+			if errMsg != nil || len(ojson.GetBytes(got, "input").Array()) != tc.want+1 || ojson.GetBytes(got, "previous_response_id").Exists() {
 				t.Fatalf("delta lost replay: %s / %v", got, errMsg)
 			}
-			invalid, _ := sjson.SetBytes(root, "input", "not-an-array")
+			invalid, _ := ojson.SetBytes(root, "input", "not-an-array")
 			if _, _, errMsg = normalizeResponsesWebsocketForcedRequest(invalid, warmup, nil, "", nil, true); errMsg == nil {
 				t.Fatal("invalid root was accepted")
 			}
@@ -92,12 +91,12 @@ func TestForcedWebsocketBridgeRetainsFullReplayAndValidatesParent(t *testing.T) 
 			t.Fatal(errWrite)
 		}
 		_, response, errRead := conn.ReadMessage()
-		if errRead != nil || gjson.GetBytes(response, "type").String() != "response.completed" {
+		if errRead != nil || ojson.GetBytes(response, "type").String() != "response.completed" {
 			t.Fatalf("response=%s err=%v", response, errRead)
 		}
 	}
 	payloads := executor.Payloads()
-	if len(payloads) != 2 || gjson.GetBytes(payloads[1], "previous_response_id").Exists() || len(gjson.GetBytes(payloads[1], "input").Array()) != 3 {
+	if len(payloads) != 2 || ojson.GetBytes(payloads[1], "previous_response_id").Exists() || len(ojson.GetBytes(payloads[1], "input").Array()) != 3 {
 		t.Fatalf("lost full replay: %q", payloads)
 	}
 	badParent := []byte(`{"type":"response.create","previous_response_id":"unknown-parent","input":[]}`)
@@ -114,7 +113,7 @@ func TestForcedWebsocketBridgeRetainsFullReplayAndValidatesParent(t *testing.T) 
 	}
 	_, response, errRead = conn.ReadMessage()
 	payloads = executor.Payloads()
-	if errRead != nil || gjson.GetBytes(response, "type").String() != "response.completed" || len(payloads) != 3 || len(gjson.GetBytes(payloads[2], "input").Array()) != 1 {
+	if errRead != nil || ojson.GetBytes(response, "type").String() != "response.completed" || len(payloads) != 3 || len(ojson.GetBytes(payloads[2], "input").Array()) != 1 {
 		t.Fatalf("root retained stale history: payloads=%q response=%s err=%v", payloads, response, errRead)
 	}
 }

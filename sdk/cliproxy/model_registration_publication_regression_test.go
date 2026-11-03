@@ -1,9 +1,10 @@
 package cliproxy
 
 import (
+	"testing"
+
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
-	"testing"
 )
 
 type registrationInterleaveRuntime struct{ onRead func() }

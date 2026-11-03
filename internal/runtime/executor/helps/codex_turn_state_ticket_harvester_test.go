@@ -12,9 +12,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func ticketProbeTestAuth(id, email, account string) *cliproxyauth.Auth {
@@ -56,7 +56,7 @@ func ticketProbeTestRequest(t *testing.T, req *http.Request) string {
 	if errRead != nil {
 		t.Fatal(errRead)
 	}
-	return strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ") + "/" + gjson.GetBytes(body, "model").String()
+	return strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ") + "/" + ojson.GetBytes(body, "model").String()
 }
 
 func ticketProbeTestResponse(req *http.Request, status, length int) *http.Response {

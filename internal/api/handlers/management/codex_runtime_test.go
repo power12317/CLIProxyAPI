@@ -11,13 +11,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func runtimeHandler(t *testing.T, enabled bool, endpoint string) (*Handler, string) {
@@ -147,7 +147,7 @@ func TestCodexRuntimeOffRemainsLocalAndHidesTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := runtimeCall(t, h.GetCodexRuntime, "GET", "/", "")
-	if rec.Code != 200 || gjson.Get(rec.Body.String(), "credentials.0.label").String() != "existing@example.invalid" {
+	if rec.Code != 200 || ojson.Get(rec.Body.String(), "credentials.0.label").String() != "existing@example.invalid" {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
 	for _, field := range []string{"workers", "worker_id", "url", "token", "auth_file", "models", "credential_modes", "access_token", "refresh_token"} {
@@ -161,7 +161,7 @@ func TestCodexRuntimeOffRemainsLocalAndHidesTopology(t *testing.T) {
 	if result := runtimeCall(t, h.PostOAuthCallback, "POST", "/", `{"provider":"codex","state":"runtime-off-standard-session","code":"unused"}`); result.Code != 409 {
 		t.Fatal(result.Code, result.Body.String())
 	}
-	if result := runtimeCall(t, h.GetAuthStatus, "GET", "/?state="+state, ""); result.Code != 200 || gjson.Get(result.Body.String(), "status").String() != "error" {
+	if result := runtimeCall(t, h.GetAuthStatus, "GET", "/?state="+state, ""); result.Code != 200 || ojson.Get(result.Body.String(), "status").String() != "error" {
 		t.Fatal(result.Code, result.Body.String())
 	}
 	if result := runtimeCall(t, h.PutCodexRuntime, "PATCH", "/", `{"enabled":false,"url":"ws://other","workers":[]}`); result.Code != 200 {
@@ -217,7 +217,7 @@ func TestCodexRuntimePreferencesSurviveGlobalToggleAndReloadCPA(t *testing.T) {
 		}
 		assertRuntimeEnabled(t, path, enabled)
 		assertRuntimeEnabled(t, other, false)
-		rows := gjson.Get(rec.Body.String(), "credentials").Array()
+		rows := ojson.Get(rec.Body.String(), "credentials").Array()
 		for _, row := range rows {
 			if row.Get("enabled").Bool() != (row.Get("name").String() == "existing-account.json") {
 				t.Fatal("global toggle lost per-account preference", rec.Body.String())
@@ -325,14 +325,14 @@ func TestCodexRuntimePanelCanReenableAFileDisabledOutsideCPA(t *testing.T) {
 	}
 	writeRuntimeCredential(t, path, false, nil)
 	rec := runtimeCall(t, h.GetCodexRuntime, "GET", "/", "")
-	if rec.Code != 200 || gjson.Get(rec.Body.String(), "credentials.0.enabled").Bool() || gjson.Get(rec.Body.String(), "credentials.0.owner").String() != "cpa" {
+	if rec.Code != 200 || ojson.Get(rec.Body.String(), "credentials.0.enabled").Bool() || ojson.Get(rec.Body.String(), "credentials.0.owner").String() != "cpa" {
 		t.Fatal("status ignored the effective file selection", rec.Code, rec.Body.String())
 	}
 	if reloads.Load() != 0 {
 		t.Fatal("status contacted master")
 	}
 	rec = runtimeCall(t, h.SetCodexRuntimeCredential, "POST", "/", `{"name":"existing-account.json","enabled":true}`)
-	if rec.Code != 200 || !gjson.Get(rec.Body.String(), "credentials.0.enabled").Bool() || gjson.Get(rec.Body.String(), "credentials.0.owner").String() != "codex" {
+	if rec.Code != 200 || !ojson.Get(rec.Body.String(), "credentials.0.enabled").Bool() || ojson.Get(rec.Body.String(), "credentials.0.owner").String() != "codex" {
 		t.Fatal("explicit enable did not apply unchanged configuration preference", rec.Code, rec.Body.String())
 	}
 	assertRuntimeEnabled(t, path, true)

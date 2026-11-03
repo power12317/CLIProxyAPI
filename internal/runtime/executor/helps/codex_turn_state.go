@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexstatus"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -17,8 +18,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const codexTurnStateHeader = "X-Codex-Turn-State"
@@ -141,19 +140,19 @@ func (c *codexTurnStateCache) requestWithIdentity(auth *cliproxyauth.Auth, targe
 
 // codexTurnStateFromRequest also serves logging-only transports without a cache.
 func codexTurnStateFromRequest(auth *cliproxyauth.Auth, target string, body []byte, headers http.Header, preferBody bool) *CodexTurnState {
-	metadata := gjson.GetBytes(body, "client_metadata")
+	metadata := ojson.GetBytes(body, "client_metadata")
 	turn := metadata.Get("x-codex-turn-metadata")
-	if turn.Type == gjson.String {
-		turn = gjson.Parse(turn.String())
+	if turn.Type == ojson.String {
+		turn = ojson.Parse(turn.String())
 	}
-	headerTurn := gjson.Parse(codexTurnHeaderValue(headers, "X-Codex-Turn-Metadata"))
+	headerTurn := ojson.Parse(codexTurnHeaderValue(headers, "X-Codex-Turn-Metadata"))
 	turnID := firstString(codexTurnString(headerTurn.Get("turn_id")), codexTurnString(turn.Get("turn_id")), codexTurnString(metadata.Get("turn_id")))
 	if preferBody {
 		// A downstream WS handshake may describe an earlier turn. Per-frame
 		// identity, including an explicitly empty prewarm turn, is authoritative.
-		if frameTurn := metadata.Get("turn_id"); frameTurn.Type == gjson.String {
+		if frameTurn := metadata.Get("turn_id"); frameTurn.Type == ojson.String {
 			turnID = codexTurnString(frameTurn)
-		} else if nestedTurn := turn.Get("turn_id"); nestedTurn.Type == gjson.String {
+		} else if nestedTurn := turn.Get("turn_id"); nestedTurn.Type == ojson.String {
 			turnID = codexTurnString(nestedTurn)
 		}
 	}
@@ -176,8 +175,8 @@ func codexTurnStateFromRequest(auth *cliproxyauth.Auth, target string, body []by
 	return state
 }
 
-func codexTurnString(value gjson.Result) string {
-	if value.Type != gjson.String {
+func codexTurnString(value ojson.Result) string {
+	if value.Type != ojson.String {
 		return ""
 	}
 	return strings.TrimSpace(value.String())
@@ -295,7 +294,7 @@ func (s *CodexTurnState) ApplyWebsocketBody(body []byte) []byte {
 	s.fieldsMu.Lock()
 	s.requestLen = len(value)
 	s.fieldsMu.Unlock()
-	updated, errSet := sjson.SetBytes(body, "client_metadata.x-codex-turn-state", value)
+	updated, errSet := ojson.SetBytes(body, "client_metadata.x-codex-turn-state", value)
 	if errSet != nil {
 		return body
 	}
@@ -311,7 +310,7 @@ func (s *CodexTurnState) ObserveRequest(headers http.Header, websocketBody []byt
 		return
 	}
 	value := codexTurnHeaderValue(headers, codexTurnStateHeader)
-	if frameState := gjson.GetBytes(websocketBody, "client_metadata.x-codex-turn-state"); frameState.Type == gjson.String {
+	if frameState := ojson.GetBytes(websocketBody, "client_metadata.x-codex-turn-state"); frameState.Type == ojson.String {
 		value = frameState.String()
 	}
 	s.fieldsMu.Lock()
@@ -394,12 +393,12 @@ func (s *CodexTurnState) ObserveEvent(payload []byte) {
 	if s == nil {
 		return
 	}
-	kind := gjson.GetBytes(payload, "type").String()
+	kind := ojson.GetBytes(payload, "type").String()
 	if kind != "response.metadata" && kind != "codex.response.metadata" {
 		return
 	}
-	gjson.GetBytes(payload, "headers").ForEach(func(key, value gjson.Result) bool {
-		if strings.EqualFold(key.String(), codexTurnStateHeader) && value.Type == gjson.String {
+	ojson.GetBytes(payload, "headers").ForEach(func(key, value ojson.Result) bool {
+		if strings.EqualFold(key.String(), codexTurnStateHeader) && value.Type == ojson.String {
 			s.observeMetadata(value.String(), kind == "response.metadata")
 			return false
 		}

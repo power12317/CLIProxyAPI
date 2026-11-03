@@ -8,19 +8,22 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	auth = e.requestAuth(auth)
 	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
+	ctx = helps.WithCodexCommentaryPolicy(ctx, e.cfg)
+	if errExpand := helps.ExpandRecognizedResponsesCompactionCapsules(&req, &opts); errExpand != nil {
+		return resp, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+	}
 	if opts.Alt == "responses/compact" {
 		return e.executeCompact(ctx, auth, req, opts)
 	}
@@ -51,18 +54,19 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
 	targetModel := resolveResponsesSignatureTargetModel(baseModel, req, opts)
-	originalTranslated, body, updatesChanged, err := e.translateRequestPair(from, to, targetModel, originalPayload, req.Payload, false, opts.Headers, isCompat)
+	originalTranslated, body, updatesChanged, err := e.translateRequestPair(from, to, targetModel, originalPayload, req.Payload, false, opts.Headers, isCompat, ctx)
 	if err != nil {
 		return resp, err
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
-	body = helps.SetStringIfDifferent(body, "model", baseModel)
+	doc := ojson.NewDoc(body)
+	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 
-	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
-	if err != nil {
+	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
 		return resp, err
 	}
 
+	body = doc.Bytes()
 	requestPath := helps.PayloadRequestPath(opts)
 	body = e.normalizeServiceTier(body)
 	body = helps.ApplyCodexFastMode(body, e.cfg)
@@ -70,11 +74,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = helps.SetBoolIfDifferent(body, "stream", true)
 	if e.runtime == nil {
-		body, _ = sjson.DeleteBytes(body, "previous_response_id")
-		body, _ = sjson.DeleteBytes(body, "generate")
-		body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
-		body, _ = sjson.DeleteBytes(body, "safety_identifier")
-		body, _ = sjson.DeleteBytes(body, "stream_options")
+		body, _ = ojson.DeleteBytes(body, "previous_response_id")
+		body, _ = ojson.DeleteBytes(body, "generate")
+		body, _ = ojson.DeleteBytes(body, "prompt_cache_retention")
+		body, _ = ojson.DeleteBytes(body, "safety_identifier")
+		body, _ = ojson.DeleteBytes(body, "stream_options")
 	}
 	useSIWC := codexUseSIWCForRequest(ctx, auth, opts.Headers)
 	if !useSIWC {
@@ -85,7 +89,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		body = helps.ApplyCodexRuntimeImagePolicy(body, codexShouldStripImageGeneration(e.cfg, requestPath))
 	} else if !useSIWC {
 		body = ensureWebSearchToolForHistory(body, opts.Headers)
-		if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
+		if ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
 			body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 		}
 		body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
@@ -96,7 +100,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		body = helps.NormalizeCodexToolSchemas(body)
 	} else {
 		body = ensureWebSearchToolForHistory(body, opts.Headers)
-		hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
+		hasExplicitInstructions := ojson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(ojson.GetBytes(req.Payload, "instructions").String()) != ""
 		body = applyCodexSIWCRequestBodyRules(body, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 		body = normalizeCodexParallelToolCalls(body, toolHeaders, officialCodexRequest)
 		body = helps.NormalizeCodexToolSchemas(body)
@@ -130,7 +134,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 		upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
 		turnStateBody = upstreamBody
-		replaceCodexRequestBody(httpReq, upstreamBody)
+		replaceCodexRequestBody(httpReq, e.codexWireBody(ctx, url, upstreamBody, auth, opts.Headers))
+		alignCodexContentEncoding(httpReq)
 	} else {
 		upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
 		turnStateBody = upstreamBody
@@ -138,8 +143,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		if errEncode != nil {
 			return resp, fmt.Errorf("codex oauth: encode zstd body: %w", errEncode)
 		}
-		upstreamBody = encodedBody
-		replaceCodexRequestBody(httpReq, upstreamBody)
+		replaceCodexRequestBody(httpReq, encodedBody)
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
 	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())
@@ -189,7 +193,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	})
 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClient(httpClient)
-	httpResp, err := httpClient.Do(httpReq)
+	prepareHeaders := func(request *http.Request) {
+		request.Header = httpReq.Header.Clone()
+		alignCodexContentEncoding(request)
+	}
+	httpResp, err := doCodexRequest(httpClient, httpReq, upstreamBody, prepareHeaders, nil)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
@@ -210,7 +218,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
-		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling())
+		err = newCodexStatusErrWithHeadersAndCooling(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling())
 		return resp, err
 	}
 	data, errRead := io.ReadAll(httpResp.Body)
@@ -229,7 +237,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		eventData := bytes.TrimSpace(line[5:])
 		eventData = helps.RestoreCodexMultiAgentV2Response(eventData, optimizeMultiAgentV2)
 		reporter.ObserveResponseModel(eventData)
-		eventType := gjson.GetBytes(eventData, "type").String()
+		eventType := ojson.GetBytesNoCopy(eventData, "type").String()
 
 		if helps.HasMeaningfulCodexOutputDelta(eventData) {
 			sawOutputDelta = true
@@ -244,11 +252,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 
 		if eventType == "response.output_item.done" {
-			itemResult := gjson.GetBytes(eventData, "item")
-			if !itemResult.Exists() || itemResult.Type != gjson.JSON {
+			itemResult := ojson.GetBytesNoCopy(eventData, "item")
+			if !itemResult.Exists() || itemResult.Type != ojson.JSON {
 				continue
 			}
-			outputIndexResult := gjson.GetBytes(eventData, "output_index")
+			outputIndexResult := ojson.GetBytesNoCopy(eventData, "output_index")
 			if outputIndexResult.Exists() {
 				outputItemsByIndex[outputIndexResult.Int()] = []byte(itemResult.Raw)
 			} else {
@@ -276,10 +284,10 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		if helps.ApplyPatchTranslationError(param) != nil || len(out) == 0 {
 			return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
 		}
-		if detail, ok := helps.ParseCodexUsage(eventData); ok {
+		if detail, ok := helps.ParseCodexUsageWithOutputItems(completedData, outputItemsByIndex, outputItemsFallback); ok {
 			reporter.Publish(ctx, detail)
 		}
-		publishCodexImageToolUsage(ctx, reporter, body, eventData)
+		publishCodexImageToolUsageWithOutputItems(ctx, reporter, body, completedData, outputItemsByIndex, outputItemsFallback)
 		if responseFormat == sdktranslator.FormatOpenAIResponse {
 			out = helps.EnsureResponsesUsageDetails(out)
 		}
@@ -299,6 +307,9 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 }
 
 func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
+	if errExpand := helps.ExpandRecognizedResponsesCompactionCapsules(&req, &opts); errExpand != nil {
+		return resp, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
@@ -323,32 +334,34 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
 	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
 	targetModel := resolveResponsesSignatureTargetModel(baseModel, req, opts)
-	originalTranslated, body, updatesChanged, err := translateCodexRequestPairWithUpdateIntent(from, to, targetModel, originalPayload, req.Payload, false, opts.Headers, isCompat)
+	originalTranslated, body, updatesChanged, err := e.translateRequestPair(from, to, targetModel, originalPayload, req.Payload, false, opts.Headers, isCompat, ctx)
 	if err != nil {
 		return resp, err
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 
-	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
-	if err != nil {
+	doc := ojson.NewDoc(body)
+	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
 		return resp, err
 	}
 
+	body = doc.Bytes()
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.NormalizeCodexServiceTier(body)
 	body = helps.ApplyCodexFastMode(body, e.cfg)
 	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts))
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
-	body, _ = sjson.DeleteBytes(body, "stream")
+	body, _ = ojson.DeleteBytes(body, "stream")
 	body = applyCodexImageGenerationPolicyWithoutInjection(body, e.cfg, requestPath)
 	toolHeaders := codexToolPolicyHeaders(auth, opts.Headers, baseModel)
-	if gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
+	if ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
 		body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 	}
 	if !codexUseSIWCForRequest(ctx, auth, opts.Headers) {
 		body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
 	} else {
-		hasExplicitInstructions := gjson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(gjson.GetBytes(req.Payload, "instructions").String()) != ""
+		instructionsResult := ojson.GetBytesNoCopy(req.Payload, "instructions")
+		hasExplicitInstructions := instructionsResult.Exists() && strings.TrimSpace(instructionsResult.String()) != ""
 		body = applyCodexSIWCCompactBodyRules(body, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 	}
 	body = ensureWebSearchToolForHistory(body, opts.Headers)
@@ -372,7 +385,8 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
 	upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
 	turnStateBody = upstreamBody
-	replaceCodexRequestBody(httpReq, upstreamBody)
+	replaceCodexRequestBody(httpReq, e.codexWireBody(ctx, url, upstreamBody, auth, opts.Headers))
+	alignCodexContentEncoding(httpReq)
 	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())
 	applyCodexHeaders(httpReq, auth, apiKey, false, e.cfg, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
@@ -412,7 +426,11 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	})
 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClient(httpClient)
-	httpResp, err := httpClient.Do(httpReq)
+	prepareHeaders := func(request *http.Request) {
+		request.Header = httpReq.Header.Clone()
+		alignCodexContentEncoding(request)
+	}
+	httpResp, err := doCodexRequest(httpClient, httpReq, upstreamBody, prepareHeaders, nil)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
@@ -430,7 +448,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		b, _ := io.ReadAll(httpResp.Body)
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
-		err = newCodexStatusErrWithCooling(httpResp.StatusCode, b, e.modelLevelCooling())
+		err = newCodexStatusErrWithHeadersAndCooling(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling())
 		return resp, err
 	}
 	data, err := io.ReadAll(httpResp.Body)

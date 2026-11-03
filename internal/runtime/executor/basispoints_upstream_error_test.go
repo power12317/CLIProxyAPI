@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -21,7 +22,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func basispointsFailureTransport(t *testing.T, exec *BasispointsExecutor, transport string, priorText bool, retryMS string, failureStatus ...int) (context.Context, *atomic.Int32) {
@@ -98,9 +98,9 @@ func assertBasispointsRateLimit(t *testing.T, err error, delay time.Duration) {
 	if !errors.As(err, &upstream) || upstream.StatusCode() != 429 {
 		t.Fatalf("expected upstream 429, got %v", err)
 	}
-	code := gjson.Get(upstream.Body, "response.error.code").String()
+	code := ojson.Get(upstream.Body, "response.error.code").String()
 	if code == "" {
-		code = gjson.Get(upstream.Body, "error.code").String()
+		code = ojson.Get(upstream.Body, "error.code").String()
 	}
 	if code != "rate_limit_exceeded" || !strings.Contains(upstream.Body, "tokens per min (TPM)") || strings.Contains(upstream.Body, "incomplete_tools") {
 		t.Fatalf("upstream error replaced: %s", upstream.Body)

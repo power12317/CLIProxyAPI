@@ -9,11 +9,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexNativeStreamFidelity(t *testing.T) {
@@ -91,10 +91,10 @@ func testCodexNativeStreamFidelity(t *testing.T, source sdktranslator.Format) {
 						}
 						for _, line := range bytes.Split(chunk.Payload, []byte("\n")) {
 							data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
-							if gjson.GetBytes(data, "type").String() == "codex.response.metadata" {
+							if ojson.GetBytes(data, "type").String() == "codex.response.metadata" {
 								metadataEvents = append(metadataEvents, string(data))
 							}
-							if gjson.GetBytes(data, "type").String() == "response.completed" {
+							if ojson.GetBytes(data, "type").String() == "response.completed" {
 								terminal = bytes.Clone(data)
 							}
 						}
@@ -125,15 +125,15 @@ func testCodexNativeStreamFidelity(t *testing.T, source sdktranslator.Format) {
 					}
 					t.Logf("upstream request: %s; downstream completion: %s", body, terminal)
 					if native {
-						if gjson.GetBytes(body, "instructions").Exists() {
+						if ojson.GetBytes(body, "instructions").Exists() {
 							t.Errorf("native request gained instructions: %s", body)
 						}
 						if string(terminal) != completed {
 							t.Errorf("native completion changed: %s", terminal)
 						}
 					} else {
-						instructions := gjson.GetBytes(body, "instructions")
-						if lite == "" && instructions.Type != gjson.String || lite != "" && instructions.Exists() || gjson.GetBytes(terminal, "response.output.0.id").String() != "msg_1" {
+						instructions := ojson.GetBytes(body, "instructions")
+						if lite == "" && instructions.Type != ojson.String || lite != "" && instructions.Exists() || ojson.GetBytes(terminal, "response.output.0.id").String() != "msg_1" {
 							t.Errorf("compatibility normalization/backfill lost: %s; %s", body, terminal)
 						}
 					}

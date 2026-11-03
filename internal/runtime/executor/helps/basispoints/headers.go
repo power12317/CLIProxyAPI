@@ -1,10 +1,11 @@
 package basispoints
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/MoeForge/moego/base64"
 )
 
 // SharedCache survives executor replacement during configuration reloads.

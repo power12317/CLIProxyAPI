@@ -2,10 +2,11 @@ package util
 
 import (
 	"bytes"
-	"encoding/base64"
 	"image"
 	"image/draw"
 	"image/png"
+
+	"github.com/MoeForge/moego/base64"
 )
 
 func CreateWhiteImageBase64(aspectRatio string) (string, error) {

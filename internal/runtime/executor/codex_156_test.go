@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -17,8 +18,6 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
@@ -58,16 +57,16 @@ func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
 					cfg := &config.Config{}
 					auth := &cliproxyauth.Auth{Provider: "codex", ID: t.Name(), Attributes: map[string]string{"api_key": "key", "base_url": server.URL}}
 					req := cliproxyexecutor.Request{Model: model, Payload: []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":"search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"tools":[{"type":"web_search_preview"},{"type":"image_generation"}]}`)}
-					req.Payload, _ = sjson.SetBytes(req.Payload, "model", model)
+					req.Payload, _ = ojson.SetBytes(req.Payload, "model", model)
 					opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: http.Header{http.CanonicalHeaderKey(codexResponsesLiteHeader): {"true"}}}
 					switch intent {
 					case "body-mirror":
 						opts.Headers = nil
-						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
+						req.Payload, _ = ojson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
 					case "official-body-mirror":
 						opts.Headers = nil
-						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
-						req.Payload, _ = sjson.SetBytes(req.Payload, "client_metadata.x-codex-turn-metadata", `{"session_id":"session","turn_id":"turn"}`)
+						req.Payload, _ = ojson.SetBytes(req.Payload, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", "true")
+						req.Payload, _ = ojson.SetBytes(req.Payload, "client_metadata.x-codex-turn-metadata", `{"session_id":"session","turn_id":"turn"}`)
 					case "configured":
 						opts.Headers = nil
 						auth.Attributes["header:"+codexResponsesLiteHeader] = "true"
@@ -96,17 +95,17 @@ func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
 						}
 					}
 					body := <-captured
-					if gjson.GetBytes(body, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(body) != util.CodexResponsesLiteToolsCompatible {
+					if ojson.GetBytes(body, "tools").Exists() || util.ClassifyCodexResponsesLiteTools(body) != util.CodexResponsesLiteToolsCompatible {
 						t.Fatalf("tools: %s", body)
 					}
-					descriptors := util.CollectResponsesToolWinners(gjson.ParseBytes(body))
+					descriptors := util.CollectResponsesToolWinners(ojson.ParseBytes(body))
 					for _, name := range []string{"image_gen__imagegen", "web__run"} {
 						if _, ok := descriptors[name]; !ok {
 							t.Fatalf("missing %s: %s", name, body)
 						}
 					}
 					assertCodexReservedWireFixtures(t, body)
-					if strings.HasPrefix(transport, "ws") && gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" {
+					if strings.HasPrefix(transport, "ws") && ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" {
 						t.Fatal("missing per-request mirror")
 					}
 				})
@@ -128,7 +127,7 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 			}
 			continue
 		}
-		descriptors := util.CollectResponsesToolWinners(gjson.ParseBytes(got))
+		descriptors := util.CollectResponsesToolWinners(ojson.ParseBytes(got))
 		_, image := descriptors["image_gen__imagegen"]
 		_, web := descriptors["web__run"]
 		if image != (mode == config.DisableImageGenerationOff) || !web {
@@ -140,7 +139,7 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 		t.Fatalf("official Lite request not normalized: %s", got)
 	}
 	for _, parallel := range []any{true, "false", nil, 0} {
-		body, _ := sjson.SetBytes(base, "parallel_tool_calls", parallel)
+		body, _ := ojson.SetBytes(base, "parallel_tool_calls", parallel)
 		h := make(http.Header)
 		ensureCodexResponsesLiteHeader(h, body)
 		if h.Get(codexResponsesLiteHeader) != "" {
@@ -149,7 +148,7 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 	}
 	for _, model := range []string{"gpt-5.5", "unknown-model", "gpt-5.6-sol"} {
 		h := make(http.Header)
-		body, _ := sjson.SetBytes(base, "model", model)
+		body, _ := ojson.SetBytes(base, "model", model)
 		ensureCodexResponsesLiteHeader(h, body)
 		if h.Get(codexResponsesLiteHeader) != "" {
 			t.Fatal("hosted tools gained auto Lite header")
@@ -172,7 +171,7 @@ func TestCodex156ErrorCodesAcrossTransports(t *testing.T) {
 		}
 		for _, err := range []error{httpErr, sseErr, wsErr} {
 			status := err.(interface{ StatusCode() int }).StatusCode()
-			if status != want || gjson.Get(err.Error(), "error.code").String() != code {
+			if status != want || ojson.Get(err.Error(), "error.code").String() != code {
 				t.Fatalf("%s: %v", code, err)
 			}
 			if code == "bio_policy" && !err.(cliproxyexecutor.RequestScopedError).IsRequestScoped() {
@@ -186,7 +185,7 @@ func TestCodex156ImagesGenerationID(t *testing.T) {
 	for _, generation := range []string{"", "gen-123"} {
 		raw := []byte(`{"type":"response.completed","response":{"output":[{"type":"image_generation_call","result":"AA==","imagegen_request_id":"different-request"}]}}`)
 		if generation != "" {
-			raw, _ = sjson.SetBytes(raw, "response.output.0.generation_id", generation)
+			raw, _ = ojson.SetBytes(raw, "response.output.0.generation_id", generation)
 		}
 		results, created, usage, meta, err := codexExtractImageResults(raw, nil, nil)
 		if err != nil {
@@ -196,7 +195,7 @@ func TestCodex156ImagesGenerationID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		value := gjson.GetBytes(out, "data.0.generation_id")
+		value := ojson.GetBytes(out, "data.0.generation_id")
 		if value.String() != generation || value.Exists() != (generation != "") {
 			t.Fatalf("generation id: %s", out)
 		}
@@ -206,7 +205,7 @@ func TestCodex156ImagesGenerationID(t *testing.T) {
 		}
 		partial := []byte(`{"partial_image_b64":"AA==","imagegen_request_id":"different-request"}`)
 		if generation != "" {
-			partial, _ = sjson.SetBytes(partial, "generation_id", generation)
+			partial, _ = ojson.SetBytes(partial, "generation_id", generation)
 		}
 		frame = codexBuildImagePartialFrame(partial, "b64_json", "image_generation")
 		if strings.Contains(string(frame), `"generation_id"`) != (generation != "") {
@@ -243,11 +242,11 @@ func TestCodex156HeaderProfilePrecedence(t *testing.T) {
 
 func TestCodex156FinalCacheAffinitySurvivesCacheHelpers(t *testing.T) {
 	original := []byte(`{"prompt_cache_key":"client-cache","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"real-session\"}"}}`)
-	body, _ := sjson.SetBytes(original, "prompt_cache_key", "configured-cache")
+	body, _ := ojson.SetBytes(original, "prompt_cache_key", "configured-cache")
 	body, id, _ := helps.ApplyCodexOAuthFidelity(body, "account", "mac", false)
 	req := cliproxyexecutor.Request{Payload: original}
 	e := NewCodexExecutor(&config.Config{})
-	httpReq, httpBody, err := e.cacheHelper(context.Background(), sdktranslator.FormatOpenAIResponse, "https://chatgpt.com/backend-api/codex/responses", req, body)
+	httpReq, httpBody, err := e.cacheHelper(context.Background(), sdktranslator.FormatOpenAIResponse, "https://chatgpt.com/backend-api/codex/responses", req, body, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +256,7 @@ func TestCodex156FinalCacheAffinitySurvivesCacheHelpers(t *testing.T) {
 		headers http.Header
 	}{{httpBody, httpReq.Header}, {wsBody, wsHeaders}} {
 		helps.ApplyCodexOAuthHeaders(upstream.headers, id, true, "", "")
-		if gjson.GetBytes(upstream.body, "prompt_cache_key").String() != "configured-cache" || upstream.headers.Get("Session-Id") != "configured-cache" || id.SessionID != "real-session" {
+		if ojson.GetBytes(upstream.body, "prompt_cache_key").String() != "configured-cache" || upstream.headers.Get("Session-Id") != "configured-cache" || id.SessionID != "real-session" {
 			t.Fatalf("final cache affinity changed: %s %v", upstream.body, upstream.headers)
 		}
 	}
@@ -320,7 +319,7 @@ func TestCodex156OAuthFinalIdentityAcrossTransports(t *testing.T) {
 		t.Run(transport, func(t *testing.T) {
 			captured := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				for key, want := range map[string]string{"Session-Id": "cache", "Thread-Id": "thread", "X-Client-Request-Id": "thread", "X-Codex-Window-Id": "thread:0", "Version": "0.164.0", "Originator": "codex-tui", "User-Agent": "codex-tui/0.164.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.164.0)", "X-Codex-Beta-Features": "extra,remote_compaction_v2"} {
+				for key, want := range map[string]string{"Session-Id": "cache", "Thread-Id": "thread", "X-Client-Request-Id": "thread", "X-Codex-Window-Id": "thread:0", "Version": "0.166.0", "Originator": "codex-tui", "User-Agent": "codex-tui/0.166.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.166.0)", "X-Codex-Beta-Features": "extra,remote_compaction_v2"} {
 					if got := r.Header.Get(key); got != want {
 						t.Errorf("%s = %q, want %q", key, got, want)
 					}
@@ -405,12 +404,12 @@ func TestCodex156OAuthFinalIdentityAcrossTransports(t *testing.T) {
 				}
 			}
 			got := <-captured
-			metadata := gjson.Parse(gjson.GetBytes(got, "client_metadata.x-codex-turn-metadata").String())
-			if metadata.Get("session_id").String() != "session" || gjson.GetBytes(got, "prompt_cache_key").String() != "cache" || metadata.Get("analytics_enabled").Type != gjson.False || metadata.Get("compaction.phase").String() != "pre" {
+			metadata := ojson.Parse(ojson.GetBytes(got, "client_metadata.x-codex-turn-metadata").String())
+			if metadata.Get("session_id").String() != "session" || ojson.GetBytes(got, "prompt_cache_key").String() != "cache" || metadata.Get("analytics_enabled").Type != ojson.False || metadata.Get("compaction.phase").String() != "pre" {
 				t.Fatalf("identity: %s", got)
 			}
 			foundCompaction, foundTools := false, false
-			for _, item := range gjson.GetBytes(got, "input").Array() {
+			for _, item := range ojson.GetBytes(got, "input").Array() {
 				foundCompaction = foundCompaction || item.Get("type").String() == "compaction_trigger"
 				foundTools = foundTools || item.Get("id").String() == "at-client" && item.Get("tools.0.name").String() == "exec"
 			}

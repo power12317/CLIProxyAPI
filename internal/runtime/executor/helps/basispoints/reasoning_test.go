@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestAstraMaxReasoningAdaptation(t *testing.T) {
@@ -24,14 +24,14 @@ func TestAstraMaxReasoningAdaptation(t *testing.T) {
 			if special {
 				want = "xhigh"
 			}
-			if gjson.GetBytes(wire, "reasoning_effort").String() != want || gjson.GetBytes(wire, "model").String() != model {
+			if ojson.GetBytes(wire, "reasoning_effort").String() != want || ojson.GetBytes(wire, "model").String() != model {
 				t.Fatalf("model=%s effort=%s: %s", model, effort, wire)
 			}
-			if effort == "" && gjson.GetBytes(wire, "reasoning_effort").Exists() {
+			if effort == "" && ojson.GetBytes(wire, "reasoning_effort").Exists() {
 				t.Fatal("default effort inserted")
 			}
 			updates := 0
-			for _, item := range gjson.GetBytes(wire, "input").Array() {
+			for _, item := range ojson.GetBytes(wire, "input").Array() {
 				if item.Get("type").String() == "configuration_update" && item.Get("reasoning.effort").String() == "max" {
 					updates++
 				}
@@ -41,15 +41,15 @@ func TestAstraMaxReasoningAdaptation(t *testing.T) {
 			}
 			instructionPath := "input.0.content.0.text"
 			if special {
-				if gjson.GetBytes(wire, "input.0.type").String() != "configuration_update" || gjson.GetBytes(wire, "input.0.reasoning.effort").String() != "max" {
+				if ojson.GetBytes(wire, "input.0.type").String() != "configuration_update" || ojson.GetBytes(wire, "input.0.reasoning.effort").String() != "max" {
 					t.Fatal("max configuration_update must lead input")
 				}
 				instructionPath = "input.1.content.0.text"
 			}
-			if gjson.GetBytes(wire, instructionPath).String() != "Keep this instruction." {
+			if ojson.GetBytes(wire, instructionPath).String() != "Keep this instruction." {
 				t.Fatal("caller instructions changed")
 			}
-			if gjson.GetBytes(raw, "reasoning_effort").String() != effort {
+			if ojson.GetBytes(raw, "reasoning_effort").String() != effort {
 				t.Fatal("caller body changed")
 			}
 		}

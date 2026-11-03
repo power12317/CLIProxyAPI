@@ -13,11 +13,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsImageAPIUsesNativeTransport(t *testing.T) {
@@ -103,7 +103,7 @@ func testBasispointsImageAPIRoute(t *testing.T, model, operation string, stream,
 		body := "{\"created\":1713833628,\"data\":[{\"b64_json\":\"AA==\"}]}"
 		contentType := "application/json"
 		if model == "custom-paint-alias" {
-			if gjson.GetBytes(raw, "tool_choice.type").String() != "image_generation" || gjson.GetBytes(raw, "tools.0.model").String() != model {
+			if ojson.GetBytes(raw, "tool_choice.type").String() != "image_generation" || ojson.GetBytes(raw, "tools.0.model").String() != model {
 				t.Error("native image compatibility request lost tool choice or image model")
 			}
 			body = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"image-result\",\"status\":\"completed\",\"created_at\":1713833628,\"output\":[{\"type\":\"image_generation_call\",\"result\":\"AA==\",\"output_format\":\"png\"}]}}\n\n"

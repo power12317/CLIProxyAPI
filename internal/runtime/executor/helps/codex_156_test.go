@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func mustNormalizeCodexLiteTools(t *testing.T, body []byte, images bool) []byte {
@@ -27,9 +26,9 @@ func TestCodex156SeparatesSessionCacheThread(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		body := []byte(`{"prompt_cache_key":"cache","client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"session\",\"thread_id\":\"thread\",\"turn_id\":\"turn\",\"analytics_enabled\":false,\"future\":{\"value\":7}}"}}`)
 		if child {
-			raw := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()
-			raw, _ = sjson.Set(raw, "subagent_kind", "thread_spawn")
-			body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata", raw)
+			raw := ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()
+			raw, _ = ojson.Set(raw, "subagent_kind", "thread_spawn")
+			body, _ = ojson.SetBytes(body, "client_metadata.x-codex-turn-metadata", raw)
 		}
 		updated, id, ok := ApplyCodexOAuthFidelity(body, "account", "windows", false)
 		if !ok {
@@ -44,8 +43,8 @@ func TestCodex156SeparatesSessionCacheThread(t *testing.T) {
 		if header.Get("Session-Id") != wantSession || header.Get("Thread-Id") != "thread" || header.Get("X-Client-Request-Id") != "thread" || header.Get("X-Codex-Window-Id") != "thread:0" {
 			t.Fatalf("identifiers: %v", header)
 		}
-		metadata := gjson.Parse(gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String())
-		if metadata.Get("session_id").String() != "session" || gjson.GetBytes(updated, "prompt_cache_key").String() != "cache" || metadata.Get("analytics_enabled").Type != gjson.False || metadata.Get("future.value").Int() != 7 {
+		metadata := ojson.Parse(ojson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String())
+		if metadata.Get("session_id").String() != "session" || ojson.GetBytes(updated, "prompt_cache_key").String() != "cache" || metadata.Get("analytics_enabled").Type != ojson.False || metadata.Get("future.value").Int() != 7 {
 			t.Fatalf("body: %s", updated)
 		}
 		if header.Get("Version") != CodexClientVersion || !strings.Contains(header.Get("User-Agent"), "Windows") || header.Get("X-Codex-Beta-Features") != "other,remote_compaction_v2" {
@@ -53,7 +52,7 @@ func TestCodex156SeparatesSessionCacheThread(t *testing.T) {
 		}
 	}
 	body, _, _ := ApplyCodexOAuthFidelity([]byte(`{"client_metadata":{"x-codex-turn-metadata":"{}"}}`), "account", "mac", true)
-	if gjson.Parse(gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()).Get("analytics_enabled").Exists() {
+	if ojson.Parse(ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()).Get("analytics_enabled").Exists() {
 		t.Fatal("invented analytics state")
 	}
 }
@@ -169,7 +168,7 @@ func TestCodex156ConnectionFingerprintIgnoresTurnButTracksCredentials(t *testing
 func TestCodex156LiteToolsIdempotentNamespaceMerge(t *testing.T) {
 	body := []byte(`{"prompt_cache_key":"s","instructions":"Guide","tools":[{"type":"web_search_preview"},{"type":"image_generation"}],"input":[{"type":"additional_tools","id":"at_old","role":"developer","tools":[{"type":"namespace","name":"web","description":"keep","tools":[{"type":"function","name":"open","parameters":{}}]}]},{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}`)
 	got := mustNormalizeCodexLiteTools(t, body, true)
-	if util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible || gjson.GetBytes(got, "tools").Exists() || gjson.GetBytes(got, "instructions").Exists() {
+	if util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible || ojson.GetBytes(got, "tools").Exists() || ojson.GetBytes(got, "instructions").Exists() {
 		t.Fatalf("invalid Lite: %s", got)
 	}
 	if !codexDeclaredFunction(got, "image_gen", "imagegen") || !codexDeclaredFunction(got, "web", "run") || !codexDeclaredFunction(got, "web", "open") {
@@ -180,7 +179,7 @@ func TestCodex156LiteToolsIdempotentNamespaceMerge(t *testing.T) {
 		t.Fatalf("duplicate/reidentified declarations: %s", second)
 	}
 	foundOld := false
-	for _, item := range gjson.GetBytes(got, "input").Array() {
+	for _, item := range ojson.GetBytes(got, "input").Array() {
 		if item.Get("id").String() == "at_old" {
 			foundOld = true
 		}
@@ -200,7 +199,7 @@ func TestCodex156LiteToolsIdempotentNamespaceMerge(t *testing.T) {
 func TestCodex156StripImageNamespacePreservesOtherToolsAndSchema(t *testing.T) {
 	body := []byte(`{"tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"},{"type":"function","name":"inspect","parameters":{"properties":{"tools":{"default":[{"type":"image_generation"}]}}}}]},{"type":"function","name":"image_gen__imagegen"}],"tool_choice":{"type":"function","namespace":"image_gen","name":"imagegen"}}`)
 	got := StripCodexImageTools(body)
-	if gjson.GetBytes(got, "tools.0.tools.#").Int() != 1 || gjson.GetBytes(got, "tools.0.tools.0.name").String() != "inspect" || gjson.GetBytes(got, "tools.0.tools.0.parameters.properties.tools.default.0.type").String() != "image_generation" || gjson.GetBytes(got, "tool_choice").Exists() {
+	if ojson.GetBytes(got, "tools.0.tools.#").Int() != 1 || ojson.GetBytes(got, "tools.0.tools.0.name").String() != "inspect" || ojson.GetBytes(got, "tools.0.tools.0.parameters.properties.tools.default.0.type").String() != "image_generation" || ojson.GetBytes(got, "tool_choice").Exists() {
 		t.Fatalf("strip: %s", got)
 	}
 }
@@ -227,10 +226,10 @@ func TestCodex156TurnStateOwnerReplacementRejectsOldResponses(t *testing.T) {
 
 func TestCodex156LiteHistoryNamesAndClientSchemasPreserved(t *testing.T) {
 	body := []byte(`{"input":[{"type":"additional_tools","id":"at-client","tools":[{"type":"namespace","name":"web","tools":[{"type":"function","name":"run","description":"full client schema","parameters":{"properties":{"open":{"type":"array"}}}}]}]},{"type":"function_call","name":"image_gen__imagegen","call_id":"image","arguments":"{\"prompt\":\"test\"}"},{"type":"function_call_output","call_id":"image","output":"result"}]}`)
-	body, _ = sjson.SetRawBytes(body, "input.0.tools.0", []byte(codexLiteWebNamespace))
+	body, _ = ojson.SetRawBytes(body, "input.0.tools.0", []byte(codexLiteWebNamespace))
 	got := mustNormalizeCodexLiteTools(t, body, true)
 	found := false
-	for _, item := range gjson.GetBytes(got, "input").Array() {
+	for _, item := range ojson.GetBytes(got, "input").Array() {
 		if item.Get("id").String() == "at-client" {
 			found = true
 			if !codexToolJSONEqual(item.Get("tools.0").Raw, codexLiteWebNamespace) {
@@ -250,13 +249,13 @@ func TestCodex156LiteHistoryNamesAndClientSchemasPreserved(t *testing.T) {
 
 func TestCodex156LiteFlatDeclarationsKeepFlatHistory(t *testing.T) {
 	body := []byte(`{"instructions":"","tools":[{"type":"function","name":"image_gen__imagegen","description":"client schema","parameters":{}}],"tool_choice":{"type":"image_generation"},"input":[{"type":"function_call","name":"image_gen__imagegen","call_id":"c","arguments":"{}"}]}`)
-	canonical, _ := sjson.Set(gjson.Parse(codexLiteImageNamespace).Get("tools.0").Raw, "name", "image_gen__imagegen")
-	body, _ = sjson.SetRawBytes(body, "tools.0", []byte(canonical))
+	canonical, _ := ojson.Set(ojson.Parse(codexLiteImageNamespace).Get("tools.0").Raw, "name", "image_gen__imagegen")
+	body, _ = ojson.SetRawBytes(body, "tools.0", []byte(canonical))
 	got := mustNormalizeCodexLiteTools(t, body, true)
-	if gjson.GetBytes(got, "input.0.tools.#").Int() != 1 || !codexToolJSONEqual(gjson.GetBytes(got, "input.0.tools.0").Raw, canonical) || gjson.GetBytes(got, "input.1.namespace").Exists() || gjson.GetBytes(got, "input.1.name").String() != "image_gen__imagegen" {
+	if ojson.GetBytes(got, "input.0.tools.#").Int() != 1 || !codexToolJSONEqual(ojson.GetBytes(got, "input.0.tools.0").Raw, canonical) || ojson.GetBytes(got, "input.1.namespace").Exists() || ojson.GetBytes(got, "input.1.name").String() != "image_gen__imagegen" {
 		t.Fatalf("flat declaration/history changed: %s", got)
 	}
-	if gjson.GetBytes(got, "tool_choice.name").String() != "image_gen__imagegen" || gjson.GetBytes(got, "tool_choice.namespace").Exists() {
+	if ojson.GetBytes(got, "tool_choice.name").String() != "image_gen__imagegen" || ojson.GetBytes(got, "tool_choice.namespace").Exists() {
 		t.Fatalf("choice mismatches actual declaration: %s", got)
 	}
 }
@@ -276,7 +275,7 @@ func TestCodex156LiteNormalizationRetainsInvalidInput(t *testing.T) {
 func TestCodex156LiteAllowedToolChoicesFollowDeclarations(t *testing.T) {
 	body := []byte(`{"input":[],"tools":[{"type":"image_generation"},{"type":"web_search_preview"},{"type":"function","name":"exec"}],"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"image_generation"},{"type":"web_search_preview"},{"type":"function","name":"exec"}]}}`)
 	got := mustNormalizeCodexLiteTools(t, body, true)
-	choice := gjson.GetBytes(got, "tool_choice")
+	choice := ojson.GetBytes(got, "tool_choice")
 	if choice.Get("mode").String() != "auto" || choice.Get("tools.0.namespace").String() != "image_gen" || choice.Get("tools.1.namespace").String() != "web" || choice.Get("tools.2.name").String() != "exec" {
 		t.Fatalf("choices do not match Lite declarations: %s", got)
 	}

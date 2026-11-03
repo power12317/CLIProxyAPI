@@ -4,13 +4,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 func codexOfficialRequest(originalPayload, payload []byte) bool {
@@ -54,10 +53,10 @@ func ensureCodexResponsesLiteMirror(body []byte, headers http.Header) []byte {
 	if !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
 		return body
 	}
-	if current := gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"); current.Exists() && current.String() == strings.ToLower(value) {
+	if current := ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"); current.Exists() && current.String() == strings.ToLower(value) {
 		return body
 	}
-	updated, errSet := sjson.SetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", strings.ToLower(value))
+	updated, errSet := ojson.SetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", strings.ToLower(value))
 	if errSet != nil {
 		return body
 	}

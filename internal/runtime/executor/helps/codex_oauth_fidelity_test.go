@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexOAuthFidelityPrewarmTurnIdentity(t *testing.T) {
@@ -28,9 +28,9 @@ func TestCodexOAuthFidelityPrewarmTurnIdentity(t *testing.T) {
 			if !ok || (identity.TurnID == "") != tc.wantEmpty || tc.turn != "" && identity.TurnID != tc.turn {
 				t.Fatalf("identity=%+v ok=%t", identity, ok)
 			}
-			outer := gjson.GetBytes(updated, "client_metadata.turn_id")
-			nested := gjson.Get(gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String(), "turn_id")
-			if outer.Type != gjson.String || nested.Type != gjson.String || outer.String() != identity.TurnID || nested.String() != identity.TurnID {
+			outer := ojson.GetBytes(updated, "client_metadata.turn_id")
+			nested := ojson.Get(ojson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String(), "turn_id")
+			if outer.Type != ojson.String || nested.Type != ojson.String || outer.String() != identity.TurnID || nested.String() != identity.TurnID {
 				t.Fatalf("inconsistent turn metadata: %s", updated)
 			}
 		})
@@ -73,10 +73,10 @@ func TestApplyCodexOAuthFidelityReconstructsIdentityAndWindowsSystem(t *testing.
 	if identity.SessionID != "session-1" || identity.TurnID != "turn-1" {
 		t.Fatalf("identity = %+v", identity)
 	}
-	if got := gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String(); got == "" {
+	if got := ojson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String(); got == "" {
 		t.Fatal("missing canonical turn metadata")
 	}
-	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got == "" {
+	if got := ojson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got == "" {
 		t.Fatal("missing installation identity")
 	}
 }
@@ -88,7 +88,7 @@ func TestApplyCodexOAuthFidelityDefaultsMacAndTimezone(t *testing.T) {
 		t.Fatalf("rewrite=%t identity=%+v", ok, identity)
 	}
 	wantTimezone := "environment_context <timezone>Asia/" + "Singapore</timezone>"
-	if got := gjson.GetBytes(updated, "input.0.text").String(); got != wantTimezone {
+	if got := ojson.GetBytes(updated, "input.0.text").String(); got != wantTimezone {
 		t.Fatalf("timezone was not normalized: %q", got)
 	}
 }
@@ -103,7 +103,7 @@ func TestApplyCodexOAuthFidelityUsesCredentialSystemForConvergedIdentity(t *test
 		t.Fatalf("system = %q, want mac", identity.System)
 	}
 	wantInstallationID := codexInstallationUUID("acct-3", "mac")
-	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != wantInstallationID {
+	if got := ojson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != wantInstallationID {
 		t.Fatalf("installation identity = %q, want %q", got, wantInstallationID)
 	}
 }
@@ -117,11 +117,11 @@ func TestApplyCodexOAuthFidelityPreservesInstallationIdentityWhenConvergenceDisa
 	if identity.System != "mac" {
 		t.Fatalf("system = %q, want mac", identity.System)
 	}
-	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != "outer-original" {
+	if got := ojson.GetBytes(updated, "client_metadata.x-codex-installation-id").String(); got != "outer-original" {
 		t.Fatalf("outer installation identity = %q, want original", got)
 	}
-	turnMetadata := gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String()
-	if got := gjson.Get(turnMetadata, "installation_id").String(); got != "nested-original" {
+	turnMetadata := ojson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String()
+	if got := ojson.Get(turnMetadata, "installation_id").String(); got != "nested-original" {
 		t.Fatalf("nested installation identity = %q, want original", got)
 	}
 }
@@ -132,11 +132,11 @@ func TestApplyCodexOAuthFidelityDoesNotAddInstallationIdentityWhenConvergenceDis
 	if !ok {
 		t.Fatal("expected fidelity rewrite")
 	}
-	if got := gjson.GetBytes(updated, "client_metadata.x-codex-installation-id"); got.Exists() {
+	if got := ojson.GetBytes(updated, "client_metadata.x-codex-installation-id"); got.Exists() {
 		t.Fatalf("unexpected outer installation identity: %s", got.Raw)
 	}
-	turnMetadata := gjson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String()
-	if got := gjson.Get(turnMetadata, "installation_id"); got.Exists() {
+	turnMetadata := ojson.GetBytes(updated, "client_metadata.x-codex-turn-metadata").String()
+	if got := ojson.Get(turnMetadata, "installation_id"); got.Exists() {
 		t.Fatalf("unexpected nested installation identity: %s", got.Raw)
 	}
 }
@@ -165,8 +165,8 @@ func TestConfigureCodexChatGPTUsageRequestUsesSystemProfile(t *testing.T) {
 		system string
 		wantUA string
 	}{
-		{name: "legacy defaults to mac", wantUA: "codex-tui/0.164.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.164.0)"},
-		{name: "windows", system: "windows", wantUA: "codex-tui/0.164.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.164.0)"},
+		{name: "legacy defaults to mac", wantUA: "codex-tui/0.166.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.166.0)"},
+		{name: "windows", system: "windows", wantUA: "codex-tui/0.166.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.166.0)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			auth := &cliproxyauth.Auth{
@@ -235,7 +235,7 @@ func TestCodexQuotaRequestsReplaceLegacyManagementIdentity(t *testing.T) {
 				if r.URL.Path != tc.path || r.Method != tc.method {
 					t.Errorf("request target = %s %s", r.Method, r.URL.Path)
 				}
-				if got := r.UserAgent(); got != "codex-tui/0.164.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.164.0)" {
+				if got := r.UserAgent(); got != "codex-tui/0.166.0 (Mac OS 26.5.2; arm64) unknown (codex-tui; 0.166.0)" {
 					t.Errorf("outbound User-Agent = %q", got)
 				}
 				if got := r.Header.Get("X-OpenAI-Codex-Luna-Reserve"); got != tc.reserve {

@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/google/uuid"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 // CodexOAuthIdentity contains the canonical identifiers shared by the body and
@@ -49,7 +49,7 @@ func IsOfficialCodexRequest(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
-	value := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
+	value := ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata")
 	return value.Exists()
 }
 
@@ -273,12 +273,12 @@ func ApplyCodexOAuthRoutingHint(headers http.Header, body []byte) {
 	if headers == nil {
 		return
 	}
-	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	model := strings.TrimSpace(ojson.GetBytes(body, "model").String())
 	if model == "" {
 		return
 	}
 	hint := "model=" + model
-	if tier := gjson.GetBytes(body, "service_tier"); tier.Type == gjson.String && tier.String() != "" {
+	if tier := ojson.GetBytes(body, "service_tier"); tier.Type == ojson.String && tier.String() != "" {
 		hint += ";tier=" + tier.String()
 	}
 	headers.Set("X-Codex-Routing-Hint", hint)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/klauspost/compress/zstd"
@@ -20,8 +21,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // Exercise the public Responses route, auth manager, real format translation,
@@ -133,18 +132,18 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					body, _ = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata", string(encoded))
-					body, _ = sjson.SetBytes(body, "client_metadata.x-openai-subagent", "collab_spawn")
-					body, _ = sjson.SetBytes(body, "client_metadata.x-codex-parent-thread-id", "parent")
+					body, _ = ojson.SetBytes(body, "client_metadata.x-codex-turn-metadata", string(encoded))
+					body, _ = ojson.SetBytes(body, "client_metadata.x-openai-subagent", "collab_spawn")
+					body, _ = ojson.SetBytes(body, "client_metadata.x-codex-parent-thread-id", "parent")
 					if tc.name != "filtered_absent" {
-						body, _ = sjson.SetBytes(body, "reasoning.context", "all_turns")
+						body, _ = ojson.SetBytes(body, "reasoning.context", "all_turns")
 					}
 					if tc.mirror != "" {
-						body, _ = sjson.SetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", tc.mirror == "true")
+						body, _ = ojson.SetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite", tc.mirror == "true")
 					}
 				}
 				if tc.tier != "" {
-					body, _ = sjson.SetBytes(body, "service_tier", tc.tier)
+					body, _ = ojson.SetBytes(body, "service_tier", tc.tier)
 				}
 				headers := make(http.Header)
 				if tc.header != "" {
@@ -161,7 +160,7 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer func() { _ = conn.Close() }()
-					body, _ = sjson.SetBytes(body, "type", "response.create")
+					body, _ = ojson.SetBytes(body, "type", "response.create")
 					if err := conn.WriteMessage(websocket.TextMessage, body); err != nil {
 						t.Fatal(err)
 					}
@@ -171,14 +170,14 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 							t.Fatal(err)
 						}
 						response = append(response, frame...)
-						if typ := gjson.GetBytes(frame, "type").String(); typ == "response.completed" {
+						if typ := ojson.GetBytes(frame, "type").String(); typ == "response.completed" {
 							break
 						} else if typ == "error" || typ == "response.failed" {
 							t.Fatalf("downstream error: %s", frame)
 						}
 					}
 				} else {
-					body, _ = sjson.SetBytes(body, "stream", transport == "sse")
+					body, _ = ojson.SetBytes(body, "stream", transport == "sse")
 					path := "/v1/responses"
 					if transport == "compact" {
 						path += "/compact"
@@ -200,29 +199,29 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 				}
 				got := <-captured
 				if tc.native {
-					if gjson.GetBytes(got.body, "include").Raw != include {
-						t.Errorf("include changed: %s", gjson.GetBytes(got.body, "include").Raw)
+					if ojson.GetBytes(got.body, "include").Raw != include {
+						t.Errorf("include changed: %s", ojson.GetBytes(got.body, "include").Raw)
 					}
 					wantTier := tc.tier
 					if wantTier == "default" {
 						wantTier = ""
 					}
-					if gjson.GetBytes(got.body, "service_tier").String() != wantTier {
-						t.Errorf("tier changed: %s", gjson.GetBytes(got.body, "service_tier").Raw)
+					if ojson.GetBytes(got.body, "service_tier").String() != wantTier {
+						t.Errorf("tier changed: %s", ojson.GetBytes(got.body, "service_tier").Raw)
 					}
-					if wantTier == "" && gjson.GetBytes(got.body, "service_tier").Exists() {
+					if wantTier == "" && ojson.GetBytes(got.body, "service_tier").Exists() {
 						t.Errorf("ordinary request sent service_tier: %s", got.body)
 					}
-					if gjson.GetBytes(got.body, "reasoning.effort").String() != "high" {
+					if ojson.GetBytes(got.body, "reasoning.effort").String() != "high" {
 						t.Error("explicit reasoning changed")
 					}
-					bodyMetadata := gjson.Parse(gjson.GetBytes(got.body, "client_metadata.x-codex-turn-metadata").String())
-					headerMetadata := gjson.Parse(got.headers.Get("X-Codex-Turn-Metadata"))
+					bodyMetadata := ojson.Parse(ojson.GetBytes(got.body, "client_metadata.x-codex-turn-metadata").String())
+					headerMetadata := ojson.Parse(got.headers.Get("X-Codex-Turn-Metadata"))
 					if !bodyMetadata.Get("tool_namespaces_info").Exists() || headerMetadata.Get("tool_namespaces_info").Exists() || len(got.headers.Get("X-Codex-Turn-Metadata")) > 3000 {
 						t.Error("tool inventory must remain only in body")
 					}
-					for _, metadata := range []gjson.Result{bodyMetadata, headerMetadata} {
-						if metadata.Get("node_repl_auto_review_required").Type != gjson.False {
+					for _, metadata := range []ojson.Result{bodyMetadata, headerMetadata} {
+						if metadata.Get("node_repl_auto_review_required").Type != ojson.False {
 							t.Error("B4 flag changed")
 						}
 						if flag := metadata.Get("history_ingest_requested"); flag.Exists() != (tc.mirror != "") || tc.mirror != "" && flag.Bool() != (tc.mirror == "true") {
@@ -256,7 +255,7 @@ func TestCodexRequestFidelityThroughResponsesRoutes(t *testing.T) {
 				if got.headers.Get(liteHeader) != wantLiteHeader {
 					t.Errorf("Lite header=%q want %q", got.headers.Get(liteHeader), wantLiteHeader)
 				}
-				if tc.native && (tc.mirror != "" || transport == "ws" && tc.wantLite != "") && gjson.GetBytes(got.body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != tc.wantLite {
+				if tc.native && (tc.mirror != "" || transport == "ws" && tc.wantLite != "") && ojson.GetBytes(got.body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != tc.wantLite {
 					t.Error("resolved Lite header/body disagree")
 				}
 				for _, value := range []string{`"encrypted_content":"opaque"`, `"call_id":"call-1"`, `"future":{"flag":false}`} {

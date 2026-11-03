@@ -7,8 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 const testRequest = `{"model":"gpt-6-astra","input":[{"role":"user","content":"weather"}],"tools":[{"type":"function","name":"weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}]}`
@@ -23,7 +22,7 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gjson.GetBytes(body, "tools").Exists() {
+	if ojson.GetBytes(body, "tools").Exists() {
 		t.Fatal("client tools leaked upstream")
 	}
 	if !strings.Contains(string(body), "weather") {
@@ -35,7 +34,7 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gjson.GetBytes(converted, "output.0.name").String() != "weather" || gjson.GetBytes(converted, "output.0.arguments").String() != `{"city":"Tokyo"}` {
+	if ojson.GetBytes(converted, "output.0.name").String() != "weather" || ojson.GetBytes(converted, "output.0.arguments").String() != `{"city":"Tokyo"}` {
 		t.Fatalf("bad converted tool: %s", converted)
 	}
 	var client object
@@ -48,16 +47,16 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gjson.GetBytes(second, "input.2"); got.Get("id").String() != "native_item" || got.Get("arguments").String() != nativeWeather()["arguments"] {
+	if got := ojson.GetBytes(second, "input.2"); got.Get("id").String() != "native_item" || got.Get("arguments").String() != nativeWeather()["arguments"] {
 		t.Fatalf("native item not restored: %s", second)
 	}
-	if !strings.HasPrefix(gjson.GetBytes(second, "input.3.id").String(), "fc_") || gjson.GetBytes(second, "input.3.id").String() == gjson.GetBytes(second, "input.2.id").String() || gjson.GetBytes(second, "input.3.output").String() != "18C" {
+	if !strings.HasPrefix(ojson.GetBytes(second, "input.3.id").String(), "fc_") || ojson.GetBytes(second, "input.3.id").String() == ojson.GetBytes(second, "input.2.id").String() || ojson.GetBytes(second, "input.3.output").String() != "18C" {
 		t.Fatalf("tool output identity or value changed: %s", second)
 	}
-	if gjson.GetBytes(body, "metadata.turn_id").String() != gjson.GetBytes(second, "metadata.turn_id").String() {
+	if ojson.GetBytes(body, "metadata.turn_id").String() != ojson.GetBytes(second, "metadata.turn_id").String() {
 		t.Fatal("tool result changed turn")
 	}
-	if gjson.GetBytes(second, "metadata.agent_iteration").String() != "2" {
+	if ojson.GetBytes(second, "metadata.agent_iteration").String() != "2" {
 		t.Fatal("iteration did not advance")
 	}
 	retry, _, err := Prepare(replay, "account/caller", "session", cache)
@@ -70,11 +69,11 @@ func TestToolRoundTripKeepsFullItemAndTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gjson.GetBytes(third, "metadata.turn_id").String() == gjson.GetBytes(second, "metadata.turn_id").String() {
+	if ojson.GetBytes(third, "metadata.turn_id").String() == ojson.GetBytes(second, "metadata.turn_id").String() {
 		t.Fatal("identical new user text reused the old turn")
 	}
 	rotated, _, err := Prepare(replay, "other-account", "session", cache)
-	if err != nil || gjson.GetBytes(rotated, "input.2.id").String() == "native_item" {
+	if err != nil || ojson.GetBytes(rotated, "input.2.id").String() == "native_item" {
 		t.Fatalf("cross-account replay must rebuild complete client history: %s %v", rotated, err)
 	}
 }
@@ -128,7 +127,7 @@ func TestStreamForwardsTextBeforeTerminalAndConvertsTools(t *testing.T) {
 		t.Fatal("tool item emitted more than once")
 	}
 	completed := CompletedResponse([]byte(received.String()[strings.LastIndex(received.String(), "event: response.completed"):]))
-	if gjson.GetBytes(completed, "output.1.name").String() != "weather" {
+	if ojson.GetBytes(completed, "output.1.name").String() != "weather" {
 		t.Fatalf("terminal output differs: %s", completed)
 	}
 }
@@ -171,9 +170,9 @@ func TestNamespaceCustomTools(t *testing.T) {
 		t.Fatalf("custom input changed: %#v", converted)
 	}
 	for _, effort := range []string{"low", "max", "ultra"} {
-		raw, _ := sjson.SetBytes([]byte(request), "reasoning_effort", effort)
+		raw, _ := ojson.SetBytes([]byte(request), "reasoning_effort", effort)
 		body, _, errPrepare := Prepare(raw, "account", "session", &Cache{})
-		if errPrepare != nil || gjson.GetBytes(body, "reasoning_effort").String() != effort {
+		if errPrepare != nil || ojson.GetBytes(body, "reasoning_effort").String() != effort {
 			t.Fatalf("effort changed: %s %v", body, errPrepare)
 		}
 	}

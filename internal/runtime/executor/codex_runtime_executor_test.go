@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -23,7 +24,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 const runtimeTerminal = `{"type":"response.completed","response":{"id":"resp_test","object":"response","created_at":1234,"model":"runtime-model","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"key\":\"value\"}","status":"completed","extension":true}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"future_field":{"preserve":true}}}`
@@ -127,19 +127,19 @@ func TestCodexRuntimeCPARequestAndResponseFidelity(t *testing.T) {
 	}
 	r := <-captured
 	for _, field := range []string{"input", "instructions", "tool_choice", "future_field"} {
-		equalRuntimeJSON(t, []byte(gjson.GetBytes(body, field).Raw), []byte(gjson.GetBytes(r.Request, field).Raw))
+		equalRuntimeJSON(t, []byte(ojson.GetBytes(body, field).Raw), []byte(ojson.GetBytes(r.Request, field).Raw))
 	}
-	if r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || gjson.GetBytes(r.Request, "prompt_cache_key").String() != "untrusted-session" || !gjson.GetBytes(r.Request, "stream").Bool() {
+	if r.CredentialID != a.ID || r.SourceFormat != "openai-response" || len(r.SessionID) != 64 || ojson.GetBytes(r.Request, "prompt_cache_key").String() != "untrusted-session" || !ojson.GetBytes(r.Request, "stream").Bool() {
 		t.Fatal("incorrect identity/normalization", r)
 	}
-	if gjson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || gjson.GetBytes(r.Request, "tools.#").Int() != 1 || gjson.GetBytes(r.Request, "parallel_tool_calls").Type != gjson.False || gjson.GetBytes(r.Request, "client_metadata.extension").String() != "client-value" {
+	if ojson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || ojson.GetBytes(r.Request, "tools.#").Int() != 1 || ojson.GetBytes(r.Request, "parallel_tool_calls").Type != ojson.False || ojson.GetBytes(r.Request, "client_metadata.extension").String() != "client-value" {
 		t.Fatalf("normal CPA tool preparation or caller metadata was lost: %s", r.Request)
 	}
 	encoded, _ := json.Marshal(r)
 	if bytes.Contains(encoded, []byte("synthetic-bearer")) || bytes.Contains(encoded, []byte("synthetic-cookie")) || bytes.Contains(encoded, []byte("caller-a")) {
 		t.Fatal("caller secret crossed bridge")
 	}
-	equalRuntimeJSON(t, helps.EnsureResponsesUsageDetails([]byte(gjson.Get(runtimeTerminal, "response").Raw)), res.Payload)
+	equalRuntimeJSON(t, helps.EnsureResponsesUsageDetails([]byte(ojson.Get(runtimeTerminal, "response").Raw)), res.Payload)
 	if res.Headers.Get("Set-Cookie") != "" || res.Headers.Get("X-Request-Id") != "upstream-id" {
 		t.Fatal("response headers not filtered")
 	}
@@ -216,10 +216,10 @@ func TestCodexRuntimeCrossProtocolToolCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := <-captured
-			if gjson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || !gjson.GetBytes(r.Request, "input").IsArray() {
+			if ojson.GetBytes(r.Request, "tools.0.name").String() != "lookup" || !ojson.GetBytes(r.Request, "input").IsArray() {
 				t.Fatalf("input translation lost tools: %s", r.Request)
 			}
-			if gjson.GetBytes(res.Payload, tc.outputPath).String() != "lookup" {
+			if ojson.GetBytes(res.Payload, tc.outputPath).String() != "lookup" {
 				t.Fatalf("output translation lost tool call: %s", res.Payload)
 			}
 		})
@@ -229,7 +229,7 @@ func TestCodexRuntimeCrossProtocolToolCalls(t *testing.T) {
 func TestCodexRuntimeRetainsControlsForWorkerAdaptation(t *testing.T) {
 	w, a := runtimeTestMaster(t, "cleanup", func(c *websocket.Conn, m runtimeTestRPC, req bridge.Request) {
 		for _, field := range []string{"previous_response_id", "generate", "prompt_cache_retention", "safety_identifier"} {
-			if !gjson.GetBytes(req.Request, field).Exists() {
+			if !ojson.GetBytes(req.Request, field).Exists() {
 				t.Errorf("CPA erased an unconsumed business control: %s", field)
 			}
 		}

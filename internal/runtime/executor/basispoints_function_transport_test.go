@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/basispoints"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsFunctionRawTransportAcrossUpstreams(t *testing.T) {
@@ -104,8 +104,8 @@ func TestBasispointsFunctionRawTransportAcrossUpstreams(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						call := gjson.GetBytes(final, "output.0")
-						args := gjson.Parse(call.Get("arguments").String())
+						call := ojson.GetBytes(final, "output.0")
+						args := ojson.Parse(call.Get("arguments").String())
 						if call.Get("name").String() != name || args.Get(field).String() != source || args.Get("workdir").String() != "/tmp" || args.Get("extra").Raw != "9007199254740993" || call.Get("encrypted_function_args").Raw != "[]" {
 							t.Fatalf("raw arguments changed: %s", final)
 						}

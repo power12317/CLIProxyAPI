@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -20,7 +21,6 @@ import (
 	sdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
-	"github.com/tidwall/gjson"
 )
 
 type ticketTestStore struct {
@@ -115,7 +115,7 @@ func TestCodexTicketSequentialProbesPreserveBothModels(t *testing.T) {
 						if errRead != nil {
 							return nil, errRead
 						}
-						model := gjson.GetBytes(body, "model").String()
+						model := ojson.GetBytes(body, "model").String()
 						started <- model
 						select {
 						case <-releases[model]:
@@ -288,7 +288,7 @@ func TestCodexTicketAllModelsMemorySurvivesReloadAndReportsStatus(t *testing.T) 
 		ginCtx, _ := gin.CreateTestContext(recorder)
 		ginCtx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 		endpoint.handle(ginCtx)
-		statuses := gjson.GetBytes(recorder.Body.Bytes(), endpoint.path).Array()
+		statuses := ojson.GetBytes(recorder.Body.Bytes(), endpoint.path).Array()
 		if recorder.Code != http.StatusOK || len(statuses) != 4 {
 			t.Fatalf("management returned %d statuses, want 4", len(statuses))
 		}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -23,7 +24,6 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
-	"github.com/tidwall/gjson"
 )
 
 func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
@@ -89,7 +89,7 @@ func TestCodexFinalTurnStateLengthsInLogsAndUsage(t *testing.T) {
 							if errRead != nil {
 								return
 							}
-							captured <- gjson.GetBytes(body, "client_metadata.x-codex-turn-state").String()
+							captured <- ojson.GetBytes(body, "client_metadata.x-codex-turn-state").String()
 							if tc.responseLen > 0 {
 								metadata, _ := json.Marshal(map[string]any{"type": "response.metadata", "headers": map[string]string{"x-codex-turn-state": responseState}})
 								if errWrite := conn.WriteMessage(websocket.TextMessage, metadata); errWrite != nil {

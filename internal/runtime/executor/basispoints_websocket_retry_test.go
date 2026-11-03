@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -23,7 +24,6 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestBasispointsWebsocketRetryWaitKeepsConnection(t *testing.T) {
@@ -74,7 +74,7 @@ func TestBasispointsWebsocketRetryWaitKeepsConnection(t *testing.T) {
 			previous := bridge.ObserveEvent
 			bridge.ObserveEvent = func(raw []byte) {
 				previous(raw)
-				if gjson.GetBytes(raw, "type").String() == "response.failed" {
+				if ojson.GetBytes(raw, "type").String() == "response.failed" {
 					close(observed)
 				}
 			}

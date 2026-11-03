@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -19,7 +20,6 @@ import (
 	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
-	"github.com/tidwall/gjson"
 )
 
 func runtimeImageAuth(t *testing.T, cfg *config.Config, auth *coreauth.Auth) {
@@ -101,10 +101,10 @@ func TestCodexRuntimeImagesRouteAndFinalPayload(t *testing.T) {
 						if req.Operation != strings.TrimPrefix(path, "/v1/") || req.ImageAPI != "images" || req.RequestID != "image-correlation" {
 							t.Errorf("wrong operation or request correlation: %+v", req)
 						}
-						if gjson.GetBytes(req.Request, "prompt").String() != "configured" || gjson.GetBytes(req.Request, "quality").Exists() || gjson.GetBytes(req.Request, "model").String() != "gpt-image-2.5" || gjson.GetBytes(req.Request, "extension.nested").Int() != 42 {
+						if ojson.GetBytes(req.Request, "prompt").String() != "configured" || ojson.GetBytes(req.Request, "quality").Exists() || ojson.GetBytes(req.Request, "model").String() != "gpt-image-2.5" || ojson.GetBytes(req.Request, "extension.nested").Int() != 42 {
 							t.Errorf("final payload rules/model mapping lost: %s", req.Request)
 						}
-						if form && (gjson.GetBytes(req.Request, "images.#").Int() != 2 || !strings.HasSuffix(gjson.GetBytes(req.Request, "images.0.image_url").String(), "AQID") || !strings.HasSuffix(gjson.GetBytes(req.Request, "mask.image_url").String(), "BAUG") || gjson.GetBytes(req.Request, "extra.#").Int() != 2) {
+						if form && (ojson.GetBytes(req.Request, "images.#").Int() != 2 || !strings.HasSuffix(ojson.GetBytes(req.Request, "images.0.image_url").String(), "AQID") || !strings.HasSuffix(ojson.GetBytes(req.Request, "mask.image_url").String(), "BAUG") || ojson.GetBytes(req.Request, "extra.#").Int() != 2) {
 							t.Error("multipart images, mask or repeated fields lost")
 						}
 						contentType := "application/json"
@@ -198,7 +198,7 @@ func TestCodexRuntimeImagesResponsesCompatibility(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			settings, auth := runtimeTestMaster(t, "compat.json", func(c *websocket.Conn, rpc runtimeTestRPC, req bridge.Request) {
-				if req.ImageAPI != "responses" || req.Operation != "images/generations" || gjson.GetBytes(req.Request, "tools.0.type").String() != "image_generation" {
+				if req.ImageAPI != "responses" || req.Operation != "images/generations" || ojson.GetBytes(req.Request, "tools.0.type").String() != "image_generation" {
 					t.Error("image Responses conversion lost")
 				}
 				runtimeTestAccept(c, rpc, req)
@@ -221,11 +221,11 @@ func TestCodexRuntimeImagesPayloadBeforeWorkerNormalization(t *testing.T) {
 			t.Error("image request did not use the Responses worker builder")
 		}
 		for _, field := range []string{"input.0.type", "instructions", "store", "parallel_tool_calls"} {
-			if gjson.GetBytes(req.Request, field).Exists() {
+			if ojson.GetBytes(req.Request, field).Exists() {
 				t.Errorf("CPA did not apply its payload filter before handing off %s", field)
 			}
 		}
-		if gjson.GetBytes(req.Request, "input.0.content").String() != "draw" || gjson.GetBytes(req.Request, "stream").Type != gjson.False {
+		if ojson.GetBytes(req.Request, "input.0.content").String() != "draw" || ojson.GetBytes(req.Request, "stream").Type != ojson.False {
 			t.Errorf("CPA payload overrides were not passed to the worker: %s", req.Request)
 		}
 		runtimeTestAccept(c, rpc, req)

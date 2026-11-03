@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/tidwall/gjson"
+	"github.com/MoeForge/moego/ojson"
 )
 
 // CodexResponsesLiteToolMode describes whether the request's declared tools
@@ -28,11 +28,11 @@ func CodexResponsesLiteHeaderValue(body []byte, headers http.Header) string {
 	if value := strings.TrimSpace(headers.Get("X-OpenAI-Internal-Codex-Responses-Lite")); value != "" {
 		return value
 	}
-	value := gjson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite")
-	if value.Type == gjson.True || value.Type == gjson.False {
+	value := ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite")
+	if value.Type == ojson.True || value.Type == ojson.False {
 		return value.String()
 	}
-	if value.Type == gjson.String {
+	if value.Type == ojson.String {
 		switch strings.ToLower(strings.TrimSpace(value.String())) {
 		case "true":
 			return "true"
@@ -46,9 +46,9 @@ func CodexResponsesLiteHeaderValue(body []byte, headers http.Header) string {
 	// Native HTTP requests have no WS mirror. The CLI emits all_turns only
 	// for Lite and disables parallel calls in the same request. Recover that
 	// explicit wire contract without consulting a model catalog or version.
-	if gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").Exists() &&
-		gjson.GetBytes(body, "reasoning.context").String() == "all_turns" &&
-		gjson.GetBytes(body, "parallel_tool_calls").Type == gjson.False {
+	if ojson.GetBytes(body, "client_metadata.x-codex-turn-metadata").Exists() &&
+		ojson.GetBytes(body, "reasoning.context").String() == "all_turns" &&
+		ojson.GetBytes(body, "parallel_tool_calls").Type == ojson.False {
 		return "true"
 	}
 	return ""
@@ -58,13 +58,13 @@ func CodexResponsesLiteHeaderValue(body []byte, headers http.Header) string {
 // declarations without using the Lite header as evidence. An absent tool list
 // is unknown; an explicit empty tool list is compatible.
 func ClassifyCodexResponsesLiteTools(body []byte) CodexResponsesLiteToolMode {
-	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+	if !ojson.ValidBytes(body) || !ojson.ParseBytes(body).IsObject() {
 		return CodexResponsesLiteToolsIncompatible
 	}
 
 	hasTools := false
 	compatible := true
-	checkTools := func(tools gjson.Result) {
+	checkTools := func(tools ojson.Result) {
 		if !tools.Exists() {
 			return
 		}
@@ -80,8 +80,8 @@ func ClassifyCodexResponsesLiteTools(body []byte) CodexResponsesLiteToolMode {
 		}
 	}
 
-	checkTools(gjson.GetBytes(body, "tools"))
-	input := gjson.GetBytes(body, "input")
+	checkTools(ojson.GetBytes(body, "tools"))
+	input := ojson.GetBytes(body, "input")
 	if input.IsArray() {
 		for _, item := range input.Array() {
 			checkTools(item.Get("tools"))
@@ -96,7 +96,7 @@ func ClassifyCodexResponsesLiteTools(body []byte) CodexResponsesLiteToolMode {
 	return CodexResponsesLiteToolsCompatible
 }
 
-func codexResponsesLiteToolCompatible(tool gjson.Result) bool {
+func codexResponsesLiteToolCompatible(tool ojson.Result) bool {
 	if !tool.IsObject() {
 		return false
 	}
