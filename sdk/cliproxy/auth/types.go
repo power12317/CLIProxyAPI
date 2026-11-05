@@ -1009,6 +1009,17 @@ func headerValueFromHTTPHeader(headers http.Header, name string) string {
 
 type codexClientRequestContextKey struct{}
 
+type codexImageRequestContextKey struct{}
+
+// WithCodexImageRequest selects the original OAuth partition for image execution.
+// Unlike native client detection, this rule is independent of the SIWC preference.
+func WithCodexImageRequest(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, codexImageRequestContextKey{}, true)
+}
+
 // WithCodexClientRequest stores the resolved Codex client detection flag in ctx
 // so asynchronous post-request paths do not read a reused gin.Context.
 func WithCodexClientRequest(ctx context.Context, isCodexClient bool) context.Context {
@@ -1051,6 +1062,9 @@ func CodexClientSIWCAllowed(a *Auth) bool {
 
 // IsCodexUseSIWCForRequest reports whether a request should use the nested SIWC credential section.
 func IsCodexUseSIWCForRequest(ctx context.Context, a *Auth, clientHeaders ...http.Header) bool {
+	if ctx != nil && ctx.Value(codexImageRequestContextKey{}) == true {
+		return false
+	}
 	if !IsCodexUseSIWC(a) {
 		return false
 	}
@@ -1344,6 +1358,37 @@ func CodexSIWCNeedsRefresh(a *Auth, now time.Time) (dueAt time.Time, hasRefresh 
 		return due, true, false
 	}
 	return now, true, true
+}
+
+// OuterAccessTokenExpirationTime returns the expiration time of the outer access_token,
+// ignoring the nested "siwc" section.
+func (a *Auth) OuterAccessTokenExpirationTime() (time.Time, bool) {
+	if a == nil {
+		return time.Time{}, false
+	}
+	tokenStr := authOuterAccessToken(a)
+	if tokenStr == "" {
+		return time.Time{}, false
+	}
+	if a.RejectedAccessToken != "" && a.RejectedAccessToken == tokenStr {
+		return time.Unix(0, 0), true
+	}
+	if jwtExp, ok := parseJWTExp(tokenStr); ok {
+		return jwtExp, true
+	}
+	return a.OuterExpirationTime()
+}
+
+// AccessTokenExpirationTimeForRequest returns the expiration time of the access_token
+// selected for the request context and client headers.
+func (a *Auth) AccessTokenExpirationTimeForRequest(ctx context.Context, clientHeaders ...http.Header) (time.Time, bool) {
+	if a == nil {
+		return time.Time{}, false
+	}
+	if IsCodexUseSIWC(a) && !IsCodexUseSIWCForRequest(ctx, a, clientHeaders...) {
+		return a.OuterAccessTokenExpirationTime()
+	}
+	return a.AccessTokenExpirationTime()
 }
 
 // AccessTokenExpirationTime returns the expiration time of the specific access_token.

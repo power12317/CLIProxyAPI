@@ -39,6 +39,9 @@ const (
 	codexGPTImage25FlareModel    = "gpt-image-2.5-flare"
 	codexGPTImage25SunburstModel = "gpt-image-2.5-sunburst"
 	codexGPTImage25Model         = "gpt-image-2.5"
+	codexGPTImage26FlareModel    = "gpt-image-2.6-flare"
+	codexGPTImage26SunburstModel = "gpt-image-2.6-sunburst"
+	codexGPTImage26Model         = "gpt-image-2.6"
 	codexOpenAIImagesMainModel   = "gpt-5.4-mini"
 )
 
@@ -88,14 +91,13 @@ func (e *CodexExecutor) resolveGPTImage2BaseModel() string {
 }
 
 func (e *CodexExecutor) executeOpenAIImage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
-	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
-	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey, opts.Headers); errSIWC != nil {
+	ctx = cliproxyauth.WithCodexImageRequest(ctx)
+	apiKey, baseURL := codexCredsForRequest(ctx, auth)
+	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey); errSIWC != nil {
 		return resp, errSIWC
 	}
-	if !codexUseSIWCForRequest(ctx, auth, opts.Headers) {
-		if directEndpoint := codexDirectOpenAIImageEndpoint(req, opts); directEndpoint != "" {
-			return e.executeDirectOpenAIImage(ctx, auth, req, opts, directEndpoint)
-		}
+	if directEndpoint := codexDirectOpenAIImageEndpoint(req, opts); directEndpoint != "" {
+		return e.executeDirectOpenAIImage(ctx, auth, req, opts, directEndpoint)
 	}
 
 	prepared, errPrepare := codexPrepareOpenAIImageRequest(req, opts, e.runtime != nil)
@@ -199,14 +201,13 @@ func (e *CodexExecutor) executeOpenAIImage(ctx context.Context, auth *cliproxyau
 }
 
 func (e *CodexExecutor) executeOpenAIImageStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {
-	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
-	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey, opts.Headers); errSIWC != nil {
+	ctx = cliproxyauth.WithCodexImageRequest(ctx)
+	apiKey, baseURL := codexCredsForRequest(ctx, auth)
+	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey); errSIWC != nil {
 		return nil, errSIWC
 	}
-	if !codexUseSIWCForRequest(ctx, auth, opts.Headers) {
-		if directEndpoint := codexDirectOpenAIImageEndpoint(req, opts); directEndpoint != "" {
-			return e.executeDirectOpenAIImageStream(ctx, auth, req, opts, directEndpoint)
-		}
+	if directEndpoint := codexDirectOpenAIImageEndpoint(req, opts); directEndpoint != "" {
+		return e.executeDirectOpenAIImageStream(ctx, auth, req, opts, directEndpoint)
 	}
 
 	prepared, errPrepare := codexPrepareOpenAIImageRequest(req, opts, e.runtime != nil)
@@ -350,6 +351,7 @@ func (e *CodexExecutor) executeOpenAIImageStream(ctx context.Context, auth *clip
 }
 
 func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, endpointPath string) (resp cliproxyexecutor.Response, err error) {
+	ctx = cliproxyauth.WithCodexImageRequest(ctx)
 	body, contentType, model, errPrepare := e.prepareDirectOpenAIImageBody(auth, req, opts, false)
 	if errPrepare != nil {
 		return resp, errPrepare
@@ -358,7 +360,7 @@ func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *clip
 		body = helps.SetBoolIfDifferent(body, "stream", false)
 	}
 
-	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
+	apiKey, baseURL := codexCredsForRequest(ctx, auth)
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
@@ -428,12 +430,13 @@ func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *clip
 }
 
 func (e *CodexExecutor) executeDirectOpenAIImageStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, endpointPath string) (_ *cliproxyexecutor.StreamResult, err error) {
+	ctx = cliproxyauth.WithCodexImageRequest(ctx)
 	body, contentType, model, errPrepare := e.prepareDirectOpenAIImageBody(auth, req, opts, true)
 	if errPrepare != nil {
 		return nil, errPrepare
 	}
 
-	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
+	apiKey, baseURL := codexCredsForRequest(ctx, auth)
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
@@ -777,7 +780,7 @@ func codexOpenAIImageBaseModel(model string) string {
 
 func codexIsDirectOpenAIImageModel(model string) bool {
 	switch strings.ToLower(strings.TrimSpace(model)) {
-	case codexGPTImage15Model, codexDefaultImageToolModel, codexGPTImage25FlareModel, codexGPTImage25SunburstModel, codexGPTImage25Model:
+	case codexGPTImage15Model, codexDefaultImageToolModel, codexGPTImage25FlareModel, codexGPTImage25SunburstModel, codexGPTImage25Model, codexGPTImage26FlareModel, codexGPTImage26SunburstModel, codexGPTImage26Model:
 		return true
 	default:
 		return false
@@ -812,10 +815,6 @@ func (e *CodexExecutor) prepareCodexOpenAIImageDoc(ctx context.Context, auth *cl
 	if e.runtime == nil {
 		for _, field := range []string{"previous_response_id", "prompt_cache_retention", "safety_identifier", "stream_options"} {
 			_ = doc.Delete(field)
-		}
-		if codexUseSIWCForRequest(ctx, auth, opts.Headers) {
-			applyCodexSIWCRequestBodyRulesDoc(doc, false)
-			return doc, nil
 		}
 	}
 	normalizeCodexInstructionsDoc(doc)
