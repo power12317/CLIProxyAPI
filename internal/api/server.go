@@ -202,8 +202,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	engine.Use(corsMiddleware())
 	s.eventMonitor = codexstatus.New(cfg.EventNotifications)
-	engine.Use(s.eventMonitor.Middleware())
+	// Response writers wrap in reverse order: status comments must enter the
+	// compressor as plaintext SSE, including comments emitted during finalization.
 	engine.Use(s.responseCompressionMiddleware())
+	engine.Use(s.eventMonitor.Middleware())
 	openai.SetResponsesWebsocketCompressionEnabled(cfg.Codex.WebsocketCompressionEnabled())
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
 	s.exampleAPIKeySafeModeActive.Store(s.exampleAPIKeySafeModeRequired(cfg))
