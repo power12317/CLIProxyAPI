@@ -68,6 +68,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 	doc := ojson.NewDoc(body)
+	normalizeCodexOutputBudgetDoc(doc)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 
 	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
@@ -154,9 +155,16 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		upstreamBody = applyCodexSIWCWebsocketBodyRules(upstreamBody, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 	}
 	upstreamBody = finalizePayload(upstreamBody)
-	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
+	upstreamModel := strings.TrimSpace(ojson.GetBytes(upstreamBody, "model").String())
+	if upstreamModel != "" && upstreamModel != baseModel {
+		reporter.SetUpstreamModel(upstreamModel)
+	}
+	applyCodexRoutingHint(ctx, wsHeaders, auth, upstreamModel, upstreamBody, opts.Headers)
 	reporter.SetTranslatedReasoningEffort(upstreamBody, to.String())
-	applyModelHeaderOverrides(wsHeaders, baseModel)
+	applyModelHeaderOverrides(wsHeaders, upstreamModel)
+	if errValidate := helps.ValidateCodexHostedImageGenerationDoc(ojson.NewDoc(upstreamBody), wsHeaders, e.cfg, !useSIWC && !codexAuthUsesAPIKey(auth)); errValidate != nil {
+		return resp, errValidate
+	}
 	turnState.ObserveRequest(wsHeaders, upstreamBody)
 
 	var authID, authLabel, authType, authValue string

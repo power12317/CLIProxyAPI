@@ -113,10 +113,20 @@ func applyCodexImageGenerationPolicyWithInjection(body []byte, baseModel string,
 	}
 	injectImages := !stripImages && (cfg == nil || cfg.DisableImageGeneration == config.DisableImageGenerationOff) && !isCodexFreePlanAuth(auth) && !strings.HasSuffix(baseModel, "spark")
 	if codexResponsesLiteBodyMode(body, headers) {
-		return helps.NormalizeCodexLiteCompatibilityTools(body, injectImages, originalRequests...)
+		// Keep hosted images intact for the official final-payload capability check.
+		// Do not convert them into client tools or inject a replacement image tool.
+		doc := ojson.NewDoc(body)
+		if !codexAuthUsesAPIKey(auth) {
+			normalizeCodexImageGenerationToolsDoc(doc)
+		}
+		return helps.NormalizeCodexLiteCompatibilityTools(doc.Bytes(), false, originalRequests...)
 	}
-	if !injectImages {
-		return body, nil
+	doc := ojson.NewDoc(body)
+	if injectImages {
+		ensureImageGenerationToolDoc(doc, baseModel, auth, headers)
 	}
-	return ensureImageGenerationTool(body, baseModel, auth), nil
+	if !codexAuthUsesAPIKey(auth) {
+		normalizeCodexImageGenerationToolsDoc(doc)
+	}
+	return doc.Bytes(), nil
 }

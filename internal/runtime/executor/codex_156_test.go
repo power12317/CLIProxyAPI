@@ -20,7 +20,7 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
-func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
+func TestCodex156LiteSearchWithoutImageInjectionAcrossTransports(t *testing.T) {
 	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
 		for _, intent := range []string{"header", "body-mirror", "official-body-mirror", "configured"} {
 			for _, transport := range []string{"http", "http-stream", "ws", "ws-stream"} {
@@ -56,7 +56,7 @@ func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
 					defer server.Close()
 					cfg := &config.Config{}
 					auth := &cliproxyauth.Auth{Provider: "codex", ID: t.Name(), Attributes: map[string]string{"api_key": "key", "base_url": server.URL}}
-					req := cliproxyexecutor.Request{Model: model, Payload: []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":"search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"tools":[{"type":"web_search_preview"},{"type":"image_generation"}]}`)}
+					req := cliproxyexecutor.Request{Model: model, Payload: []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":"search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false,"tools":[{"type":"web_search_preview"}]}`)}
 					req.Payload, _ = ojson.SetBytes(req.Payload, "model", model)
 					opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, Headers: http.Header{http.CanonicalHeaderKey(codexResponsesLiteHeader): {"true"}}}
 					switch intent {
@@ -99,12 +99,15 @@ func TestCodex156LiteInjectionAcrossTransports(t *testing.T) {
 						t.Fatalf("tools: %s", body)
 					}
 					descriptors := util.CollectResponsesToolWinners(ojson.ParseBytes(body))
-					for _, name := range []string{"image_gen__imagegen", "web__run"} {
+					for _, name := range []string{"web__run"} {
 						if _, ok := descriptors[name]; !ok {
 							t.Fatalf("missing %s: %s", name, body)
 						}
 					}
-					assertCodexReservedWireFixtures(t, body)
+					if helps.HasCodexImageTool(body) {
+						t.Fatal("Lite search request gained an image tool")
+					}
+					assertCodexReservedWireFixtures(t, body, "web")
 					if strings.HasPrefix(transport, "ws") && ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").String() != "true" {
 						t.Fatal("missing per-request mirror")
 					}
@@ -130,13 +133,13 @@ func TestCodex156LitePolicyMatrix(t *testing.T) {
 		descriptors := util.CollectResponsesToolWinners(ojson.ParseBytes(got))
 		_, image := descriptors["image_gen__imagegen"]
 		_, web := descriptors["web__run"]
-		if image != (mode == config.DisableImageGenerationOff) || !web {
+		if image || helps.HasCodexImageTool(got) != (mode == config.DisableImageGenerationOff) || !web {
 			t.Fatalf("mode=%s: %s", mode, got)
 		}
 	}
 	cfg := &config.Config{}
-	if got := mustApplyCodexImagePolicy(t, base, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", true); !helps.HasCodexImageTool(got) || util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {
-		t.Fatalf("official Lite request not normalized: %s", got)
+	if got := mustApplyCodexImagePolicy(t, base, "gpt-5.6-sol", nil, cfg, headers, "/v1/responses", true); !helps.HasCodexImageTool(got) || !strings.Contains(string(got), `"type":"image_generation"`) {
+		t.Fatalf("hosted image was converted instead of retaining official validation: %s", got)
 	}
 	for _, parallel := range []any{true, "false", nil, 0} {
 		body, _ := ojson.SetBytes(base, "parallel_tool_calls", parallel)
@@ -416,7 +419,7 @@ func TestCodex156OAuthFinalIdentityAcrossTransports(t *testing.T) {
 			if !foundCompaction || !foundTools {
 				t.Fatalf("native items changed: %s", got)
 			}
-			if helps.HasCodexImageTool(got) != (transport != "compact") {
+			if helps.HasCodexImageTool(got) {
 				t.Fatalf("incorrect image injection for %s: %s", transport, got)
 			}
 		})

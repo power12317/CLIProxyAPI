@@ -46,7 +46,7 @@ func TestCodexDuplexTurnStateReusedBeforeCompletion(t *testing.T) {
 						return
 					}
 					if ticketEnabled {
-						assertCodexReservedWireFixtures(t, body)
+						assertCodexReservedWireFixtures(t, body, "web")
 						if !ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Bool() {
 							t.Error("duplex create lost Lite mirror")
 						}

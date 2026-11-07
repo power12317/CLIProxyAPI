@@ -18,9 +18,12 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
-func assertCodexReservedWireFixtures(t *testing.T, body []byte) {
+func assertCodexReservedWireFixtures(t *testing.T, body []byte, namespaces ...string) {
 	t.Helper()
-	for _, namespace := range []string{"image_gen", "web"} {
+	if len(namespaces) == 0 {
+		namespaces = []string{"image_gen", "web"}
+	}
+	for _, namespace := range namespaces {
 		raw, err := os.ReadFile("helps/codex_lite_fixtures/0.156.0/" + namespace + ".json")
 		if err != nil {
 			t.Fatal(err)
@@ -102,7 +105,7 @@ func TestCodexReservedSchemaRespectsImagePolicyAndModel(t *testing.T) {
 	request := []byte(`{"model":"gpt-6-astra","input":[],"tools":[{"type":"web_search"}],"reasoning":{"context":"all_turns"},"parallel_tool_calls":false}`)
 	request, _ = ojson.SetBytes(request, "client_metadata.x-codex-turn-metadata", "{}")
 	got = mustApplyCodexImagePolicy(t, request, "gpt-6-astra", nil, &config.Config{}, headers, "/v1/responses", true)
-	assertCodexReservedWireFixtures(t, got)
+	assertCodexReservedWireFixtures(t, got, "web")
 	if util.ClassifyCodexResponsesLiteTools(got) != util.CodexResponsesLiteToolsCompatible {
 		t.Fatal("reserved functions no longer satisfy Lite tool types")
 	}
