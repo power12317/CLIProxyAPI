@@ -42,6 +42,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	if err != nil {
 		return nil, err
 	}
+	if prepared.upstreamModel != "" && prepared.upstreamModel != baseModel {
+		reporter.SetUpstreamModel(prepared.upstreamModel)
+	}
 	from := prepared.from
 	responseFormat := prepared.responseFormat
 	to := prepared.to
@@ -896,6 +899,7 @@ type codexWebsocketPrepared struct {
 	originalPayload      []byte
 	clientBody           []byte
 	upstreamBody         []byte
+	upstreamModel        string
 	wsURL                string
 	wsHeaders            http.Header
 	turnState            *helps.CodexTurnState
@@ -941,6 +945,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 	doc := ojson.NewDoc(body)
+	normalizeCodexOutputBudgetDoc(doc)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 
 	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
@@ -1027,8 +1032,12 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	if useSIWC {
 		clientBody = upstreamBody
 	}
-	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
-	applyModelHeaderOverrides(wsHeaders, baseModel)
+	upstreamModel := strings.TrimSpace(ojson.GetBytes(upstreamBody, "model").String())
+	applyCodexRoutingHint(ctx, wsHeaders, auth, upstreamModel, upstreamBody, opts.Headers)
+	applyModelHeaderOverrides(wsHeaders, upstreamModel)
+	if errValidate := helps.ValidateCodexHostedImageGenerationDoc(ojson.NewDoc(upstreamBody), wsHeaders, e.cfg, !useSIWC && !codexAuthUsesAPIKey(auth)); errValidate != nil {
+		return nil, errValidate
+	}
 	turnState.ObserveRequest(wsHeaders, upstreamBody)
 
 	return &codexWebsocketPrepared{
@@ -1039,6 +1048,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		originalPayload:      originalPayload,
 		clientBody:           clientBody,
 		upstreamBody:         upstreamBody,
+		upstreamModel:        upstreamModel,
 		wsURL:                wsURL,
 		wsHeaders:            wsHeaders,
 		turnState:            turnState,

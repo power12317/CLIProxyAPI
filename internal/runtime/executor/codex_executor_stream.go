@@ -64,6 +64,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 	doc := ojson.NewDoc(body)
+	normalizeCodexOutputBudgetDoc(doc)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 
 	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
@@ -156,16 +157,20 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		replaceCodexRequestBody(httpReq, encodedBody)
 		httpReq.Header.Set("Content-Encoding", "zstd")
 	}
+	upstreamModel := strings.TrimSpace(ojson.GetBytes(turnStateBody, "model").String())
+	if upstreamModel != "" && upstreamModel != baseModel {
+		reporter.SetUpstreamModel(upstreamModel)
+	}
 	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
 	helps.RestoreCodexMetadataHeaders(httpReq.Header, turnStateBody)
-	applyCodexRoutingHint(ctx, httpReq.Header, auth, baseModel, turnStateBody, opts.Headers)
-	applyModelHeaderOverrides(httpReq.Header, baseModel)
+	applyCodexRoutingHint(ctx, httpReq.Header, auth, upstreamModel, turnStateBody, opts.Headers)
+	applyModelHeaderOverrides(httpReq.Header, upstreamModel)
 	if officialOAuthRequest {
 		configuredUA, configuredBeta := codexHeaderDefaults(e.cfg, auth)
 		helps.ApplyCodexOAuthHeaders(httpReq.Header, oauthIdentity, true, configuredUA, configuredBeta)
 		applyCodexConfiguredHeaderOverrides(httpReq, auth, opts.Headers)
-		applyModelHeaderOverrides(httpReq.Header, baseModel)
+		applyModelHeaderOverrides(httpReq.Header, upstreamModel)
 		httpReq.Header.Del("Cookie")
 		httpReq.Header.Set("Authorization", "Bearer "+helps.CodexOAuthAccessToken(auth))
 		httpReq.Header.Set("Chatgpt-Account-Id", helps.CodexOAuthAccountID(auth))
@@ -179,6 +184,9 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	turnState.ApplyHeaders(httpReq.Header)
 	if errTicket := helps.ApplyCodexTurnStateTicket(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, httpReq.Header); errTicket != nil {
 		return nil, errTicket
+	}
+	if errValidate := helps.ValidateCodexHostedImageGenerationDoc(ojson.NewDoc(turnStateBody), httpReq.Header, e.cfg, !useSIWC && !codexAuthUsesAPIKey(auth)); errValidate != nil {
+		return nil, errValidate
 	}
 	if e.runtime != nil {
 		return e.runtime.executeStreamViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, replayScope)

@@ -143,7 +143,8 @@ func NormalizeCodexLiteCompatibilityTools(body []byte, injectImages bool, origin
 	if errReserved != nil {
 		return nil, errReserved
 	}
-	images := injectImages || codexHasHostedTool(body, "image_generation")
+	// Hosted images remain hosted unless image compatibility is explicitly requested.
+	images := injectImages
 	web := codexHasHostedTool(body, "web_search", "web_search_preview", "web_search_preview_2025_03_11")
 	// Remove hosted declarations before adding their client-executed counterparts.
 	transform := func(tools ojson.Result) ([]byte, bool) {
