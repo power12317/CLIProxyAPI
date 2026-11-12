@@ -1,0 +1,91 @@
+name: Recover Basispoints macOS arm64 release
+
+on:
+  push:
+    branches:
+      - codex/bps-release-recovery
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bps-release-recovery-v2026.11.12-1
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v2026.11.12-1
+  SOURCE_COMMIT: db224de5be0c0814c9edfc6ee8e91a539a6fe072
+  GO_VERSION: '1.26.10'
+
+jobs:
+  recover-darwin-arm64:
+    if: github.repository == 'power12317/CLIProxyAPI'
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: v2026.11.12-1
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Verify immutable source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git rev-parse "${RELEASE_TAG}^{}")" = "$SOURCE_COMMIT"
+      - name: Refresh models catalog
+        shell: bash
+        run: bash .github/scripts/refresh-model-catalogs.sh
+      - name: Build and verify arm64 archive on Intel macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          commit="$(git rev-parse --short HEAD)"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          archive_dir="dist/darwin-arm64/archive"
+          archive_name="CLIProxyAPI_${release_version}_darwin_aarch64.tar.gz"
+          mkdir -p "$archive_dir"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC=clang go build \
+            -ldflags="-s -w -X main.Version=${release_version} -X main.Commit=${commit} -X main.BuildDate=${build_date}" \
+            -o "$archive_dir/cli-proxy-api" ./cmd/server/
+          file "$archive_dir/cli-proxy-api" | tee dist/binary-format.txt
+          grep -q 'arm64' dist/binary-format.txt
+          go version -m "$archive_dir/cli-proxy-api" | tee dist/buildinfo.txt
+          grep -q 'GOARCH=arm64' dist/buildinfo.txt
+          grep -q "main.Commit=${commit}" dist/buildinfo.txt
+          cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64-recovery
+          path: |
+            dist/CLIProxyAPI_*.tar.gz
+            dist/binary-format.txt
+            dist/buildinfo.txt
+          if-no-files-found: error
+      - name: Upload missing archive and rebuild all release checksums
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          archive="dist/CLIProxyAPI_${RELEASE_TAG#v}_darwin_aarch64.tar.gz"
+          gh release upload "$RELEASE_TAG" "$archive"
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          gh release download "$RELEASE_TAG" \
+            --pattern 'CLIProxyAPI_*.tar.gz' \
+            --pattern 'CLIProxyAPI_*.zip' \
+            --dir "$tmp_dir"
+          (
+            cd "$tmp_dir"
+            shasum -a 256 CLIProxyAPI_*.tar.gz CLIProxyAPI_*.zip | sort -k2 > checksums.txt
+          )
+          test "$(wc -l < "$tmp_dir/checksums.txt" | tr -d ' ')" = 10
+          gh release upload "$RELEASE_TAG" "$tmp_dir/checksums.txt" --clobber
