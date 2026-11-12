@@ -108,6 +108,22 @@ func (e *CodexAutoExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.
 }
 
 func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if e != nil && e.basispointsExec.enabledFor(auth) && !isCodexOpenAIImageRequest(opts) {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
+			helps.LogBasispointsNativeToolRoute(ctx, reason)
+		} else {
+			result, err := e.basispointsExec.Execute(ctx, auth, req, opts)
+			if reason := basispoints.RequestedNativeTool(err); reason != "" {
+				if ctx.Err() != nil {
+					return cliproxyexecutor.Response{}, ctx.Err()
+				}
+				helps.LogBasispointsNativeToolRoute(ctx, reason)
+			} else {
+				return result, err
+			}
+		}
+	}
 	ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
 	if e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
 		cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
@@ -135,22 +151,6 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 			helps.LogBasispointsNativeToolRoute(ctx, "openai_image_request")
 		}
 		return e.httpExec.Execute(ctx, auth, req, opts)
-	}
-	if e != nil && e.basispointsExec.enabled() {
-		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
-		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
-			helps.LogBasispointsNativeToolRoute(ctx, reason)
-		} else {
-			result, err := e.basispointsExec.Execute(ctx, auth, req, opts)
-			if reason := basispoints.RequestedNativeTool(err); reason != "" {
-				if ctx.Err() != nil {
-					return cliproxyexecutor.Response{}, ctx.Err()
-				}
-				helps.LogBasispointsNativeToolRoute(ctx, reason)
-			} else {
-				return result, err
-			}
-		}
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return cliproxyexecutor.Response{}, fmt.Errorf("codex auto executor: executor is nil")
@@ -187,6 +187,25 @@ func (e *CodexAutoExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	if e != nil && e.basispointsExec.enabledFor(auth) && !isCodexOpenAIImageRequest(opts) {
+		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
+		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
+			helps.LogBasispointsNativeToolRoute(ctx, reason)
+		} else {
+			result, err := e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
+			if err == nil && basispoints.OptionalNativeTools(req.Payload) {
+				result, err = helps.BufferNativeToolDecision(ctx, result)
+			}
+			if reason := basispoints.RequestedNativeTool(err); reason != "" {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				helps.LogBasispointsNativeToolRoute(ctx, reason)
+			} else {
+				return result, err
+			}
+		}
+	}
 	ctx = cliproxyexecutor.WithCodexRuntimeRoute(ctx)
 	if e != nil && e.httpExec != nil && bridge.Enabled(e.httpExec.cfg) && cliproxyauth.IsCodexRuntimeOwnedAuth(auth) {
 		cliproxyexecutor.RequireCodexRuntimeRoute(ctx)
@@ -225,25 +244,6 @@ func (e *CodexAutoExecutor) executeNativeStream(ctx context.Context, auth *clipr
 			helps.LogBasispointsNativeToolRoute(ctx, "openai_image_request")
 		}
 		return e.httpExec.ExecuteStream(ctx, auth, req, opts)
-	}
-	if e != nil && e.basispointsExec.enabled() {
-		cliproxyexecutor.ReportUpstreamWebsocket(ctx, false)
-		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
-			helps.LogBasispointsNativeToolRoute(ctx, reason)
-		} else {
-			result, err := e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
-			if err == nil && basispoints.OptionalNativeTools(req.Payload) {
-				result, err = helps.BufferNativeToolDecision(ctx, result)
-			}
-			if reason := basispoints.RequestedNativeTool(err); reason != "" {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				helps.LogBasispointsNativeToolRoute(ctx, reason)
-			} else {
-				return result, err
-			}
-		}
 	}
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return nil, fmt.Errorf("codex auto executor: executor is nil")

@@ -32,6 +32,9 @@ func StreamError(raw []byte) error {
 	if detail == nil {
 		detail, _ = value["error"].(object)
 	}
+	if detail == nil && value["type"] == "error" {
+		detail = value
+	}
 	status := upstreamErrorStatus(value, detail)
 	headers := make(http.Header)
 	for _, source := range []object{value, response, detail} {
@@ -67,6 +70,9 @@ func upstreamErrorStatus(value, detail object) int {
 		}
 	}
 	code := strings.ToLower(strings.TrimSpace(stringValue(detail["code"])))
+	if code == "basispoints_server_draining" || value["type"] == "basispoints.response.server_draining" {
+		return http.StatusServiceUnavailable
+	}
 	kind := strings.ToLower(strings.TrimSpace(stringValue(detail["type"])))
 	if kind == "rate_limit_error" || code == "rate_limit_exceeded" || code == "slow_down" {
 		return http.StatusTooManyRequests

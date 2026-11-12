@@ -2643,6 +2643,7 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 	serverPongCh := make(chan string, 1)
 	inWriteHook := make(chan struct{})
 	pongDeliveredDuringWrite := make(chan struct{})
+	payloadReceived := make(chan struct{}, 1)
 
 	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
 		close(inWriteHook)
@@ -2676,6 +2677,11 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 					readErrCh <- errRead
 					return
 				}
+				select {
+				case payloadReceived <- struct{}{}:
+				default:
+				}
+
 			}
 		}()
 
@@ -2703,6 +2709,15 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 		}
 
 		// Now send terminal response.
+		// Keep the peer alive until the released write hook has actually
+		// delivered the request; an early close can spuriously retry the hook.
+		select {
+		case <-payloadReceived:
+		case <-time.After(2 * time.Second):
+			t.Error("request payload was not received after pong delivery")
+			return
+		}
+
 		respPayload := []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))
@@ -2743,6 +2758,7 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 	serverPongCh := make(chan string, 1)
 	inWriteHook := make(chan struct{})
 	pongDeliveredDuringWrite := make(chan struct{})
+	payloadReceived := make(chan struct{}, 1)
 
 	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
 		close(inWriteHook)
@@ -2772,6 +2788,11 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 				if _, _, errRead := conn.ReadMessage(); errRead != nil {
 					return
 				}
+				select {
+				case payloadReceived <- struct{}{}:
+				default:
+				}
+
 			}
 		}()
 
@@ -2795,6 +2816,15 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			close(pongDeliveredDuringWrite)
 		case <-time.After(2 * time.Second):
 			t.Errorf("pong was not received while payload write was in progress on sessionless connection")
+			return
+		}
+
+		// Keep the peer alive until the released write hook has actually
+		// delivered the request; an early close can spuriously retry the hook.
+		select {
+		case <-payloadReceived:
+		case <-time.After(2 * time.Second):
+			t.Error("request payload was not received after pong delivery")
 			return
 		}
 
@@ -2835,6 +2865,7 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_NonstreamSessionless(t *testi
 	serverPongCh := make(chan string, 1)
 	inWriteHook := make(chan struct{})
 	pongDeliveredDuringWrite := make(chan struct{})
+	payloadReceived := make(chan struct{}, 1)
 
 	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
 		close(inWriteHook)
@@ -2864,6 +2895,11 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_NonstreamSessionless(t *testi
 				if _, _, errRead := conn.ReadMessage(); errRead != nil {
 					return
 				}
+				select {
+				case payloadReceived <- struct{}{}:
+				default:
+				}
+
 			}
 		}()
 
@@ -2887,6 +2923,15 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_NonstreamSessionless(t *testi
 			close(pongDeliveredDuringWrite)
 		case <-time.After(2 * time.Second):
 			t.Errorf("pong was not received while payload write was in progress on nonstream sessionless connection")
+			return
+		}
+
+		// Keep the peer alive until the released write hook has actually
+		// delivered the request; an early close can spuriously retry the hook.
+		select {
+		case <-payloadReceived:
+		case <-time.After(2 * time.Second):
+			t.Error("request payload was not received after pong delivery")
 			return
 		}
 

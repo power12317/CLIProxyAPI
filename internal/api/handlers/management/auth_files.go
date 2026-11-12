@@ -861,6 +861,14 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
 	}
 	if quota.v8 && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		entry["siwc_bind_supported"] = siwcBindEligible(auth)
+		entry["basispoints_bind_supported"] = siwcBindEligible(auth)
+		bpsStatus := basispointsStatusFields(auth)
+		entry["basispoints_bound"] = bpsStatus["bound"]
+		entry["basispoints_status"] = bpsStatus["status"]
+		entry["use_basispoints"] = bpsStatus["use_basispoints"]
+		if expiry, ok := bpsStatus["expires_at"]; ok {
+			entry["basispoints_expires_at"] = expiry
+		}
 		entry["use_siwc"] = coreauth.IsCodexUseSIWC(auth)
 		entry["siwc_status"] = string(auth.CodexSIWCStatus(time.Now().UTC()))
 		section, _ := auth.Metadata["siwc"].(map[string]any)

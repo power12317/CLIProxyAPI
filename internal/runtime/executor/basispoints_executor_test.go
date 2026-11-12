@@ -21,6 +21,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 	cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}, ResponseSteering: true}}
 	executor := NewCodexAutoExecutor(cfg)
 	auth := &coreauth.Auth{ID: "basispoints-route-test", Provider: "codex", Metadata: map[string]any{"access_token": "test-token", "account_id": "test-account", "websockets": true}}
+	withBasispointsTestGrant(auth)
 	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-6-luna", "future-model", "gpt-image-2.5"} {
 		for _, effort := range []string{"", "low", "max", "ultra"} {
 			t.Run(model+"/"+effort, func(t *testing.T) {
@@ -34,7 +35,7 @@ func TestBasispointsRoutesEveryModelAndPreservesEffort(t *testing.T) {
 					if r.URL.String() != basispoints.ResponsesURL {
 						t.Fatalf("wrong upstream: %s", r.URL)
 					}
-					for k, v := range map[string]string{"Authorization": "Bearer test-token", "Chatgpt-Account-Id": "test-account", "X-OpenAI-Account-Id": "test-account", "X-Basispoints-Auth-Mode": "chatgpt"} {
+					for k, v := range map[string]string{"Authorization": "Bearer " + basispointsOfficeTestToken("test-account"), "Chatgpt-Account-Id": "test-account", "X-OpenAI-Account-Id": "test-account", "X-Basispoints-Auth-Mode": "chatgpt"} {
 						if r.Header.Get(k) != v {
 							t.Fatalf("header %s = %q", k, r.Header.Get(k))
 						}
@@ -86,6 +87,7 @@ func TestBasispointsManagerToolReplayAllowsAccountRotation(t *testing.T) {
 	manager.RegisterExecutor(NewCodexAutoExecutor(cfg))
 	for _, id := range []string{"bps-replay-account-a", "bps-replay-account-b"} {
 		auth := &coreauth.Auth{ID: id, Provider: "codex", Status: coreauth.StatusActive, Metadata: map[string]any{"access_token": "token", "account_id": id}}
+		withBasispointsTestGrant(auth)
 		if _, err := manager.Register(t.Context(), auth); err != nil {
 			t.Fatal(err)
 		}
@@ -131,6 +133,7 @@ func TestBasispointsManagerToolReplayAllowsAccountRotation(t *testing.T) {
 func TestBasispointsDisabledUsesOriginalUpstream(t *testing.T) {
 	executor := NewCodexAutoExecutor(&config.Config{})
 	auth := &coreauth.Auth{ID: "disabled", Provider: "codex", Metadata: map[string]any{"access_token": "test-token", "account_id": "test-account"}}
+	withBasispointsTestGrant(auth)
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host != "chatgpt.com" {
 			t.Fatalf("upstream = %s", r.URL)
@@ -146,6 +149,7 @@ func TestBasispointsDisabledUsesOriginalUpstream(t *testing.T) {
 func TestBasispointsStreamingAndCancellation(t *testing.T) {
 	executor := NewCodexAutoExecutor(&config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}})
 	auth := &coreauth.Auth{ID: "stream-cancel", Provider: "codex", Metadata: map[string]any{"access_token": "test-token", "account_id": "test-account"}}
+	withBasispointsTestGrant(auth)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	reader, writer := io.Pipe()

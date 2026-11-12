@@ -392,6 +392,21 @@ func applyAuthFileFieldsPatch(targetAuth *coreauth.Auth, req map[string]json.Raw
 		if errDecode != nil {
 			return &authFileFieldPatchError{message: fmt.Sprintf("invalid field %s", fieldPath)}
 		}
+		if rootAuthFileField(fieldPath) == "basispoints" {
+			return &authFileFieldPatchError{message: "Basispoints credentials must be changed through separate authorization"}
+		}
+		if rootAuthFileField(fieldPath) == "use_basispoints" {
+			if fieldPath != "use_basispoints" {
+				return &authFileFieldPatchError{message: "use_basispoints does not support nested fields"}
+			}
+			if _, ok := value.(bool); !ok {
+				return &authFileFieldPatchError{message: "use_basispoints must be boolean"}
+			}
+			if !coreauth.IsCodexAuthRecord(targetAuth) {
+				return &authFileFieldPatchError{message: "Basispoints requires a Codex account"}
+			}
+			delete(targetAuth.Attributes, "use_basispoints")
+		}
 		if rootAuthFileField(fieldPath) == "excluded_models" {
 			if fieldPath != "excluded_models" {
 				return &authFileFieldPatchError{message: "excluded_models does not support nested fields"}

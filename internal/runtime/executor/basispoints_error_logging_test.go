@@ -67,6 +67,7 @@ func TestBasispointsFullErrorFiles(t *testing.T) {
 						return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(payload))}, nil
 					})))
 					auth := &coreauth.Auth{ID: t.Name(), FileName: "diagnostic-auth.json", Provider: "codex", Metadata: map[string]any{"access_token": "upstream-secret-key", "account_id": "account"}}
+					withBasispointsTestGrant(auth)
 					exec := NewBasispointsExecutor(cfg)
 					req := coreexecutor.Request{Model: "gpt-6-astra", Payload: body}
 					opts := coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: body}

@@ -17,6 +17,14 @@ import (
 // A replay bridge materializes the client's history before choosing upstream
 // transport. The executor can still compress it into a connection-local delta.
 func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName string) bool {
+	if h != nil {
+		auths, _ := h.responsesWebsocketAvailableAuthsForModel(modelName)
+		for _, auth := range auths {
+			if coreauth.IsCodexUseBasispoints(auth) {
+				return true
+			}
+		}
+	}
 	if h == nil || h.Cfg == nil || (!h.Cfg.CodexBasispoints && (!h.Cfg.CodexForceWebsocket || h.Cfg.CodexResponseSteering)) {
 		return false
 	}
@@ -46,6 +54,9 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketForceBridge(modelName stri
 }
 
 func (h *OpenAIResponsesAPIHandler) websocketAuthEnabled(auth *coreauth.Auth) bool {
+	if coreauth.IsCodexUseBasispoints(auth) {
+		return false
+	}
 	if coreauth.IsCodexRuntimeOwnedAuth(auth) {
 		return false
 	}
@@ -88,6 +99,9 @@ func websocketUpstreamSupportsIncrementalInput(attributes map[string]string, met
 func (h *OpenAIResponsesAPIHandler) websocketUpstreamSupportsIncrementalInputForModel(modelName string) bool {
 	auths, _ := h.responsesWebsocketAvailableAuthsForModel(modelName)
 	for _, auth := range auths {
+		if coreauth.IsCodexUseBasispoints(auth) {
+			return false
+		}
 		if h.Cfg != nil && h.Cfg.CodexBasispoints && auth != nil && strings.EqualFold(auth.Provider, "codex") {
 			continue
 		}
@@ -179,6 +193,9 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketUsesUpstreamWebsocketPasst
 }
 
 func responsesWebsocketAuthSupportsIncrementalInput(auth *coreauth.Auth) bool {
+	if coreauth.IsCodexUseBasispoints(auth) {
+		return false
+	}
 	if auth == nil {
 		return false
 	}

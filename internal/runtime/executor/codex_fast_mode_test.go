@@ -52,6 +52,7 @@ func TestCodexFastModeHTTPAndBasispoints(t *testing.T) {
 						auth.ID = t.Name()
 						ctx := context.Background()
 						if basispoints {
+							withBasispointsTestGrant(auth)
 							ctx = context.WithValue(ctx, "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 								if r.URL.Host != "bps.openai.com" {
 									t.Errorf("unexpected upstream: %s", r.URL)

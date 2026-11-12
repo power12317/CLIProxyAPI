@@ -390,7 +390,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	if h != nil {
 		if cfg := h.CurrentConfig(); cfg != nil {
 			requestLogEnabled = cfg.RequestLog
-			codexResponseSteering = cfg.CodexResponseSteering && !cfg.CodexBasispoints
+			codexResponseSteering = cfg.CodexResponseSteering && !cfg.CodexBasispoints && !h.AuthManager.HasBasispointsAccounts()
 		}
 	}
 	wsTimelineLog := newWebsocketTimelineLog(requestLogEnabled, websocketTimelineSourceFromContext(c))

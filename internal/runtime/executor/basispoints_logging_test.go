@@ -35,6 +35,7 @@ func TestBasispointsGinLogsUseCodexFieldsOnSuccessAndRejection(t *testing.T) {
 				hook.Reset()
 				cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}}
 				auth := &coreauth.Auth{ID: t.Name(), FileName: "/auths/basispoints-test.json", Provider: "codex", Metadata: map[string]any{"access_token": "test-secret-token", "account_id": "account"}}
+				withBasispointsTestGrant(auth)
 				t.Cleanup(func() { helps.InvalidateCodexTurnStates(auth.ID) })
 				body := []byte(`{"model":"gpt-6-astra","input":"hello","client_metadata":{"session_id":"11111111-session","turn_id":"22222222-turn"}}`)
 				server := gin.New()
@@ -122,6 +123,7 @@ func TestBasispointsExplicitHostedToolsUseNativeCodexWithoutRemovingDeclarations
 				cfg := &config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationPassthrough}, Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}}
 				executor := NewCodexAutoExecutor(cfg)
 				auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "test-token", "account_id": "test-account"}}
+				withBasispointsTestGrant(auth)
 				calls := 0
 				ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 					calls++

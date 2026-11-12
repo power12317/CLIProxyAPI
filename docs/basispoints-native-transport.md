@@ -1,5 +1,87 @@
 # Basispoints native request and WebSocket transport
 
+## Independent Office authorization
+
+Basispoints now requires its own Office OAuth grant; Codex and SIWC tokens are
+never substituted. The browser PKCE flow follows sub2api's Office profile and
+official extension build `1793753700`. The fixed Office client is
+`app_fnr0pYvVwwFDocDumLG3H2Bp`; token exchange and refresh use
+`https://auth.openai.com/oauth/token?unified=true`, without the Codex refresh scope.
+The registered callback remains on the official extension origin and is pasted
+back into the management UI. No loopback listener or default device flow is added.
+
+Bind an existing account with `POST /v8/management/oauth/basispoints/bind` and
+`{"name":"codex.json"}`. Submit its callback through the shared v8 OAuth callback
+endpoint with `provider:"basispoints"`, poll/cancel using the shared OAuth session
+endpoints, and read status at `/v8/management/oauth/basispoints/status?name=...`.
+The response exposes `off`, `valid`, or `invalid`, without credential values.
+
+Binding atomically saves the independent `basispoints` partition and enables
+`use_basispoints`. Saving that switch as `false` disables use while retaining the
+grant. The account switch takes precedence over the legacy global routing switch.
+Missing Office authorization returns `basispoints_authorization_required` before
+upload or generation. Workspace, user identity, Office client, and ID-token audience
+are checked. Office rotation is serialized by the credential file lock and saved
+before use; failures and HTTP 401 rejection affect only the Office grant.
+
+Office routing precedes the Codex runtime; native capability handoff still uses
+the original native path and its credentials. Per-account selection also enables
+the full-history bridge. Payload rules run once after built-in normalization,
+attachment upload, and fast-mode adaptation, before transport framing.
+
+## WebSocket control semantics
+
+Cancellation sends `basispoints.response.cancel` with the current request ID and
+resume token before closing, when the transport writer is available. It never
+waits for an active large write to finish before closing that socket.
+
+Server draining retires the connection and rotates affinity, including while idle.
+An initial draining rejection can recreate a generation only within the configured
+request-retry budget, before a response or `upstream_sent` marker and outside
+recovery. Draining during recovery or after dispatch never regenerates the request.
+
+The four `basispoints_resume_not_found/gap/invalid/already_attached` errors terminate
+recovery with the original error. Resume-not-found rotates affinity only during a
+pending resume and with `error.safe_to_rotate_affinity:true`. No connection-age
+rotation or new network deadlines are introduced.
+
+## Structured output and client history validation
+
+`text.format` supports `json_object` and `json_schema` through a developer
+instruction and local terminal-answer validation. This is not upstream constrained
+decoding. JSON-object mode requires an object, not a scalar or array. Schemas
+resolve in-document references only and cannot fetch network or file resources.
+Ordinary text remains incremental; structured message events wait for the terminal
+response, then use its validated message items. Intermediate message snapshots and
+deltas never escape validation. Tool turns and refusals retain their own protocol
+semantics. Incomplete structured answers fail instead of publishing partial JSON.
+Payload rules remain the final request mutation stage and can override the injected
+instructions; the bridge never restores them after configuration.
+
+Historical `additional_tools` and client `tool_search_output` batches can replace
+a callable contract. Conflicts inside one batch and ambiguous namespace aliases
+remain errors. Earlier calls rebuild with the tool definitions active at their
+history position, while new responses use the latest catalog. Cached replay also
+checks a canonical fingerprint of the client call, including exact custom input
+and encryption metadata, so a reused call ID cannot overwrite edited arguments
+with an old native item. JSON object ordering and transport IDs do not affect a
+match.
+
+Plaintext standard `update_plan` calls require one unambiguous declared function.
+Alias conflicts, unknown statuses and arguments outside the declared schema fail
+before client tool events are emitted. Encrypted argument fields remain opaque.
+
+Both `error` envelopes carrying `basispoints_server_draining` and the named
+`basispoints.response.server_draining` control event retire the worker. The same
+pre-dispatch retry guard applies to both; neither can restart an already dispatched
+or recovering generation. Idle and just-completed connections are retired too.
+
+The existing shared 403 cooldown policy is unchanged: it still affects protocol
+selection for 30 minutes rather than credential availability. Per-account cooldown
+and routing changes need a separate policy decision.
+
+## Existing request and transport contract
+
 The protocol was checked against the public extension build `1790362980` at
 `https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/`.
 Its main asset is `x-square-DUrhLSGN.js`, SHA-256

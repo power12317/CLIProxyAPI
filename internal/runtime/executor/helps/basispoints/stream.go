@@ -9,7 +9,8 @@ import (
 )
 
 // Stream decodes SSE incrementally. Only tool items wait for complete arguments;
-// text, reasoning, and lifecycle events are emitted as they arrive.
+// ordinary text, reasoning, and lifecycle events are emitted as they arrive.
+// Structured message content waits for validation of the terminal response.
 func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxItemBytes)
@@ -90,6 +91,19 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 			return failure(502, "invalid_stream", "Basispoints returned invalid SSE JSON")
 		}
 		kind := stringValue(event["type"])
+		if b.structured != nil {
+			item, _ := event["item"].(object)
+			if structuredMessageEvent(kind, item) {
+				return nil
+			}
+			// Lifecycle snapshots can contain message text too. Only the terminal
+			// response is authoritative, so expose empty output in interim snapshots.
+			if response, ok := event["response"].(object); ok && (kind == "response.created" || kind == "response.in_progress" || kind == "response.queued") {
+				response["output"] = []any{}
+				b.structured.decorate(response)
+			}
+		}
+
 		switch kind {
 		case "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.custom_tool_call_input.delta", "response.custom_tool_call_input.done":
 			// The native output_item.done carries the full original item. Never
@@ -125,8 +139,20 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 					return err
 				}
 			}
+			if b.structured != nil {
+				if kind != "response.completed" && kind != "response.done" {
+					if kind == "response.failed" || kind == "response.cancelled" {
+						return StreamError(raw)
+					}
+					return failure(502, "invalid_structured_output", "Basispoints did not complete the structured answer")
+				}
+				if err := b.structured.validate(response); err != nil {
+					return err
+				}
+				b.structured.decorate(response)
+			}
 			// The complete terminal item is authoritative; output_item.done can
-			// contain an unfinished run_officejs envelope. Text still streams live.
+			// contain an unfinished run_officejs envelope. Ordinary text streams live.
 			for _, value := range items {
 				if item, ok := value.(object); ok && isTool(item) {
 					if kind == "response.failed" || kind == "response.incomplete" || kind == "response.cancelled" {
@@ -147,6 +173,11 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 					return failure(502, "invalid_stream", "terminal output item is not an object")
 				}
 				if !isTool(item) {
+					if b.structured != nil && item["type"] == "message" {
+						if err = emitStructuredMessage(item, i, send); err != nil {
+							return err
+						}
+					}
 					continue
 				}
 				if kind != "response.failed" && kind != "response.incomplete" {
@@ -172,7 +203,7 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 				return StreamError(raw)
 			}
 			return nil
-		case "error":
+		case "error", "basispoints.response.server_draining":
 			return StreamError(raw)
 		}
 		return send(event)

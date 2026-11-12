@@ -55,6 +55,7 @@ func TestBasispoints403TemporarilyRoutesToNativeCodex(t *testing.T) {
 			})))
 			invoke := func(account string) error {
 				auth := &coreauth.Auth{ID: account, Provider: "codex", Metadata: map[string]any{"access_token": "fixture-token", "account_id": account}}
+				withBasispointsTestGrant(auth)
 				req := coreexecutor.Request{Model: "gpt-6-astra", Payload: []byte(`{"model":"gpt-6-astra","input":"continue","stream":true}`)}
 				opts := coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}
 				if stream {
@@ -162,6 +163,7 @@ func TestBasispointsAttachment403StartsCooldown(t *testing.T) {
 		return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"attachment rejected"}`))}, nil
 	})))
 	auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "fixture-token", "account_id": t.Name()}}
+	withBasispointsTestGrant(auth)
 	req := coreexecutor.Request{Model: "gpt-6-astra", Payload: []byte(`{"model":"gpt-6-astra","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,eA=="}]}]}`)}
 	req.Payload = bytes.Replace(req.Payload, []byte("eA=="), []byte(base64.StdEncoding.EncodeToString(basispointsTestPNG(t))), 1)
 	_, err := exec.Execute(ctx, auth, req, coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse})

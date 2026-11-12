@@ -79,7 +79,7 @@ func TestBasispointsImagesAndMaxThroughHTTP(t *testing.T) {
 			var mu sync.Mutex
 			uploads, responses := 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer image-test-token" {
+				if r.Header.Get("Authorization") != "Bearer "+basispointsOfficeTestToken(r.Header.Get("Chatgpt-Account-Id")) {
 					t.Error("missing upload/generation auth")
 					w.WriteHeader(401)
 					return
@@ -162,6 +162,7 @@ func TestBasispointsImagesAndMaxThroughHTTP(t *testing.T) {
 			exec := NewCodexAutoExecutor(&config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}})
 			for _, account := range []string{"a", "a", "b"} {
 				auth := &coreauth.Auth{ID: t.Name() + account, Provider: "codex", Metadata: map[string]any{"access_token": "image-test-token", "account_id": account}}
+				withBasispointsTestGrant(auth)
 				req := coreexecutor.Request{Model: "gpt-6-astra(max)", Payload: body}
 				opts := coreexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}
 				if stream {
@@ -195,6 +196,7 @@ func TestBasispointsImagesAndMaxThroughHTTP(t *testing.T) {
 func TestBasispointsDisabledDoesNotUploadImages(t *testing.T) {
 	exec := NewCodexAutoExecutor(&config.Config{})
 	auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "token", "account_id": "account"}}
+	withBasispointsTestGrant(auth)
 	calls := 0
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 		calls++

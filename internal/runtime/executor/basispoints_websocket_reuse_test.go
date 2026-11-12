@@ -177,6 +177,8 @@ func TestBasispointsWebsocketConcurrentRequestsAndAccountRotation(t *testing.T) 
 	a.ID, a.Metadata["account_id"] = "selected-account-a", "account-a"
 	b := basispointsTestAuth()
 	b.ID, b.Metadata["account_id"] = "selected-account-b", "account-b"
+	withBasispointsTestGrant(a)
+	withBasispointsTestGrant(b)
 	invoke := func(auth *coreauth.Auth, i int) error {
 		auth = auth.Clone()
 		req := core.Request{Model: "gpt-6-astra", Payload: []byte(fmt.Sprintf(`{"input":[{"role":"user","content":%q}],"client_metadata":{"session_id":"same-session","turn_id":%q}}`, fmt.Sprint(i), fmt.Sprint(i)))}
