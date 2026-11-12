@@ -21,8 +21,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// BasispointsExecutor shares the Codex credential lifecycle and changes only the
-// upstream interface and its request/response protocol.
+// BasispointsExecutor uses the account's separately authorized Office grant.
+// Codex and SIWC credentials remain available to their native request paths.
 type BasispointsExecutor struct {
 	cfg               *config.Config
 	cooldown          *basispoints.Cooldown
@@ -37,6 +37,18 @@ func (e *BasispointsExecutor) Identifier() string { return "codex" }
 
 func (e *BasispointsExecutor) enabled() bool {
 	return e != nil && e.cfg != nil && e.cfg.Codex.Basispoints.Enabled && e.cooldown.PausedUntil().IsZero()
+}
+
+func (e *BasispointsExecutor) enabledFor(auth *coreauth.Auth) bool {
+	if e == nil || !e.cooldown.PausedUntil().IsZero() {
+		return false
+	}
+	if auth != nil {
+		if _, configured := auth.Metadata["use_basispoints"]; configured {
+			return coreauth.IsCodexUseBasispoints(auth)
+		}
+	}
+	return e.enabled()
 }
 
 func (e *BasispointsExecutor) pauseOnForbidden(ctx context.Context, status int) {
@@ -75,6 +87,13 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		}
 		body = sdktranslator.TranslateRequest(from, sdktranslator.FormatCodex, baseModel, body, true)
 	}
+	if from == sdktranslator.FormatOpenAI {
+		translated := ojson.NewDoc(body)
+		if errFormat := basispoints.PreserveChatOutputFormat(translated, req.Payload); errFormat != nil {
+			return nil, nil, nil, errFormat
+		}
+		body = translated.Bytes()
+	}
 	var err error
 	body, err = thinking.ApplyThinkingPassthrough(body, req.Payload, req.Model, from.String(), "basispoints")
 	if err != nil {
@@ -108,13 +127,13 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		return nil, nil, nil, err
 	}
 	body = helps.ApplyCodexFastMode(body, e.cfg)
-	token, _ := codexCreds(auth)
-	accountID := helps.CodexOAuthAccountID(auth)
-	if accountID == "" {
-		accountID = basispoints.AccountID(token)
+	credentialPath, errPath := resolveCodexAuthDiskPath(e.cfg, auth)
+	if errPath != nil {
+		return nil, nil, nil, statusErr{code: 401, msg: `{"error":{"type":"authentication_error","code":"basispoints_authorization_required","message":"Basispoints Office credential is unavailable"}}`, requestScoped: true}
 	}
-	if token == "" || accountID == "" {
-		return nil, nil, nil, statusErr{code: 401, msg: `{"error":{"type":"authentication_error","message":"Basispoints requires a ChatGPT OAuth access token and account ID"}}`, requestScoped: true}
+	token, accountID, errGrant := helps.ResolveBasispointsCredentials(ctx, e.cfg, auth, credentialPath)
+	if errGrant != nil {
+		return nil, nil, nil, statusErr{code: 401, msg: `{"error":{"type":"authentication_error","code":"basispoints_authorization_required","message":"Authorize Basispoints separately or renew its Office grant"}}`, requestScoped: true}
 	}
 	headers := basispoints.Headers(token, accountID)
 	turnState := helps.NewBasispointsLogState(ctx, auth, basispoints.ResponsesURL, req.Payload, body, opts.Headers, baseModel)
@@ -131,6 +150,9 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		helps.RecordBasispointsFailure(ctx, e.cfg, original, nil, nil, "attachment_upload", err)
 		return nil, nil, nil, err
 	}
+	finalPayload := ojson.NewDoc(body)
+	helps.ApplyPayloadConfigWithRequestForExecutorDoc(e.cfg, "codex", baseModel, "codex", from.String(), "", finalPayload, original, req.Model, helps.PayloadRequestPath(opts), opts.Headers)
+	body = finalPayload.Bytes()
 	var authLabel, authType, authValue string
 	if auth != nil {
 		authLabel = auth.Label
@@ -186,6 +208,11 @@ func (e *BasispointsExecutor) open(ctx context.Context, auth *coreauth.Auth, req
 		return nil, nil, nil, err
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, response.StatusCode, response.Header.Clone())
+	if response.StatusCode == http.StatusUnauthorized {
+		if errReject := helps.RejectBasispointsAccessToken(credentialPath, token); errReject != nil {
+			log.Warn("failed to record rejected Basispoints Office token")
+		}
+	}
 	e.pauseOnForbidden(ctx, response.StatusCode)
 	turnState.ObserveResponse(response)
 	turnState.LogResponse(ctx, e.cfg, false)

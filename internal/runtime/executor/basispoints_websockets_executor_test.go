@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -51,7 +52,19 @@ func isolateBasispointsWebsockets(t *testing.T, exec *BasispointsExecutor) {
 
 func basispointsTestAuth() *coreauth.Auth {
 	token := "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"account","chatgpt_account_user_id":"account-user"}}`)) + ".signature"
-	return &coreauth.Auth{ID: "bps-ws-test", Provider: "codex", Metadata: map[string]any{"access_token": token, "account_id": "account"}}
+	auth := &coreauth.Auth{ID: "bps-ws-test", Provider: "codex", Metadata: map[string]any{"access_token": token, "account_id": "account"}}
+	withBasispointsTestGrant(auth)
+	return auth
+}
+
+func basispointsOfficeTestToken(account string) string {
+	raw, _ := json.Marshal(map[string]any{"client_id": "app_fnr0pYvVwwFDocDumLG3H2Bp", "aud": "app_fnr0pYvVwwFDocDumLG3H2Bp", "exp": 4102444800, "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": account, "chatgpt_account_user_id": "account-user"}})
+	return "header." + base64.RawURLEncoding.EncodeToString(raw) + ".office-signature"
+}
+
+func withBasispointsTestGrant(auth *coreauth.Auth) {
+	account, _ := auth.Metadata["account_id"].(string)
+	auth.Metadata["basispoints"] = map[string]any{"access_token": basispointsOfficeTestToken(account), "id_token": basispointsOfficeTestToken(account), "refresh_token": "office-refresh", "client_id": "app_fnr0pYvVwwFDocDumLG3H2Bp", "account_id": account, "expired": "2100-01-01T00:00:00Z"}
 }
 
 func TestBasispointsWebsocketTransportSelectionAndToolConversion(t *testing.T) {
@@ -81,7 +94,7 @@ func TestBasispointsWebsocketTransportSelectionAndToolConversion(t *testing.T) {
 							t.Error("missing client/account user identity")
 						}
 						protocols := websocket.Subprotocols(r)
-						if len(protocols) != 2 || protocols[0] != "responses" || protocols[1] != "openai-bearer."+auth.Metadata["access_token"].(string) {
+						if len(protocols) != 2 || protocols[0] != "responses" || protocols[1] != "openai-bearer."+coreauth.BasispointsGrant(auth)["access_token"].(string) {
 							t.Error("wrong bearer subprotocol")
 						}
 						upgrader := websocket.Upgrader{Subprotocols: []string{"responses"}, CheckOrigin: func(*http.Request) bool { return true }}

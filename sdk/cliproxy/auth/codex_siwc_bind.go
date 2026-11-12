@@ -22,6 +22,25 @@ func (m *Manager) BindCodexSIWC(ctx context.Context, id string, expectedEpoch ui
 	if m == nil || strings.TrimSpace(id) == "" || expectedEpoch == 0 || tokenData == nil || strings.TrimSpace(tokenData.AccessToken) == "" || strings.TrimSpace(tokenData.RefreshToken) == "" || strings.TrimSpace(tokenData.ClientID) == "" {
 		return nil, fmt.Errorf("bind SIWC: invalid target or token data")
 	}
+	return m.bindCodexGrant(ctx, id, expectedEpoch, expectedAccount, "siwc", "use_siwc", tokenData.ToMap())
+}
+
+// BindCodexBasispoints keeps Office credentials independent of Codex and SIWC.
+func (m *Manager) BindCodexBasispoints(ctx context.Context, id string, expectedEpoch uint64, expectedAccount string, tokenData *codex.BasispointsTokenData) (*Auth, error) {
+	if tokenData == nil || expectedEpoch == 0 {
+		return nil, fmt.Errorf("bind Basispoints: invalid target or token data")
+	}
+	account, _, _, errValidate := codex.ValidateBasispointsGrant(tokenData.ToMap(), time.Now(), false)
+	if errValidate != nil || account == "" || account != expectedAccount {
+		return nil, fmt.Errorf("bind Basispoints: Office workspace does not match target")
+	}
+	return m.bindCodexGrant(ctx, id, expectedEpoch, expectedAccount, "basispoints", "use_basispoints", tokenData.ToMap())
+}
+
+func (m *Manager) bindCodexGrant(ctx context.Context, id string, expectedEpoch uint64, expectedAccount, profile, toggle string, replacement map[string]any) (*Auth, error) {
+	if m == nil || id == "" {
+		return nil, fmt.Errorf("bind OAuth: invalid target")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -69,13 +88,17 @@ func (m *Manager) BindCodexSIWC(ctx context.Context, id string, expectedEpoch ui
 		if account, _ := base.Metadata["account_id"].(string); account != expectedAccount || (account != "" && disk["account_id"] != account) || (account == "" && disk["account_id"] != nil && disk["account_id"] != "") {
 			return fmt.Errorf("bind SIWC: backing account changed")
 		}
+		if profile == "basispoints" {
+			if errIdentity := codex.ValidateBasispointsIdentity(replacement, disk); errIdentity != nil {
+				return errIdentity
+			}
+		}
 		// Keep arbitrary disk values (including large JSON numbers) losslessly. Only
 		// the two explicitly bound fields are replaced; no metadata normalization runs.
 		var raw map[string]json.RawMessage
 		if errJSON := json.Unmarshal(data, &raw); errJSON != nil {
 			return errJSON
 		}
-		replacement := tokenData.ToMap()
 		siwc, errJSON := json.Marshal(replacement)
 		if errJSON != nil {
 			return errJSON
@@ -84,8 +107,8 @@ func (m *Manager) BindCodexSIWC(ctx context.Context, id string, expectedEpoch ui
 		for key, value := range raw {
 			out[key] = value
 		}
-		out["siwc"] = json.RawMessage(siwc)
-		out["use_siwc"] = true
+		out[profile] = json.RawMessage(siwc)
+		out[toggle] = true
 		if errCtx := ctx.Err(); errCtx != nil {
 			return errCtx
 		}
@@ -100,8 +123,8 @@ func (m *Manager) BindCodexSIWC(ctx context.Context, id string, expectedEpoch ui
 		if errWrite := codex.WriteJSONFileAtomic(path, out); errWrite != nil {
 			return fmt.Errorf("bind SIWC: persist binding: %w", errWrite)
 		}
-		disk["siwc"] = replacement
-		disk["use_siwc"] = true
+		disk[profile] = replacement
+		disk[toggle] = true
 		// The mutation gate fences Delete, reload, and refresh publication. Clone
 		// only now so counters and request-time runtime changes during I/O survive.
 		m.mu.Lock()
@@ -116,7 +139,7 @@ func (m *Manager) BindCodexSIWC(ctx context.Context, id string, expectedEpoch ui
 		updated.CodexRefreshPatch = nil
 		// The file owns this toggle; stale attribute overrides must not mask it
 		// or prevent a later file edit from disabling SIWC.
-		delete(updated.Attributes, "use_siwc")
+		delete(updated.Attributes, toggle)
 		if disabled, ok := disk["disabled"].(bool); ok {
 			updated.Disabled = disabled
 		}
@@ -126,7 +149,7 @@ func (m *Manager) BindCodexSIWC(ctx context.Context, id string, expectedEpoch ui
 			updated.Status = StatusActive
 		}
 		now := time.Now()
-		if !updated.Disabled {
+		if !updated.Disabled && profile == "siwc" {
 			applyPreservedRejectedTokens(current, updated, false)
 			if updated.RejectedAccessToken == "" || authAccessToken(updated) != updated.RejectedAccessToken {
 				updated.RefreshFailures = 0

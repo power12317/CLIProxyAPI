@@ -130,22 +130,26 @@ func (r *WebsocketRequest) Open(ctx context.Context, dial WebsocketDial, observe
 // websocketReader presents native JSON events to the existing SSE protocol bridge.
 // No read or write deadlines are added after connection establishment.
 type websocketReader struct {
-	ctx              context.Context
-	request          *WebsocketRequest
-	dial             WebsocketDial
-	observe          func([]byte)
-	stop             func() bool
-	mu               sync.Mutex
-	conn             *websocketConnection
-	exchange         *websocketExchange
-	closed           bool
-	resume           string
-	cursor           int64
-	attempts         int
-	buffer           bytes.Buffer
-	terminal         bool
-	recreated        bool
-	responseObserved bool
+	ctx                context.Context
+	request            *WebsocketRequest
+	dial               WebsocketDial
+	observe            func([]byte)
+	stop               func() bool
+	mu                 sync.Mutex
+	conn               *websocketConnection
+	exchange           *websocketExchange
+	closed             bool
+	resume             string
+	cursor             int64
+	attempts           int
+	buffer             bytes.Buffer
+	terminal           bool
+	recreated          bool
+	responseObserved   bool
+	recovering         bool
+	upstreamSent       bool
+	retryForbidden     bool
+	retryNewConnection bool
 }
 
 func (r *websocketReader) Close() error {
@@ -164,10 +168,18 @@ func (r *websocketReader) finish() {
 	}
 	r.closed = true
 	conn, exchange := r.conn, r.exchange
+	resume, requestID := r.resume, r.request.requestID
 	r.mu.Unlock()
 	// A completed response no longer owns the socket. Cancellation after its
 	// terminal frame must not disconnect a connection retained for the session.
 	if !exchange.terminal.Load() {
+		// Cancellation is best effort when another writer owns the transport.
+		// Never wait for an in-flight large write before closing its socket.
+		if !conn.closed.Load() && conn.writeMu.TryLock() {
+			frame, _ := json.Marshal(object{"type": "basispoints.response.cancel", "resume_token": resume, "request_id": requestID})
+			_ = conn.conn.WriteMessage(websocket.TextMessage, frame)
+			conn.writeMu.Unlock()
+		}
 		conn.close(io.ErrClosedPipe)
 	}
 	conn.detach(exchange)
@@ -189,6 +201,7 @@ func (r *websocketReader) resetGeneration() error {
 	}
 	r.resume, r.cursor, r.attempts = r.request.resume, -1, 0
 	r.terminal, r.responseObserved = false, false
+	r.recovering, r.upstreamSent, r.retryForbidden, r.retryNewConnection = false, false, false, false
 	r.buffer.Reset()
 	return nil
 }
@@ -201,7 +214,15 @@ func (r *websocketReader) Retry() error {
 		r.mu.Unlock()
 		return err
 	}
-	if r.closed || r.conn.closed.Load() {
+	if r.closed || r.retryForbidden {
+		r.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if r.retryNewConnection && r.terminal {
+		r.mu.Unlock()
+		return r.reconnect(true)
+	}
+	if r.conn.closed.Load() {
 		r.mu.Unlock()
 		return io.ErrClosedPipe
 	}
@@ -232,10 +253,16 @@ func (r *websocketReader) Retry() error {
 	return nil
 }
 
+// RetryAllowed keeps non-retryable recovery failures out of generation retries.
+func (r *websocketReader) RetryAllowed() bool { return !r.retryForbidden }
+
 func (r *websocketReader) reconnect(resend bool) error {
 	if resend {
-		if err := r.resetGeneration(); err != nil {
-			return err
+		r.mu.Lock()
+		errReset := r.resetGeneration()
+		r.mu.Unlock()
+		if errReset != nil {
+			return errReset
 		}
 	}
 	for r.attempts < 3 {
@@ -269,6 +296,7 @@ func (r *websocketReader) reconnect(resend bool) error {
 			continue
 		}
 		r.conn, r.exchange = conn, exchange
+		r.recovering = !resend
 		r.mu.Unlock()
 		frame, _ := json.Marshal(object{"type": "basispoints.response.resume", "resume_token": r.resume, "after_cursor": r.cursor})
 		if resend {
@@ -317,15 +345,43 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 		if kind == "" {
 			return 0, failure(502, "invalid_stream", "Basispoints WebSocket event has no type")
 		}
-		if strings.HasPrefix(kind, "basispoints.response.") {
+		draining := websocketDraining(raw)
+		if strings.HasPrefix(kind, "basispoints.response.") && !draining {
 			if kind == "basispoints.response.resume_token" && event.Get("request_id").String() == r.request.requestID {
 				if token := event.Get("resume_token").String(); token != "" {
+					r.mu.Lock()
 					r.resume = token
+					r.mu.Unlock()
 				}
-			} else if r.observe != nil {
+			}
+			if kind == "basispoints.response.upstream_sent" {
+				r.upstreamSent = true
+			}
+			if kind == "basispoints.response.resumed" {
+				r.recovering = false
+			}
+			if r.observe != nil {
 				r.observe(raw)
 			}
 			continue
+		}
+		if kind == "error" || draining {
+			code := event.Get("code").String()
+			if code == "" {
+				code = event.Get("error.code").String()
+			}
+			if draining {
+				r.request.session.rotateAffinity()
+				r.retryNewConnection = !r.recovering && !r.responseObserved && !r.upstreamSent
+				r.retryForbidden = !r.retryNewConnection
+				conn.close(io.ErrClosedPipe)
+			} else if websocketResumeError(code) {
+				if code == "basispoints_resume_not_found" && r.recovering && event.Get("error.safe_to_rotate_affinity").Bool() {
+					r.request.session.rotateAffinity()
+				}
+				r.retryForbidden = true
+				conn.close(io.ErrClosedPipe)
+			}
 		}
 		if kind == "error" && event.Get("status").Int() == http.StatusBadRequest && event.Get("error.code").String() == "websocket_connection_limit_reached" {
 			// This connection cannot accept another request. Replace it once for
@@ -343,11 +399,15 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 			}
 		}
 		r.responseObserved = true
+		r.recovering = false
 		if cursor := event.Get("basispoints_replay_cursor"); cursor.Type == ojson.Number {
 			if cursor.Int() <= r.cursor {
 				continue
 			}
 			r.cursor = cursor.Int()
+		}
+		if draining {
+			r.terminal = true
 		}
 		switch kind {
 		case "error", "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled":
@@ -358,4 +418,20 @@ func (r *websocketReader) Read(p []byte) (int, error) {
 		}
 	}
 	return r.buffer.Read(p)
+}
+
+func websocketResumeError(code string) bool {
+	switch code {
+	case "basispoints_resume_not_found", "basispoints_resume_gap", "basispoints_resume_invalid", "basispoints_resume_already_attached":
+		return true
+	}
+	return false
+}
+
+// Both deployed error envelopes and named control events retire the worker.
+func websocketDraining(raw []byte) bool {
+	event := ojson.ParseBytes(raw)
+	kind := event.Get("type").String()
+	return kind == "basispoints.response.server_draining" || kind == "error" &&
+		(event.Get("code").String() == "basispoints_server_draining" || event.Get("error.code").String() == "basispoints_server_draining")
 }

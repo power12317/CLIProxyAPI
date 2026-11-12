@@ -129,7 +129,7 @@ func applyCredentialFields(disk, before, after map[string]any) {
 // IsCodexCredentialKey reports whether key belongs to a Codex credential partition or switch
 // managed by CredentialRefreshPatch.
 func IsCodexCredentialKey(key string) bool {
-	if key == "siwc" || key == "use_siwc" {
+	if key == "siwc" || key == "use_siwc" || key == "basispoints" || key == "use_basispoints" {
 		return true
 	}
 	for _, k := range codexOuterCredentialKeys {

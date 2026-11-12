@@ -149,7 +149,7 @@ func MergeWithDiskMap(diskMap, incomingMap map[string]any) map[string]any {
 		if key == "allow_codex_client_siwc" && len(diskMap) > 0 {
 			continue
 		}
-		if key == "siwc" || key == "use_siwc" || key == "codex_cli" {
+		if key == "siwc" || key == "use_siwc" || key == "codex_cli" || key == "basispoints" || key == "use_basispoints" {
 			if _, exists := diskMap[key]; exists {
 				continue
 			}
@@ -170,6 +170,9 @@ func MergeWithDiskMap(diskMap, incomingMap map[string]any) map[string]any {
 	}
 	if _, exists := diskMap["siwc"]; !exists && len(diskMap) > 0 {
 		delete(merged, "siwc")
+	}
+	if _, exists := diskMap["basispoints"]; !exists && len(diskMap) > 0 {
+		delete(merged, "basispoints")
 	}
 	return merged
 }
@@ -197,6 +200,16 @@ func MergeCodexCredentialsFromDisk(diskMap, incomingMetadata map[string]any) map
 	}
 	if merged == nil {
 		merged = make(map[string]any)
+	}
+	if value, exists := diskMap["basispoints"]; exists {
+		merged["basispoints"] = value
+	} else if len(diskMap) > 0 {
+		delete(merged, "basispoints")
+	}
+	if value, exists := diskMap["use_basispoints"]; exists {
+		if _, specified := incomingMetadata["use_basispoints"]; !specified {
+			merged["use_basispoints"] = value
+		}
 	}
 	if hasDiskOAuthOuter(diskMap) {
 		for _, key := range codexOuterCredentialKeys {

@@ -29,6 +29,18 @@ type siwcOAuthService interface {
 	ExchangeSIWCCodeForTokens(ctx context.Context, code, clientID, redirectURI, deviceID string, pkce *codex.PKCECodes) (*codex.CodexSIWCTokenData, error)
 }
 
+type basispointsOAuthService interface {
+	GenerateBasispointsAuthURL(string, *codex.PKCECodes) (string, error)
+	ExchangeBasispointsCodeForTokens(context.Context, string, *codex.PKCECodes) (*codex.BasispointsTokenData, error)
+}
+
+func grantFlowMessage(profile, message string) string {
+	if profile == "basispoints" {
+		return strings.ReplaceAll(message, "SIWC", "Basispoints")
+	}
+	return message
+}
+
 // siwcBindSession is server-owned: callbacks cannot select a different target,
 // redirect URI, PKCE verifier, or token endpoint. It never contains an auth snapshot.
 type siwcBindSession struct {
@@ -36,6 +48,8 @@ type siwcBindSession struct {
 	owner        *Handler
 	manager      *coreauth.Manager
 	service      siwcOAuthService
+	profile      string
+	office       basispointsOAuthService
 	targetID     string
 	epoch        uint64
 	accountID    string
@@ -193,6 +207,14 @@ func (h *Handler) GetSIWCStatus(c *gin.Context) {
 // Remote browsers complete it by submitting the full loopback callback URL; no
 // listener on the server's port 1455 is required or started by this endpoint.
 func (h *Handler) StartSIWCBind(c *gin.Context) {
+	h.startCodexGrantBind(c, "siwc")
+}
+
+func (h *Handler) StartBasispointsBind(c *gin.Context) {
+	h.startCodexGrantBind(c, "basispoints")
+}
+
+func (h *Handler) startCodexGrantBind(c *gin.Context, profile string) {
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -208,7 +230,7 @@ func (h *Handler) StartSIWCBind(c *gin.Context) {
 	h.siwcCommitMu.Lock()
 	defer h.siwcCommitMu.Unlock()
 	h.mu.Lock()
-	cfg, manager, factory := h.cfg.CloneForRuntime(), h.authManager, h.siwcOAuthFactory
+	cfg, manager, factory, officeFactory := h.cfg.CloneForRuntime(), h.authManager, h.siwcOAuthFactory, h.basispointsOAuthFactory
 	h.mu.Unlock()
 	if cfg == nil || manager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager unavailable"})
@@ -228,17 +250,17 @@ func (h *Handler) StartSIWCBind(c *gin.Context) {
 		return
 	}
 	if !siwcBindEligible(target) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "SIWC binding requires a file-backed Codex OAuth credential"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": grantFlowMessage(profile, "SIWC binding requires a file-backed Codex OAuth credential")})
 		return
 	}
 	path, metadata, errPath := resolveSIWCBindFile(cfg.AuthDir, authAttribute(target, "path"))
 	if errPath != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "SIWC binding target is unavailable or invalid"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": grantFlowMessage(profile, "SIWC binding target is unavailable or invalid")})
 		return
 	}
 	accountID, _ := target.Metadata["account_id"].(string)
 	if (accountID != "" && metadata["account_id"] != accountID) || (accountID == "" && metadata["account_id"] != nil && metadata["account_id"] != "") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "SIWC binding target is unavailable or invalid"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": grantFlowMessage(profile, "SIWC binding target is unavailable or invalid")})
 		return
 	}
 	deviceID := uuid.NewString()
@@ -251,27 +273,44 @@ func (h *Handler) StartSIWCBind(c *gin.Context) {
 	state, errState := codex.GenerateRandomBase64URL()
 	nonce, errNonce := codex.GenerateRandomBase64URL()
 	if errPKCE != nil || errState != nil || errNonce != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initialize SIWC authorization"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": grantFlowMessage(profile, "failed to initialize SIWC authorization")})
 		return
 	}
 	var service siwcOAuthService = codex.NewCodexAuth(cfg)
 	if factory != nil {
 		service = factory(cfg)
 	}
-	authURL, errURL := service.GenerateSIWCAuthURL(state, nonce, deviceID, codex.SIWCRedirectURI, pkce)
+	redirectURI := codex.SIWCRedirectURI
+	var office basispointsOAuthService
+	var authURL string
+	var errURL error
+	if profile == "basispoints" {
+		redirectURI = codex.BasispointsRedirectURI
+		office = codex.NewCodexAuthWithProxyURL(cfg, target.ProxyURL)
+		if officeFactory != nil {
+			office = officeFactory(cfg)
+		}
+		authURL, errURL = office.GenerateBasispointsAuthURL(state, pkce)
+	} else {
+		authURL, errURL = service.GenerateSIWCAuthURL(state, nonce, deviceID, redirectURI, pkce)
+	}
 	if errURL != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate SIWC authorization URL"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": grantFlowMessage(profile, "failed to generate SIWC authorization URL")})
 		return
 	}
 	ctx, cancel := context.WithTimeout(PopulateAuthContext(context.Background(), c), siwcBindTTL)
 	flow := &siwcBindSession{owner: h, manager: manager, service: service, targetID: target.ID, epoch: target.RegistrationEpoch,
-		accountID: accountID, path: path, authDir: cfg.AuthDir, deviceID: deviceID, redirect: codex.SIWCRedirectURI, pkce: pkce, ctx: ctx, cancel: cancel}
+		accountID: accountID, path: path, authDir: cfg.AuthDir, deviceID: deviceID, redirect: redirectURI, pkce: pkce, ctx: ctx, cancel: cancel, profile: profile, office: office}
 	if !oauthSessions.registerSIWC(state, flow) {
 		cancel()
-		c.JSON(http.StatusConflict, gin.H{"error": "a SIWC binding is already pending for this credential"})
+		c.JSON(http.StatusConflict, gin.H{"error": grantFlowMessage(profile, "a SIWC binding is already pending for this credential")})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state, "flow": "siwc_bind", "expires_in": int(siwcBindTTL.Seconds())})
+	flowName := "siwc_bind"
+	if profile == "basispoints" {
+		flowName = "basispoints"
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state, "flow": flowName, "callback_mode": "paste", "expires_in": int(siwcBindTTL.Seconds())})
 }
 
 func (s *oauthSessionStore) registerSIWC(state string, flow *siwcBindSession) bool {
@@ -283,7 +322,7 @@ func (s *oauthSessionStore) registerSIWC(state string, flow *siwcBindSession) bo
 		return false
 	}
 	for _, session := range s.sessions {
-		if session.SIWC != nil && !session.Completed && session.Status == "" && session.SIWC.manager == flow.manager && session.SIWC.targetID == flow.targetID {
+		if session.SIWC != nil && !session.Completed && session.Status == "" && session.SIWC.manager == flow.manager && session.SIWC.targetID == flow.targetID && session.SIWC.profile == flow.profile {
 			return false
 		}
 	}
@@ -363,6 +402,9 @@ func (h *Handler) handleOAuthCallbackV8(c *gin.Context, req siwcCallbackRequest)
 	}
 	if provider := strings.TrimSpace(req.Provider); provider != "" {
 		canonical, errProvider := NormalizeOAuthProvider(provider)
+		if flow.profile == "basispoints" && (provider == "basispoints" || provider == "codex") {
+			canonical, errProvider = "codex", nil
+		}
 		if errProvider != nil || canonical != "codex" {
 			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "provider does not match state"})
 			return
@@ -372,7 +414,7 @@ func (h *Handler) handleOAuthCallbackV8(c *gin.Context, req siwcCallbackRequest)
 	if redirect != nil {
 		expected, _ := url.Parse(flow.redirect)
 		if redirect.Scheme != expected.Scheme || redirect.Host != expected.Host || redirect.Path != expected.Path || redirect.User != nil || redirect.Fragment != "" {
-			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "unexpected SIWC callback URL"})
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": grantFlowMessage(flow.profile, "unexpected SIWC callback URL")})
 			return
 		}
 		query := redirect.Query()
@@ -387,6 +429,13 @@ func (h *Handler) handleOAuthCallbackV8(c *gin.Context, req siwcCallbackRequest)
 			}
 		}
 	}
+	if flow.profile == "basispoints" {
+		if clientID != "" && clientID != codex.BasispointsClientID {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Office client does not match state"})
+			return
+		}
+		clientID = codex.BasispointsClientID
+	}
 	if oauthError == "" && (code == "" || clientID == "") {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "SIWC callback requires code and client_id"})
 		return
@@ -394,7 +443,7 @@ func (h *Handler) handleOAuthCallbackV8(c *gin.Context, req siwcCallbackRequest)
 	flow.mu.Lock()
 	defer flow.mu.Unlock()
 	if flow.exchanging || flow.ctx.Err() != nil || !oauthSessions.IsPending(state, "codex") {
-		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "SIWC session is no longer accepting callbacks"})
+		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": grantFlowMessage(flow.profile, "SIWC session is no longer accepting callbacks")})
 		return
 	}
 	if oauthError != "" {
@@ -411,6 +460,9 @@ func (h *Handler) handleOAuthCallbackV8(c *gin.Context, req siwcCallbackRequest)
 // fail intentionally never publishes upstream response bodies or callback values.
 // Caller holds the session gate.
 func (flow *siwcBindSession) fail(state, message string) {
+	if flow.profile == "basispoints" {
+		message = strings.ReplaceAll(message, "SIWC", "Basispoints")
+	}
 	SetOAuthSessionError(state, message)
 	flow.cancel()
 	flow.pkce = nil
@@ -422,7 +474,17 @@ func (flow *siwcBindSession) exchange(state, code, clientID string) {
 	flow.mu.Lock()
 	pkce := flow.pkce
 	flow.mu.Unlock()
-	tokenData, errExchange := flow.service.ExchangeSIWCCodeForTokens(flow.ctx, code, clientID, flow.redirect, flow.deviceID, pkce)
+	var tokenData *codex.CodexSIWCTokenData
+	var officeData *codex.BasispointsTokenData
+	var errExchange error
+	if flow.profile == "basispoints" {
+		officeData, errExchange = flow.office.ExchangeBasispointsCodeForTokens(flow.ctx, code, pkce)
+		if officeData != nil {
+			tokenData = &officeData.CodexSIWCTokenData
+		}
+	} else {
+		tokenData, errExchange = flow.service.ExchangeSIWCCodeForTokens(flow.ctx, code, clientID, flow.redirect, flow.deviceID, pkce)
+	}
 	flow.mu.Lock()
 	flow.owner.siwcCommitMu.Lock()
 	var persisted *coreauth.Auth
@@ -435,7 +497,7 @@ func (flow *siwcBindSession) exchange(state, code, clientID string) {
 			flow.owner.mu.Unlock()
 			if hook != nil {
 				if errHook := hook(context.Background(), persisted); errHook != nil {
-					log.Warn("SIWC binding saved but post-auth notification failed")
+					log.Warn("OAuth grant binding saved but post-auth notification failed")
 				}
 			}
 		}
@@ -458,7 +520,13 @@ func (flow *siwcBindSession) exchange(state, code, clientID string) {
 		flow.pkce = nil
 		return
 	}
-	updated, errBind := flow.manager.BindCodexSIWC(flow.ctx, flow.targetID, flow.epoch, flow.accountID, tokenData)
+	var updated *coreauth.Auth
+	var errBind error
+	if flow.profile == "basispoints" {
+		updated, errBind = flow.manager.BindCodexBasispoints(flow.ctx, flow.targetID, flow.epoch, flow.accountID, officeData)
+	} else {
+		updated, errBind = flow.manager.BindCodexSIWC(flow.ctx, flow.targetID, flow.epoch, flow.accountID, tokenData)
+	}
 	if errBind != nil {
 		flow.fail(state, "Failed to save SIWC binding; the target may have changed")
 		return

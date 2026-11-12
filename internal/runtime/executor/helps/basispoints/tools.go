@@ -182,8 +182,14 @@ func (b *Bridge) convertTool(native object) (object, error) {
 		preserveEncryption := !wrapped && native["type"] == "function_call"
 		encrypted := native["encrypted_function_args"]
 		hasEncryptedArguments := preserveEncryption && encrypted != nil && digest(encrypted) != digest([]string{})
-		if !wrapped && !hasEncryptedArguments && (name == "update_plan" || name == "functions.update_plan") {
-			arguments = translatePlanArguments(arguments, spec.Parameters)
+		if !hasEncryptedArguments && standardPlanTool(spec) {
+			if err = b.validatePlanTool(spec); err != nil {
+				return nil, err
+			}
+			arguments, err = translatePlanArguments(arguments, spec.Parameters)
+			if err != nil {
+				return nil, err
+			}
 		}
 		encoded, _ := json.Marshal(arguments)
 		result["type"], result["arguments"] = "function_call", string(encoded)
@@ -201,7 +207,7 @@ func (b *Bridge) convertTool(native object) (object, error) {
 			return nil, err
 		}
 	}
-	if err = b.cache.put(b.scope+"/"+callID, replay); err != nil {
+	if err = b.cache.put(b.scope+"/"+callID, replay, result); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -259,49 +265,4 @@ func (b *Bridge) rebuildToolCall(call object) (object, error) {
 	}
 	arguments, _ := json.Marshal(outer)
 	return object{"type": "function_call", "id": functionItemID(id), "call_id": id, "name": "run_officejs", "arguments": string(arguments), "status": "completed"}, nil
-}
-
-func translatePlanArguments(arguments object, parameters any) object {
-	schema, _ := parameters.(object)
-	properties, _ := schema["properties"].(object)
-	if properties["plan"] == nil {
-		return arguments
-	}
-	steps, ok := arguments["plan"].([]any)
-	if !ok {
-		return arguments
-	}
-	result := clone(arguments)
-	if _, exists := result["explanation"]; !exists && result["summary"] != nil {
-		result["explanation"] = result["summary"]
-		delete(result, "summary")
-	}
-	plan := make([]any, 0, len(steps))
-	for _, value := range steps {
-		step, ok := value.(object)
-		if !ok {
-			return arguments
-		}
-		converted := clone(step)
-		if _, exists := converted["step"]; !exists {
-			for _, alias := range []string{"description", "title"} {
-				if text, ok := converted[alias].(string); ok {
-					converted["step"] = text
-					delete(converted, alias)
-					break
-				}
-			}
-		}
-		switch strings.ToLower(stringValue(converted["status"])) {
-		case "todo", "not_started", "planned", "queued", "blocked":
-			converted["status"] = "pending"
-		case "active", "started", "doing", "current":
-			converted["status"] = "in_progress"
-		case "done", "complete", "finished":
-			converted["status"] = "completed"
-		}
-		plan = append(plan, converted)
-	}
-	result["plan"] = plan
-	return result
 }

@@ -5,10 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/MoeForge/moego/ojson"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -58,12 +60,17 @@ func (s *WebsocketSession) connection(ctx context.Context, request *WebsocketReq
 	if s.conn != nil && !s.conn.closed.Load() {
 		return s.conn, nil, nil
 	}
+	u, _ := url.Parse(request.URL)
+	query := u.Query()
+	query.Set("bps_ws_affinity", s.affinity)
+	u.RawQuery = query.Encode()
+	request.URL = u.String()
 	conn, response, err := dial(ctx, request.URL, request.Headers.Clone(), []string{"responses", "openai-bearer." + request.token})
 	if err != nil {
 		return nil, response, err
 	}
 	conn.SetReadLimit(maxItemBytes)
-	c := &websocketConnection{conn: conn, headers: response.Header.Clone(), done: make(chan struct{}), observe: request.ObserveConnection}
+	c := &websocketConnection{conn: conn, headers: response.Header.Clone(), done: make(chan struct{}), observe: request.ObserveConnection, onIdleDrain: s.rotateAffinity}
 	if c.observe != nil {
 		c.observe(true)
 	}
@@ -74,6 +81,12 @@ func (s *WebsocketSession) connection(ctx context.Context, request *WebsocketReq
 	s.conn = c
 	go c.readLoop()
 	return c, response, nil
+}
+
+func (s *WebsocketSession) rotateAffinity() {
+	s.mu.Lock()
+	s.affinity = "affinity_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	s.mu.Unlock()
 }
 
 func (s *WebsocketSession) Close() {
@@ -93,16 +106,17 @@ type websocketExchange struct {
 }
 
 type websocketConnection struct {
-	conn    *websocket.Conn
-	headers http.Header
-	observe func(bool)
-	once    sync.Once
-	closed  atomic.Bool
-	done    chan struct{}
-	err     error
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	active  *websocketExchange
+	conn        *websocket.Conn
+	headers     http.Header
+	observe     func(bool)
+	once        sync.Once
+	closed      atomic.Bool
+	done        chan struct{}
+	err         error
+	writeMu     sync.Mutex
+	mu          sync.Mutex
+	active      *websocketExchange
+	onIdleDrain func()
 }
 
 func (c *websocketConnection) write(payload []byte) error {
@@ -156,8 +170,18 @@ func (c *websocketConnection) readLoop() {
 		c.mu.Lock()
 		exchange := c.active
 		c.mu.Unlock()
-		if exchange == nil {
+		if exchange == nil || exchange.terminal.Load() {
+			if websocketDraining(raw) {
+				if c.onIdleDrain != nil {
+					c.onIdleDrain()
+				}
+				c.close(io.ErrClosedPipe)
+				return
+			}
 			continue
+		}
+		if websocketDraining(raw) {
+			exchange.terminal.Store(true)
 		}
 		switch ojson.GetBytes(raw, "type").String() {
 		case "error", "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled":

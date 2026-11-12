@@ -29,6 +29,7 @@ func TestBasispointsSerializedRequestContract(t *testing.T) {
 					cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}}
 					executor := NewCodexAutoExecutor(cfg)
 					auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "test-token", "account_id": "test-account"}}
+					withBasispointsTestGrant(auth)
 					calls := 0
 					ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
 						calls++

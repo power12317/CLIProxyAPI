@@ -25,6 +25,7 @@ func TestBasispointsHandoffAndCustomExecThroughExecutor(t *testing.T) {
 			cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}}}
 			executor := NewCodexAutoExecutor(cfg)
 			auth := &coreauth.Auth{ID: t.Name(), Provider: "codex", Metadata: map[string]any{"access_token": "fixture-token", "account_id": "fixture-account"}}
+			withBasispointsTestGrant(auth)
 			body, _ := json.Marshal(map[string]any{
 				"model": "gpt-5.6-luna", "reasoning": map[string]any{"effort": "medium"}, "stream": stream,
 				"input": []any{

@@ -41,7 +41,7 @@ func (h *Handler) beginSIWCFileMutation(ctx context.Context, path string) func()
 			continue
 		}
 		// Even identical reuploads invalidate the old authorization intent.
-		session.Status = "SIWC binding target changed; start a new binding"
+		session.Status = grantFlowMessage(flow.profile, "SIWC binding target changed; start a new binding")
 		session.ExpiresAt = now.Add(oauthSessions.completedTTL)
 		oauthSessions.sessions[state] = session
 		flow.cancel()

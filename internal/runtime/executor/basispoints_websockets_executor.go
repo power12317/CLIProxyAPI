@@ -78,6 +78,9 @@ func (e *BasispointsExecutor) readWebsocket(ctx context.Context, auth *coreauth.
 		if outputStarted || attempt >= limit {
 			return err
 		}
+		if policy, ok := response.Body.(interface{ RetryAllowed() bool }); ok && !policy.RetryAllowed() {
+			return err
+		}
 		var upstream *basispoints.Error
 		if !errors.As(err, &upstream) || upstream.Body != string(bridge.LastEvent) {
 			return err

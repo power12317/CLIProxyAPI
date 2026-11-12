@@ -41,12 +41,12 @@ type tool struct {
 // bounded by both count and bytes, with no timer-based expiration.
 type Cache struct {
 	mu    sync.Mutex
-	items map[string][]byte
+	items map[string]replayEntry
 	order []string
 	bytes int
 }
 
-func (c *Cache) put(key string, item object) error {
+func (c *Cache) put(key string, item, client object) error {
 	raw, err := json.Marshal(item)
 	if err != nil {
 		return err
@@ -57,19 +57,19 @@ func (c *Cache) put(key string, item object) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.items == nil {
-		c.items = make(map[string][]byte)
+		c.items = make(map[string]replayEntry)
 	}
 	if previous, ok := c.items[key]; ok {
-		c.bytes -= len(previous)
+		c.bytes -= len(previous.raw)
 	} else {
 		c.order = append(c.order, key)
 	}
-	c.items[key] = raw
+	c.items[key] = replayEntry{raw: raw, clientSignature: replaySignature(client), nativeSignature: replaySignature(item)}
 	c.bytes += len(raw)
 	for len(c.order) > 1024 || c.bytes > 32<<20 {
 		oldest := c.order[0]
 		c.order = c.order[1:]
-		c.bytes -= len(c.items[oldest])
+		c.bytes -= len(c.items[oldest].raw)
 		delete(c.items, oldest)
 	}
 	return nil
@@ -77,7 +77,7 @@ func (c *Cache) put(key string, item object) error {
 
 func (c *Cache) get(key string) object {
 	c.mu.Lock()
-	raw := c.items[key]
+	raw := c.items[key].raw
 	c.mu.Unlock()
 	item, _ := decode(raw)
 	return item
@@ -91,6 +91,7 @@ type Bridge struct {
 	nativeTools map[string][]object
 	choice      string
 	emitted     map[string]object
+	structured  *structuredOutput
 	// ObserveEvent receives untouched upstream events for the existing CPA logs.
 	ObserveEvent func([]byte)
 	// LastEvent retains the complete event that failed conversion for error logs.
@@ -149,74 +150,13 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		return nil, nil, failure(400, "full_history_required", "Basispoints requires full input history instead of previous_response_id")
 	}
 	bridge := &Bridge{cache: cache, tools: make(map[string]tool), nativeTools: make(map[string][]object), emitted: make(map[string]object)}
-	var catalog []tool
-	var collect func([]any, string) error
-	collect = func(entries []any, namespace string) error {
-		for _, value := range entries {
-			item, ok := value.(object)
-			if !ok {
-				return failure(400, "invalid_tool", "tool definitions must be objects")
-			}
-			kind, name := stringValue(item["type"]), stringValue(item["name"])
-			if kind == "namespace" {
-				children, _ := item["tools"].([]any)
-				if namespace != "" {
-					name = namespace + "." + name
-				}
-				if errCollect := collect(children, name); errCollect != nil {
-					return errCollect
-				}
-				continue
-			}
-			if kind == "tool_search" && item["execution"] == "client" {
-				name = "tool_search"
-			} else if nativeToolKind(kind) {
-				bridge.nativeTools[kind] = append(bridge.nativeTools[kind], clone(item))
-				continue
-			} else if kind != "function" && kind != "custom" {
-				return failure(400, "unsupported_tool", "Basispoints relay supports function and custom client tools")
-			}
-			key := name
-			if namespace != "" {
-				key = namespace + "." + name
-			}
-			if name == "" || nativeName(key) {
-				return failure(400, "invalid_tool", "client tool name is empty or reserved")
-			}
-			parameters := item["parameters"]
-			if parameters == nil {
-				parameters = item["inputSchema"]
-			}
-			if parameters == nil {
-				parameters = item["input_schema"]
-			}
-			entry := tool{Name: name, Namespace: namespace, Type: kind, Description: stringValue(item["description"]), Parameters: parameters, Format: item["format"], Strict: item["strict"]}
-			if previous, exists := bridge.tools[key]; exists {
-				contract := previous
-				contract.Description = entry.Description
-				if digest(contract) != digest(entry) {
-					return failure(400, "invalid_tool", "conflicting client tool declaration: "+key)
-				}
-				continue
-			}
-			bridge.tools[key] = entry
-			catalog = append(catalog, entry)
-		}
-		return nil
-	}
-	tools, _ := body["tools"].([]any)
-	if err = collect(tools, ""); err != nil {
+	bridge.structured, err = prepareStructuredOutput(body["text"])
+	if err != nil {
 		return nil, nil, err
 	}
-	if items, ok := body["input"].([]any); ok {
-		for _, value := range items {
-			if item, ok := value.(object); ok && (item["type"] == "additional_tools" || item["type"] == "tool_search_output" && item["execution"] == "client") {
-				additional, _ := item["tools"].([]any)
-				if err = collect(additional, ""); err != nil {
-					return nil, nil, err
-				}
-			}
-		}
+	catalog, initialTools, toolUpdates, err := bridge.collectCatalog(body)
+	if err != nil {
+		return nil, nil, err
 	}
 	switch choice := body["tool_choice"].(type) {
 	case string:
@@ -276,6 +216,8 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	var turnContent any
 	translatedInput := make([]any, 0, len(input))
 	seenCalls := make(map[string]bool)
+	historyBridge := *bridge
+	historyBridge.tools = initialTools
 	for i, value := range input {
 		item, ok := value.(object)
 		if !ok {
@@ -285,6 +227,9 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		if item["role"] == "user" {
 			turnIndex, iteration, turnContent = i, 1, item["content"]
 			resultBatch = false
+		}
+		for _, spec := range toolUpdates[i] {
+			historyBridge.tools[toolKey(spec)] = spec
 		}
 		kind := stringValue(item["type"])
 		if kind == "additional_tools" {
@@ -306,13 +251,13 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 		callID := stringValue(item["call_id"])
 		if kind == "function_call" || kind == "custom_tool_call" || kind == "tool_search_call" && item["execution"] == "client" {
 			resultBatch = false
-			native := cache.get(bridge.scope + "/" + callID)
+			native := cache.getForCall(bridge.scope+"/"+callID, item)
 			if native == nil {
-				native, err = bridge.rebuildToolCall(item)
+				native, err = historyBridge.rebuildToolCall(item)
 				if err != nil {
 					return nil, nil, err
 				}
-				if err = cache.put(bridge.scope+"/"+callID, native); err != nil {
+				if err = cache.put(bridge.scope+"/"+callID, native, item); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -372,6 +317,9 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	} else {
 		instructions += " Return assistant text; do not call tools."
 	}
+	if bridge.structured != nil {
+		instructions += "\n" + bridge.structured.instructions()
+	}
 	prologue = append(prologue, message("developer", instructions))
 	// Basispoints uses its own request schema. Build that envelope explicitly;
 	// forwarding arbitrary Responses/Codex fields causes HTTP 422 validation errors.
@@ -419,6 +367,12 @@ func (b *Bridge) convertResponse(response object) error {
 		if err := b.nativeIntent(items); err != nil {
 			return err
 		}
+	}
+	if b.structured != nil {
+		if err := b.structured.validate(response); err != nil {
+			return err
+		}
+		b.structured.decorate(response)
 	}
 	for i, value := range items {
 		item, ok := value.(object)
