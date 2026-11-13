@@ -26,13 +26,23 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if opts.Alt == "responses/compact" {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
 	}
-	if errExpand := helps.ExpandRecognizedResponsesCompactionCapsules(&req, &opts); errExpand != nil {
-		return nil, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
-	}
 	if isCodexOpenAIImageRequest(opts) {
+		if errExpand := helps.ExpandRecognizedResponsesCompactionCapsules(&req, &opts); errExpand != nil {
+			return nil, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+		}
 		return e.executeOpenAIImageStream(ctx, auth, req, opts)
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
+	isCompat, errExpand := e.expandCodexResponsesCompaction(auth, &req, &opts, baseModel)
+	if errExpand != nil {
+		return nil, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+	}
+	if e.shouldCompactCompatResponsesTrigger(isCompat, req, opts) {
+		return e.executeCodexResponsesCompactionStream(ctx, auth, req, opts)
+	}
+	if errPrev := rejectSyntheticCompactionPreviousResponseID(ctx, req.Payload); errPrev != nil {
+		return nil, errPrev
+	}
 
 	apiKey, baseURL := codexCredsForRequest(ctx, auth, opts.Headers)
 	if errSIWC := ensureCodexSIWCCredentialsForRequest(ctx, auth, apiKey, opts.Headers); errSIWC != nil {
@@ -56,7 +66,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	originalPayload := originalPayloadSource
 	officialCodexRequest := codexOfficialRequest(originalPayloadSource, req.Payload)
-	isCompat := e.resolveCodexModelIsCompat(auth, req, baseModel)
 	targetModel := resolveResponsesSignatureTargetModel(baseModel, req, opts)
 	originalTranslated, body, updatesChanged, err := e.translateRequestPair(from, to, targetModel, originalPayload, req.Payload, true, opts.Headers, isCompat, ctx)
 	if err != nil {
@@ -75,7 +84,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	requestPath := helps.PayloadRequestPath(opts)
 	body = e.normalizeServiceTier(body)
 	body = helps.ApplyCodexFastMode(body, e.cfg)
-	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts))
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslated, req, opts, auth))
 	if e.runtime == nil {
 		body, _ = ojson.DeleteBytes(body, "previous_response_id")
 		body, _ = ojson.DeleteBytes(body, "generate")
@@ -242,6 +251,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("codex executor: close response body error: %v", errClose)
 		}
+		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 		if readErr != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, readErr)
 			return nil, readErr
@@ -249,7 +259,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, httpResp.StatusCode, data); errClearReplay != nil {
 			return nil, errClearReplay
 		}
-		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 		err = newCodexStatusErrWithHeadersAndCooling(httpResp.StatusCode, httpResp.Header, data, e.modelLevelCooling())
 		return nil, err

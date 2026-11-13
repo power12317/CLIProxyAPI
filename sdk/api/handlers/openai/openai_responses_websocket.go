@@ -137,8 +137,8 @@ func newResponsesWebsocketWriter(conn *websocket.Conn) *responsesWebsocketWriter
 }
 
 // closeForUpstreamError sends a best-effort close frame without waiting behind
-// an active downstream data writer. If a data write already owns writeMu, the
-// connection is closed immediately so the blocked writer and session can exit.
+// an active downstream writer. If a data or Ping write already owns writeMu,
+// the connection is closed immediately so the blocked writer and session can exit.
 func (w *responsesWebsocketWriter) closeForUpstreamError(err error) (bool, error) {
 	if w == nil || w.conn == nil {
 		return false, nil
@@ -177,12 +177,70 @@ func (w *responsesWebsocketWriter) writePing() error {
 	if w == nil || w.conn == nil {
 		return errors.New("responses websocket: writer is nil")
 	}
-	w.writeMu.Lock()
+	if w.closing.Load() {
+		return websocket.ErrCloseSent
+	}
+	if !w.writeMu.TryLock() {
+		if w.closing.Load() {
+			return websocket.ErrCloseSent
+		}
+		return nil
+	}
 	defer w.writeMu.Unlock()
 	if w.closing.Load() {
 		return websocket.ErrCloseSent
 	}
 	return w.conn.WriteControl(websocket.PingMessage, nil, time.Time{})
+}
+
+func (w *responsesWebsocketWriter) keepAlive(ctx context.Context, cancel context.CancelCauseFunc, intervals <-chan time.Duration) {
+	if errPing := runResponsesWebsocketKeepAlive(ctx, intervals, w.writePing); errPing != nil {
+		cancel(errPing)
+		_, _ = w.closeWithoutError()
+	}
+}
+
+func runResponsesWebsocketKeepAlive(ctx context.Context, intervals <-chan time.Duration, ping func() error) error {
+	var ticker *time.Ticker
+	var ticks <-chan time.Time
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case interval := <-intervals:
+			if interval <= 0 {
+				if ticker != nil {
+					ticker.Stop()
+				}
+				ticks = nil
+				continue
+			}
+			if ticker == nil {
+				ticker = time.NewTicker(interval)
+			} else {
+				ticker.Reset(interval)
+			}
+			ticks = ticker.C
+		case <-ticks:
+			if errPing := ping(); errPing != nil {
+				return errPing
+			}
+		}
+	}
+}
+
+func queueResponsesWebsocketKeepAliveInterval(intervals chan time.Duration, interval time.Duration) {
+	// A single producer replaces a pending interval without waiting for a Ping write.
+	select {
+	case <-intervals:
+	default:
+	}
+	intervals <- interval
 }
 
 func (w *responsesWebsocketWriter) closeWithPayload(payload []byte) (bool, error) {
@@ -383,6 +441,25 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	defer cancelSocket(nil)
 	c.Request = c.Request.WithContext(socketCtx)
 	upgradeRequest := c.Request.Clone(socketCtx)
+	// Start Ping at upgrade, before opening an upstream stream can block.
+	var keepAliveIntervals chan time.Duration
+	var keepAliveInterval time.Duration
+	updateKeepAlive := func() {
+		if h == nil {
+			return
+		}
+		interval := handlers.StreamingKeepAliveInterval(h.CurrentConfig())
+		if interval == keepAliveInterval {
+			return
+		}
+		keepAliveInterval = interval
+		if keepAliveIntervals == nil {
+			keepAliveIntervals = make(chan time.Duration, 1)
+			go writer.keepAlive(socketCtx, cancelSocket, keepAliveIntervals)
+		}
+		queueResponsesWebsocketKeepAliveInterval(keepAliveIntervals, interval)
+	}
+	updateKeepAlive()
 	// The reader owns the client socket so an in-flight interrupt is not stuck
 	// behind the response currently being forwarded.
 	requestLogEnabled := false
@@ -481,6 +558,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	lastResponseOutput := []byte("[]")
 	var observedCompaction responsesWebsocketObservedCompactionState
 	lastResponseID := ""
+	localCompactionBoundary := false
 	// Remains pending until a generating request commits successfully.
 	pendingPrewarmID := ""
 	var lastResponsePendingToolCallIDs []string
@@ -581,6 +659,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			continue
 		}
 		writer.quality.Reset()
+		updateKeepAlive()
 		// log.Infof(
 		// 	"responses websocket: downstream_in id=%s type=%d event=%s payload=%s",
 		// 	passthroughSessionID,
@@ -798,6 +877,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			requestJSON, errMsg = normalizeResponsesWebsocketPassthroughRequest(payload, requestModelName)
 		} else if len(lastRequest) == 0 && previousResponseID != "" {
 			errMsg = responsesWebsocketPreviousResponseNotFoundError()
+		} else if previousResponseID != "" && (localCompactionBoundary || strings.HasPrefix(previousResponseID, "resp_ag_compact_")) && previousResponseID != strings.TrimSpace(lastResponseID) {
+			errMsg = responsesWebsocketPreviousResponseNotFoundError()
 		} else {
 			requestJSON, updatedLastRequest, errMsg = normalizeResponsesWebsocketRequestWithIncrementalState(
 				payload,
@@ -850,6 +931,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			lastResponseOutput = []byte("[]")
 			observedCompaction.clear()
 			lastResponseID = ""
+			localCompactionBoundary = false
 			lastResponsePendingToolCallIDs = nil
 			prewarmID, errWrite := writeResponsesWebsocketSyntheticPrewarm(c, writer, requestJSON, wsTimelineLog, passthroughSessionID)
 			if errWrite != nil {
@@ -884,6 +966,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		turnStartEpoch := inputEpoch.Load()
 		cliCtx, cliCancel := h.GetContextWithCancel(h, c, executionParent)
 		cliCtx = cliproxyexecutor.WithDownstreamWebsocket(cliCtx)
+		cliCtx = cliproxyexecutor.WithLocalWebsocketTurnTracker(cliCtx)
 		cliCtx = cliproxyexecutor.WithWebsocketInputEpoch(cliCtx, &inputEpoch, msgEpoch)
 		if duplexInput != nil {
 			cliCtx = cliproxyexecutor.WithWebsocketInput(cliCtx, duplexInput)
@@ -929,6 +1012,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			preserveNativeOutput.Store(false)
 			codexDuplexStream.Store(false)
 			runtimeAuthSelected.Store(false)
+			cliproxyexecutor.ResetLocalWebsocketTurn(cliCtx)
 			authID = strings.TrimSpace(authID)
 			if authID == "" || h == nil || h.AuthManager == nil {
 				return
@@ -1006,12 +1090,14 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			logSessionID(),
 			responsesWebsocketForwardOptions{
 				preserveCompletionOutput: preserveNativeOutput.Load,
-				duplexStream:             codexDuplexStream.Load,
-				toolCacheTurn:            toolCacheTurn,
-				suppressError:            replayPinnedAuthFailure,
-				localInterrupt:           localInterrupt,
+				duplexStream: func() bool {
+					return codexDuplexStream.Load() && !cliproxyexecutor.LocalWebsocketTurnExecuted(cliCtx)
+				},
+				toolCacheTurn:  toolCacheTurn,
+				suppressError:  replayPinnedAuthFailure,
+				localInterrupt: localInterrupt,
 				websocketOwned: func() bool {
-					return attemptedUpstreamMode.Load() == responsesWebsocketUpstreamModeWS
+					return attemptedUpstreamMode.Load() == responsesWebsocketUpstreamModeWS && !cliproxyexecutor.LocalWebsocketTurnExecuted(cliCtx)
 				},
 			},
 		)
@@ -1062,6 +1148,15 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 
 		toolCacheTurn.commit()
 		pendingPrewarmID = ""
+		localTurnExecuted := cliproxyexecutor.LocalWebsocketTurnExecuted(cliCtx)
+		if localTurnExecuted {
+			attemptedUpstreamMode.Store(responsesWebsocketUpstreamModeHTTP)
+			if lastAttemptedAuthID != "" {
+				rememberPinnedAuth(lastAttemptedAuthID, modelName)
+			}
+			nextLastRequest = responsesWebsocketLocalCompactionBoundaryRequest(requestJSON)
+		}
+		localCompactionBoundary = localTurnExecuted
 		upstreamMode, _ = attemptedUpstreamMode.Load().(string)
 		if upstreamMode == responsesWebsocketUpstreamModeRuntime {
 			rememberPinnedAuth(lastAttemptedAuthID, modelName)
@@ -1146,6 +1241,17 @@ type responsesWebsocketObservedCompactionState struct {
 
 func (s *responsesWebsocketObservedCompactionState) clear() {
 	*s = responsesWebsocketObservedCompactionState{}
+}
+
+func responsesWebsocketLocalCompactionBoundaryRequest(requestJSON []byte) []byte {
+	if len(requestJSON) == 0 {
+		return []byte(`{"input":[]}`)
+	}
+	doc := ojson.NewDoc(requestJSON)
+	_ = doc.Delete("type")
+	_ = doc.Delete("previous_response_id")
+	_ = doc.SetRawBytes("input", []byte("[]"))
+	return doc.Bytes()
 }
 
 func responsesWebsocketHTTPReplayRequiredError() error {
