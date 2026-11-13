@@ -306,6 +306,10 @@ func (e *CodexExecutor) refreshLocked(ctx context.Context, auth *cliproxyauth.Au
 			needSIWC = hasSIWC
 		}
 	}
+	// Explicit refresh requests must also respect the server's renewal window.
+	if earliest, okEarliest := auth.SIWCEarliestRefreshTime(); okEarliest && now.Before(earliest) {
+		needSIWC = false
+	}
 	suppressedRejectedOuter := false
 	if !diskRotatedOuter && auth.RejectedRefreshToken != "" && outerRefreshToken == strings.TrimSpace(auth.RejectedRefreshToken) {
 		if needOuter {
@@ -459,6 +463,7 @@ func (e *CodexExecutor) refreshLocked(ctx context.Context, auth *cliproxyauth.Au
 				mergedSIWC = make(map[string]any)
 			}
 			delete(mergedSIWC, "expires_at")
+			delete(mergedSIWC, "earliest_refresh_at")
 			for k, v := range siwcTD.ToMap() {
 				mergedSIWC[k] = v
 			}
@@ -522,6 +527,9 @@ func (e *CodexExecutor) refreshLocked(ctx context.Context, auth *cliproxyauth.Au
 			return auth, fmt.Errorf("codex executor: persist refreshed credentials to %s: %w", diskPath, errWrite)
 		}
 		auth.Metadata = mergedDisk
+	}
+	if siwcRefreshed {
+		log.Debug("SIWC token renewal completed")
 	}
 	return auth, nil
 }

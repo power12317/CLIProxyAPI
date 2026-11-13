@@ -322,7 +322,7 @@ func TestCodex156OAuthFinalIdentityAcrossTransports(t *testing.T) {
 		t.Run(transport, func(t *testing.T) {
 			captured := make(chan []byte, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				for key, want := range map[string]string{"Session-Id": "cache", "Thread-Id": "thread", "X-Client-Request-Id": "thread", "X-Codex-Window-Id": "thread:0", "Version": "0.166.0", "Originator": "codex-tui", "User-Agent": "codex-tui/0.166.0 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.166.0)", "X-Codex-Beta-Features": "extra,remote_compaction_v2"} {
+				for key, want := range map[string]string{"Session-Id": "cache", "Thread-Id": "thread", "X-Client-Request-Id": "thread", "X-Codex-Window-Id": "thread:0", "Version": "0.167.2", "Originator": "codex-tui", "User-Agent": "codex-tui/0.167.2 (Windows 10.0.19044; x86_64) unknown (codex-tui; 0.167.2)", "X-Codex-Beta-Features": "extra,remote_compaction_v2"} {
 					if got := r.Header.Get(key); got != want {
 						t.Errorf("%s = %q, want %q", key, got, want)
 					}
