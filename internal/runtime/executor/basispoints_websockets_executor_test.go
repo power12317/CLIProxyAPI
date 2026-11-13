@@ -63,6 +63,7 @@ func basispointsOfficeTestToken(account string) string {
 }
 
 func withBasispointsTestGrant(auth *coreauth.Auth) {
+	auth.Metadata["use_basispoints"] = true
 	account, _ := auth.Metadata["account_id"].(string)
 	auth.Metadata["basispoints"] = map[string]any{"access_token": basispointsOfficeTestToken(account), "id_token": basispointsOfficeTestToken(account), "refresh_token": "office-refresh", "client_id": "app_fnr0pYvVwwFDocDumLG3H2Bp", "account_id": account, "expired": "2100-01-01T00:00:00Z"}
 }

@@ -40,15 +40,7 @@ func (e *BasispointsExecutor) enabled() bool {
 }
 
 func (e *BasispointsExecutor) enabledFor(auth *coreauth.Auth) bool {
-	if e == nil || !e.cooldown.PausedUntil().IsZero() {
-		return false
-	}
-	if auth != nil {
-		if _, configured := auth.Metadata["use_basispoints"]; configured {
-			return coreauth.IsCodexUseBasispoints(auth)
-		}
-	}
-	return e.enabled()
+	return e.enabled() && coreauth.IsCodexUseBasispoints(auth)
 }
 
 func (e *BasispointsExecutor) pauseOnForbidden(ctx context.Context, status int) {

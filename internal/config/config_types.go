@@ -288,7 +288,7 @@ func (c ResponseCompressionConfig) EffectiveMinBytes() int {
 type CodexConfig struct {
 	// Runtime configures the optional Codex master integration.
 	Runtime CodexRuntimeConfig `yaml:"runtime" json:"runtime"`
-	// Basispoints switches all Codex model requests to the Basispoints interface.
+	// Basispoints globally permits the interface for accounts that opt in.
 	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`
 	// ForceWebsocket prefers ChatGPT Codex WebSockets independently of the downstream transport.
 	ForceWebsocket bool `yaml:"force-websocket" json:"force-websocket"`

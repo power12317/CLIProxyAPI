@@ -9,7 +9,7 @@ import (
 
 func (m *Manager) prepareCodexTransport(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (context.Context, cliproxyexecutor.Options, func()) {
 	cfg := m.runtimeConfigSnapshot()
-	if cfg == nil || cfg.Codex.Basispoints.Enabled || m.HasBasispointsAccounts() || !cfg.Codex.ForceWebsocket || opts.Alt == "responses/compact" || len(providers) != 1 || !strings.EqualFold(providers[0], "codex") {
+	if cfg == nil || m.HasBasispointsAccounts() || !cfg.Codex.ForceWebsocket || opts.Alt == "responses/compact" || len(providers) != 1 || !strings.EqualFold(providers[0], "codex") {
 		return ctx, opts, nil
 	}
 	cliproxyexecutor.EnsureCodexTransport(&opts)
@@ -35,14 +35,11 @@ func (m *Manager) drainCodexSessionPool() {
 }
 
 func (m *Manager) codexWebsocketAuthEnabled(auth *Auth) bool {
-	if IsCodexUseBasispoints(auth) {
+	cfg := m.runtimeConfigSnapshot()
+	if cfg != nil && cfg.Codex.Basispoints.Enabled && IsCodexUseBasispoints(auth) {
 		return false
 	}
 	if IsCodexRuntimeOwnedAuth(auth) {
-		return false
-	}
-	cfg := m.runtimeConfigSnapshot()
-	if cfg != nil && cfg.Codex.Basispoints.Enabled && auth != nil && strings.EqualFold(auth.Provider, "codex") {
 		return false
 	}
 	if authWebsocketsEnabled(auth) {

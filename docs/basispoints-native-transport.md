@@ -18,15 +18,19 @@ The response exposes `off`, `valid`, or `invalid`, without credential values.
 
 Binding atomically saves the independent `basispoints` partition and enables
 `use_basispoints`. Saving that switch as `false` disables use while retaining the
-grant. The account switch takes precedence over the legacy global routing switch.
+grant. Both the global `codex.basispoints.enabled` switch and the account's
+`use_basispoints` switch must be true to route through Basispoints. The global
+switch is the master gate; disabling it retains account preferences and grants
+but bypasses Basispoints for every account. An absent account switch is disabled.
 Missing Office authorization returns `basispoints_authorization_required` before
 upload or generation. Workspace, user identity, Office client, and ID-token audience
 are checked. Office rotation is serialized by the credential file lock and saved
 before use; failures and HTTP 401 rejection affect only the Office grant.
 
 Office routing precedes the Codex runtime; native capability handoff still uses
-the original native path and its credentials. Per-account selection also enables
-the full-history bridge. Payload rules run once after built-in normalization,
+the original native path and its credentials. Per-account selection enables
+the full-history bridge only while the global gate is enabled. Payload rules run
+once after built-in normalization,
 attachment upload, and fast-mode adaptation, before transport framing.
 
 ## WebSocket control semantics
