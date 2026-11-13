@@ -1062,6 +1062,9 @@ func CodexClientSIWCAllowed(a *Auth) bool {
 
 // IsCodexUseSIWCForRequest reports whether a request should use the nested SIWC credential section.
 func IsCodexUseSIWCForRequest(ctx context.Context, a *Auth, clientHeaders ...http.Header) bool {
+	if codexRuntimeOwnsSelectedRequest(ctx, a) {
+		return false
+	}
 	if ctx != nil && ctx.Value(codexImageRequestContextKey{}) == true {
 		return false
 	}
