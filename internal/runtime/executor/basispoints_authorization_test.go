@@ -6,13 +6,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codexshared"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	bridge "github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexruntime"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -39,6 +42,7 @@ func TestBasispointsRequiresIndependentOfficeGrant(t *testing.T) {
 
 func TestBasispointsMissingGrantDoesNotDisableCodexAccount(t *testing.T) {
 	cfg := &config.Config{}
+	cfg.Codex.Basispoints.Enabled = true
 	exec := NewCodexAutoExecutor(cfg)
 	auth := basispointsTestAuth()
 	auth.ID = t.Name()
@@ -71,7 +75,7 @@ func TestBasispointsAccountSwitchPrecedesCodexRuntime(t *testing.T) {
 			auth.Metadata["use_siwc"] = true
 			auth.Metadata["siwc"] = map[string]any{"access_token": "siwc-token"}
 			auth.Metadata["codex_cli"] = map[string]any{"enabled": true}
-			cfg := &config.Config{Codex: config.CodexConfig{Runtime: config.CodexRuntimeConfig{Enabled: true, URL: "ws://invalid.local"}}}
+			cfg := &config.Config{Codex: config.CodexConfig{Basispoints: config.CodexBasispointsConfig{Enabled: true}, Runtime: config.CodexRuntimeConfig{Enabled: true, URL: "ws://invalid.local"}}}
 			exec := NewCodexAutoExecutor(cfg)
 			calls := 0
 			ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
@@ -147,6 +151,108 @@ func TestBasispointsPayloadRulesAreFinalForBothTransports(t *testing.T) {
 			_, err := exec.Execute(ctx, basispointsTestAuth(), core.Request{Model: "test-model", Payload: []byte(`{"input":"hello"}`)}, core.Options{SourceFormat: translator.FormatOpenAIResponse})
 			if err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestBasispointsRequiresBothSwitchesForRouting(t *testing.T) {
+	for _, global := range []bool{false, true} {
+		for _, account := range []string{"missing", "off", "on"} {
+			for _, stream := range []bool{false, true} {
+				t.Run(fmt.Sprintf("global=%t/account=%s/stream=%t", global, account, stream), func(t *testing.T) {
+					cfg := &config.Config{}
+					cfg.Codex.Basispoints.Enabled = global
+					auth := basispointsTestAuth()
+					switch account {
+					case "missing":
+						delete(auth.Metadata, "use_basispoints")
+					case "off":
+						auth.Metadata["use_basispoints"] = false
+					}
+					exec := NewCodexAutoExecutor(cfg)
+					wantHost, wantToken := "chatgpt.com", auth.Metadata["access_token"].(string)
+					if global && account == "on" {
+						wantHost, wantToken = "bps.openai.com", coreauth.BasispointsGrant(auth)["access_token"].(string)
+					}
+					calls := 0
+					ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
+						calls++
+						if r.URL.Host != wantHost || r.Header.Get("Authorization") != "Bearer "+wantToken {
+							t.Errorf("upstream=%s; expected host %s and selected credential partition", r.URL, wantHost)
+						}
+						return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"model\":\"runtime-model\",\"status\":\"completed\",\"output\":[]}}\n\n")), Request: r}, nil
+					})))
+					req := core.Request{Model: "runtime-model", Payload: []byte(`{"model":"runtime-model","input":"hello"}`)}
+					opts := core.Options{SourceFormat: translator.FormatOpenAIResponse}
+					if stream {
+						result, err := exec.ExecuteStream(ctx, auth, req, opts)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for chunk := range result.Chunks {
+							if chunk.Err != nil {
+								t.Fatal(chunk.Err)
+							}
+						}
+					} else if _, err := exec.Execute(ctx, auth, req, opts); err != nil {
+						t.Fatal(err)
+					}
+					if calls != 1 {
+						t.Fatalf("upstream calls=%d, want 1", calls)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestBasispointsGlobalOffRoutesOptedInAccountToCodexRuntime(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			runtimeCalls := make(chan struct{}, 1)
+			settings, auth := runtimeTestMaster(t, "office-account.json", func(conn *websocket.Conn, rpc runtimeTestRPC, req bridge.Request) {
+				runtimeCalls <- struct{}{}
+				runtimeTestAccept(conn, rpc, req)
+				runtimeTestFinish(conn, req, runtimeTerminal)
+			})
+			auth.Metadata["account_id"] = "account"
+			auth.Metadata["access_token"] = "ordinary-token"
+			withBasispointsTestGrant(auth)
+			dir := t.TempDir()
+			auth.Attributes[coreauth.AttributePath] = filepath.Join(dir, auth.ID)
+			if err := codexshared.Write(auth.Attributes[coreauth.AttributePath], auth.Metadata); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{AuthDir: dir, Codex: config.CodexConfig{Runtime: settings}}
+			exec := NewCodexAutoExecutor(cfg)
+			ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", http.RoundTripper(forceWebsocketRoundTripper(func(r *http.Request) (*http.Response, error) {
+				t.Errorf("request bypassed Codex runtime: %s", r.URL)
+				return nil, fmt.Errorf("unexpected direct upstream request")
+			})))
+			req := core.Request{Model: "runtime-model", Payload: []byte(`{"model":"runtime-model","input":"hello"}`)}
+			if stream {
+				result, err := exec.ExecuteStream(ctx, auth, req, runtimeTestOptions())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for chunk := range result.Chunks {
+					if chunk.Err != nil {
+						t.Fatal(chunk.Err)
+					}
+				}
+			} else if _, err := exec.Execute(ctx, auth, req, runtimeTestOptions()); err != nil {
+				t.Fatal(err)
+			}
+			if len(runtimeCalls) != 1 {
+				t.Fatal("request did not reach Codex runtime")
+			}
+			saved, err := codexshared.Read(auth.Attributes[coreauth.AttributePath])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved["use_basispoints"] != true || saved["basispoints"] == nil {
+				t.Fatal("global disable erased the account preference or Office grant")
 			}
 		})
 	}

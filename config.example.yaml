@@ -1179,7 +1179,7 @@ oauth:
       #   beta-features: "multi_agent"
       #   fast-mode: "auto" # auto, default, fast, or ultrafast
 
-      # Optional Basispoints interface for Codex models.
+      # Master gate for Basispoints; each account must also enable use_basispoints.
       basispoints:
         enabled: false
       # Prefer WebSockets for ChatGPT Codex generation, regardless of client transport.

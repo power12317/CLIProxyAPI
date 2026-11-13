@@ -51,6 +51,10 @@ func (m *Manager) HasBasispointsAccounts() bool {
 	if m == nil {
 		return false
 	}
+	cfg := m.runtimeConfigSnapshot()
+	if cfg == nil || !cfg.Codex.Basispoints.Enabled {
+		return false
+	}
 	for _, auth := range m.List() {
 		if !auth.Disabled && IsCodexUseBasispoints(auth) {
 			return true
