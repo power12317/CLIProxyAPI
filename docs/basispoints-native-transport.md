@@ -33,6 +33,12 @@ the full-history bridge only while the global gate is enabled. Payload rules run
 once after built-in normalization,
 attachment upload, and fast-mode adaptation, before transport framing.
 
+Codex runtime selection uses only the ordinary OAuth partition while both runtime
+switches are enabled and Office routing is inactive. The ordinary credential's
+expiration remains enforced; an unused SIWC token cannot block the worker.
+Disabling runtime restores selection by the SIWC switch. Disabled accounts,
+terminal authorization failures, and quota blocks still apply.
+
 ## WebSocket control semantics
 
 Cancellation sends `basispoints.response.cancel` with the current request ID and
