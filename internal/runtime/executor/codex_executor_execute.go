@@ -153,7 +153,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	normalizeCodexOutputBudgetDoc(doc)
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 
-	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
+	if err = e.applyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), updatesChanged); err != nil {
 		return resp, err
 	}
 
@@ -532,7 +532,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 
 	doc := ojson.NewDoc(body)
-	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
+	if err = e.applyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), updatesChanged); err != nil {
 		return resp, err
 	}
 

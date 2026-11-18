@@ -2,7 +2,6 @@ package helps
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -10,6 +9,7 @@ import (
 	"net/textproto"
 
 	"github.com/MoeForge/moego/base64"
+	"github.com/MoeForge/moego/json"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"

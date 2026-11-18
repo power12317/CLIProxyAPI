@@ -46,7 +46,7 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 			URL: target, Method: method, Body: wire, Provider: "codex",
 		})
 	}
-	RecordAPIResponseError(ctx, &fullLogging, fmt.Errorf("Basispoints phase=%s: %w", phase, err))
+	RecordFullAPIResponseDiagnostic(ctx, &fullLogging, fmt.Sprintf("Basispoints phase=%s: %s", phase, err.Error()))
 	if !cfg.RequestLog && len(upstream) > 0 {
 		AppendAPIResponseChunk(ctx, &fullLogging, upstream)
 	}
@@ -77,7 +77,7 @@ func RecordBasispointsFailure(ctx context.Context, cfg *config.Config, original,
 		}
 	}
 	if tools.Len() > 0 {
-		AppendAPIResponseChunk(ctx, &fullLogging, []byte(tools.String()))
+		RecordFullAPIResponseDiagnostic(ctx, &fullLogging, tools.String())
 	}
 	if value, exists := ginCtx.Get(logging.WebsocketErrorLogContextKey); exists {
 		if snapshot, ok := value.(logging.WebsocketErrorLog); ok {

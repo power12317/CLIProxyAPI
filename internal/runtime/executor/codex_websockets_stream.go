@@ -542,7 +542,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					// status the upstream refused to put on the wire.
 					helps.LogWithRequestID(ctx).Debugf("codex websockets executor: bootstrap overload rejection after %d messages read, failing over", bufferedFrames)
 					if overloadFailover {
-						return nil, newCodexBootstrapOverloadErr(terminalBody)
+						if streamErr.StatusCode() == http.StatusTooManyRequests && streamErr.RetryAfter() != nil {
+							return nil, streamErr
+						}
+						return nil, newCodexBootstrapOverloadErrWithRetryAfter(terminalBody, streamErr.RetryAfter())
 					}
 					return nil, streamErr
 				}
@@ -927,6 +930,10 @@ type codexWebsocketPrepared struct {
 	replayScope          codexReasoningReplayScope
 	optimizeMultiAgentV2 bool
 	multiAgentV2Conflict bool
+
+	// Immutable pre-payload JSON value for duplex inheritance; never rebuild from clientBody.
+	// An empty Go string means absent, not an explicitly empty JSON string.
+	unconfiguredInstructions string
 }
 
 func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*codexWebsocketPrepared, error) {
@@ -976,6 +983,8 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	}
 	body = doc.Bytes()
 
+	hadUnconfiguredInstructions := doc.Get("instructions").Exists()
+	var unconfiguredInstructions string
 	hasExplicitInstructions := ojson.GetBytes(req.Payload, "instructions").Exists() && strings.TrimSpace(ojson.GetBytes(req.Payload, "instructions").String()) != ""
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.NormalizeCodexServiceTier(body)
@@ -986,6 +995,9 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	body = ensureWebSearchToolForHistory(body, opts.Headers)
 	if !useSIWC {
 		body = normalizeCodexInstructions(body, preserveNativeOutput)
+		if hadUnconfiguredInstructions {
+			unconfiguredInstructions = strings.Clone(ojson.GetBytes(body, "instructions").Raw)
+		}
 		if ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
 			body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 		}
@@ -1047,14 +1059,18 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 		return nil, errTicket
 	}
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
-	upstreamBody = helps.SanitizeCodexInputItemIDs(upstreamBody)
-	if useSIWC {
-		upstreamBody = applyCodexSIWCWebsocketBodyRules(upstreamBody, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
+	doc = ojson.NewDoc(upstreamBody)
+	helps.SanitizeCodexInputItemIDsDoc(doc)
+	// Keep explicit clearing intent before SIWC cleanup and user replacement.
+	if useSIWC && hadUnconfiguredInstructions {
+		unconfiguredInstructions = strings.Clone(doc.Get("instructions").Raw)
 	}
-	upstreamBody = finalizePayload(upstreamBody)
 	if useSIWC {
-		clientBody = upstreamBody
+		applyCodexSIWCWebsocketBodyRulesDoc(doc, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 	}
+	finalizePayload.FinalizeDoc(doc)
+	upstreamBody = doc.Bytes()
+	clientBody = upstreamBody
 	upstreamModel := strings.TrimSpace(ojson.GetBytes(upstreamBody, "model").String())
 	applyCodexRoutingHint(ctx, wsHeaders, auth, upstreamModel, upstreamBody, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, upstreamModel)
@@ -1064,20 +1080,21 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	turnState.ObserveRequest(wsHeaders, upstreamBody)
 
 	return &codexWebsocketPrepared{
-		from:                 from,
-		responseFormat:       responseFormat,
-		to:                   to,
-		preserveNativeOutput: preserveNativeOutput,
-		originalPayload:      originalPayload,
-		clientBody:           clientBody,
-		upstreamBody:         upstreamBody,
-		upstreamModel:        upstreamModel,
-		wsURL:                wsURL,
-		wsHeaders:            wsHeaders,
-		turnState:            turnState,
-		useSIWC:              useSIWC,
-		replayScope:          replayScope,
-		optimizeMultiAgentV2: optimizeMultiAgentV2,
-		multiAgentV2Conflict: multiAgentV2Conflict,
+		from:                     from,
+		responseFormat:           responseFormat,
+		to:                       to,
+		preserveNativeOutput:     preserveNativeOutput,
+		originalPayload:          originalPayload,
+		clientBody:               clientBody,
+		upstreamBody:             upstreamBody,
+		upstreamModel:            upstreamModel,
+		wsURL:                    wsURL,
+		wsHeaders:                wsHeaders,
+		turnState:                turnState,
+		useSIWC:                  useSIWC,
+		replayScope:              replayScope,
+		optimizeMultiAgentV2:     optimizeMultiAgentV2,
+		multiAgentV2Conflict:     multiAgentV2Conflict,
+		unconfiguredInstructions: unconfiguredInstructions,
 	}, nil
 }

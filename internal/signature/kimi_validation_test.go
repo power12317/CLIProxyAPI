@@ -1,7 +1,6 @@
 package signature
 
 import (
-	"encoding/json"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MoeForge/moego/base64"
+	"github.com/MoeForge/moego/json"
 )
 
 // kimiSignatureCorpusPath locates the harvested Kimi signature corpus. The

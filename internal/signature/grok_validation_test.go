@@ -3,7 +3,6 @@ package signature
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/MoeForge/moego/base64"
+	"github.com/MoeForge/moego/json"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )

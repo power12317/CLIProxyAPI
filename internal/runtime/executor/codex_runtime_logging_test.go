@@ -44,6 +44,23 @@ func runtimeLogText(t *testing.T, c *gin.Context, key string) string {
 	return string(v.([]byte))
 }
 
+func runtimeDiagnosticText(t *testing.T, c *gin.Context) string {
+	t.Helper()
+	value, exists := c.Get(logging.DeferredAPIResponseContextKey)
+	capture, ok := value.(*logging.DeferredAPICapture)
+	if !exists || !ok {
+		t.Fatal("missing local response diagnostics")
+	}
+	var text strings.Builder
+	for _, entry := range capture.ResponseDiagnostics() {
+		if entry != nil && entry.Error != nil {
+			text.WriteString(entry.Error.Error())
+			text.WriteByte('\n')
+		}
+	}
+	return text.String()
+}
+
 func TestCodexRuntimeUpstreamLogsForSuccessAndStream(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		name := "nonstream"
@@ -207,14 +224,14 @@ func TestCodexRuntimeLogsStreamFailureAndDisconnect(t *testing.T) {
 				for range result.Chunks {
 				}
 			}
-			responseLog := runtimeLogText(t, c, "API_RESPONSE")
+			responseLog := runtimeDiagnosticText(t, c)
 			want := "connection closed before completion"
 			if mode == "failed-event" {
 				want = "out of capacity"
 			} else if mode == "transport-error" {
 				want = "upstream connection reset"
 			}
-			if !strings.Contains(responseLog, "Error:") || !strings.Contains(responseLog, want) {
+			if !strings.Contains(responseLog, want) {
 				t.Fatalf("failure log missing: %s", responseLog)
 			}
 			if requestLog := runtimeLogText(t, c, "API_REQUEST"); !strings.Contains(requestLog, "oailb_node: gateway-request") {

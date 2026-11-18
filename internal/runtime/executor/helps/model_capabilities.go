@@ -142,3 +142,22 @@ func reconcileClaudeOpenAICompatToolCallReasoningDoc(doc *ojson.Doc) bool {
 	}
 	return modified
 }
+
+// ApplyRuntimeRequestThinkingDoc keeps native Responses effort opaque to CPA's
+// model catalog; other formats and explicit suffixes retain canonical translation.
+func ApplyRuntimeRequestThinkingDoc(doc *ojson.Doc, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, fromFormat, toFormat, provider string, normalizedUpdatesChanged ...bool) error {
+	if doc == nil {
+		return nil
+	}
+	originalSource := opts.OriginalRequest
+	if len(originalSource) == 0 {
+		originalSource = req.Payload
+	}
+	source := req.Payload
+	if len(source) == 0 {
+		source = opts.OriginalRequest
+	}
+	summary := translatedRequestSummaryConfigDoc(doc, req.Payload, originalSource, req.Model, fromFormat, toFormat)
+	modelInfo, resolved := cliproxyauth.ResolvedModelInfo(req)
+	return thinking.ApplyThinkingWithNativePassthroughDoc(doc, source, req.Model, fromFormat, toFormat, provider, modelInfo, resolved, summary, normalizedUpdatesChanged...)
+}

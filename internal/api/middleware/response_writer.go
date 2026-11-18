@@ -413,6 +413,9 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 		return errDiscard
 	}
 
+	// Local diagnostics must not turn a recovered retry or client cancellation into an error response.
+	slicesAPIResponseError = append(slicesAPIResponseError, w.responseDiagnostics(c)...)
+
 	if w.isStreaming && w.streamWriter != nil {
 		if w.chunkChannel != nil {
 			close(w.chunkChannel)
@@ -498,7 +501,7 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	// Promoted full upstream diagnostics take precedence over bounded snapshots.
 	fullUpstreamResponse := bytes.HasPrefix(apiResponse, []byte("=== API RESPONSE ")) || (apiResponseSource != nil && apiResponseSource.HasPayload())
 	if forceLog && !fullUpstreamResponse {
-		if deferredResponse := w.extractDeferredAPIResponse(c); len(deferredResponse) > 0 {
+		if deferredResponse := w.extractDeferredAPIResponse(c); len(deferredResponse) > 0 || len(apiRequest) > 0 {
 			apiResponse = deferredResponse
 		}
 	}
@@ -930,6 +933,16 @@ func hasActionableAPIResponseErrors(apiErrors []*interfaces.ErrorMessage) bool {
 		}
 	}
 	return false
+}
+
+func (w *ResponseWriterWrapper) responseDiagnostics(c *gin.Context) []*interfaces.ErrorMessage {
+	capture := w.deferredAPICapture
+	if (capture == nil || capture.IsClosed()) && c != nil {
+		if value, exists := c.Get(logging.DeferredAPIResponseContextKey); exists {
+			capture, _ = value.(*logging.DeferredAPICapture)
+		}
+	}
+	return capture.ResponseDiagnostics()
 }
 
 func extractAPIResponseErrors(c *gin.Context) []*interfaces.ErrorMessage {

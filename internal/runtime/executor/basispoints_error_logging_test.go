@@ -32,7 +32,7 @@ func TestBasispointsFullErrorFiles(t *testing.T) {
 				cfg.RequestLog = requestLog
 				logger := logging.NewFileRequestLogger(requestLog, logsDir, "", 10)
 				original := []byte(`{ "model":"gpt-6-astra", "input":"complete client request: start/end", "tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}] }`)
-				badCode := "unparseable tool code: " + strings.Repeat("x", 188)
+				badCode := "unparseable tool code: " + strings.Repeat("x", 20<<10) + "\nFULL-TRANSPORT-CODE-END"
 				args, _ := json.Marshal(map[string]any{"summary": "Shell", "code": badCode})
 				upstreamPayload, _ := json.Marshal(map[string]any{"id": "r", "status": "completed", "output": []any{map[string]any{"type": "function_call", "id": "fc_error", "call_id": "call_error", "name": "run_officejs", "arguments": string(args)}}})
 				if mode == "success" {
@@ -130,6 +130,13 @@ func TestBasispointsFullErrorFiles(t *testing.T) {
 				}
 				if strings.HasPrefix(mode, "invalid_tool") && (!bytes.Contains(content, []byte("Transport code:\n"+badCode)) || !bytes.Contains(content, []byte("stage=transport_code"))) {
 					t.Fatal("malformed tool input was not logged completely")
+				}
+				if strings.HasPrefix(mode, "invalid_tool") {
+					section := bytes.Index(content, []byte("=== RESPONSE ==="))
+					tool := bytes.Index(content, []byte("=== BASISPOINTS TOOL INPUT ==="))
+					if section < 0 || tool < section {
+						t.Fatal("decoded tool diagnostic was mixed into the upstream response")
+					}
 				}
 				for _, secret := range []string{"client-secret-key", "upstream-secret-key"} {
 					if bytes.Contains(content, []byte(secret)) {

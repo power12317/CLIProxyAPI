@@ -43,6 +43,13 @@ func translateCodexRequestPair(from, to sdktranslator.Format, model string, orig
 	return original, body
 }
 
+func (e *CodexExecutor) applyRequestThinkingDoc(doc *ojson.Doc, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, from, to string, updatesChanged bool) error {
+	if e.runtime != nil {
+		return helps.ApplyRuntimeRequestThinkingDoc(doc, req, opts, from, to, e.Identifier(), updatesChanged)
+	}
+	return helps.ApplyRequestThinkingDoc(doc, req, opts, from, to, e.Identifier(), updatesChanged)
+}
+
 func (e *CodexExecutor) normalizeServiceTier(body []byte) []byte {
 	if e.runtime != nil {
 		return helps.NormalizeCodexRuntimeServiceTier(body)

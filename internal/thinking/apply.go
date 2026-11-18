@@ -258,6 +258,20 @@ func applyThinking(body, sourceBody []byte, model string, fromFormat string, toF
 }
 
 func applyThinkingDocCore(doc *ojson.Doc, docValid bool, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, resolvedModelInfo *registry.ModelInfo, modelInfoResolved bool, summaryConfig SummaryConfig, normalizedUpdatesChanged ...bool) (bool, error) {
+	return applyThinkingDocCoreWithEffortPolicy(doc, docValid, sourceBody, model, fromFormat, toFormat, providerKey, resolvedModelInfo, modelInfoResolved, summaryConfig, false, normalizedUpdatesChanged...)
+}
+
+// ApplyThinkingWithNativePassthroughDoc leaves native effort validation to the
+// credential worker while retaining the canonical translation and suffix pipeline.
+func ApplyThinkingWithNativePassthroughDoc(doc *ojson.Doc, sourceBody []byte, model, fromFormat, toFormat, providerKey string, modelInfo *registry.ModelInfo, modelInfoResolved bool, summaryConfig SummaryConfig, normalizedUpdatesChanged ...bool) error {
+	if doc == nil {
+		return nil
+	}
+	_, err := applyThinkingDocCoreWithEffortPolicy(doc, doc.Len() > 0, sourceBody, model, fromFormat, toFormat, providerKey, modelInfo, modelInfoResolved, summaryConfig, true, normalizedUpdatesChanged...)
+	return err
+}
+
+func applyThinkingDocCoreWithEffortPolicy(doc *ojson.Doc, docValid bool, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, resolvedModelInfo *registry.ModelInfo, modelInfoResolved bool, summaryConfig SummaryConfig, preserveNativeEffort bool, normalizedUpdatesChanged ...bool) (bool, error) {
 	if doc == nil {
 		return false, nil
 	}
@@ -316,12 +330,19 @@ func applyThinkingDocCore(doc *ojson.Doc, docValid bool, sourceBody []byte, mode
 	}
 
 	// 3. Model capability check
+	if nativeResponses && !preserveNativeEffort {
+		normalized, errNormalize := normalizeNativeResponsesEffortDoc(doc, docValid, modelInfo, applier, fromFormat, providerFormat, HasThinkingSuffix(model))
+		modified = modified || normalized
+		if errNormalize != nil {
+			return modified, errNormalize
+		}
+	}
 	if !suffixResult.HasSuffix && len(sourceBody) > 0 && isResponsesFormat(fromFormat) && !docValid && hasThinkingConfig(extractConfigurationUpdateConfig(sourceBody)) {
 		// Do not rebuild a malformed target from a separate source update.
 		return modified, nil
 	}
 	if nativeResponses && !suffixResult.HasSuffix {
-		// Native Responses keeps the top-level baseline and in-turn updates as-is.
+		// Native Responses preserves the baseline and update timeline after validation.
 		if log.IsLevelEnabled(log.DebugLevel) && (modelInfo.Thinking != nil || modelInfo.UserDefined) {
 			if config := extractCodexUsageConfigDoc(doc, docValid); hasThinkingConfig(config) {
 				fields := log.Fields{
@@ -645,7 +666,7 @@ func applyUserDefinedModelDoc(doc *ojson.Doc, docValid bool, modelInfo *registry
 	}
 
 	if !isPluginApplier {
-		config = normalizeUserDefinedConfig(config, fromFormat, toFormat)
+		config = normalizeUserDefinedConfig(config, modelInfo, fromFormat, toFormat)
 	}
 	log.WithFields(log.Fields{
 		"provider": toFormat,
@@ -667,7 +688,7 @@ func applyUserDefinedModelDoc(doc *ojson.Doc, docValid bool, modelInfo *registry
 	return modified, nil
 }
 
-func normalizeUserDefinedConfig(config ThinkingConfig, fromFormat, toFormat string) ThinkingConfig {
+func normalizeUserDefinedConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFormat, toFormat string) ThinkingConfig {
 	if config.Mode != ModeLevel {
 		return config
 	}
@@ -676,6 +697,11 @@ func normalizeUserDefinedConfig(config ThinkingConfig, fromFormat, toFormat stri
 	}
 	if !isBudgetCapableProvider(toFormat) {
 		return config
+	}
+	if !strings.EqualFold(string(config.Level), string(LevelNone)) && !strings.EqualFold(string(config.Level), string(LevelAuto)) {
+		if isGeminiFamily(fromFormat) || fromFormat == "interactions" || (modelInfo != nil && modelInfo.Thinking != nil && len(modelInfo.Thinking.Levels) > 0) {
+			return config
+		}
 	}
 	budget, ok := ConvertLevelToBudget(string(config.Level))
 	if !ok {

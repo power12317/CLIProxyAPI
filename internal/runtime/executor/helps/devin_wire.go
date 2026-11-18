@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -18,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MoeForge/moego/base64"
+	"github.com/MoeForge/moego/json"
 
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/cache"

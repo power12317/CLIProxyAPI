@@ -1,11 +1,11 @@
 package misc
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/MoeForge/moego/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/credentialmeta"
 	log "github.com/sirupsen/logrus"
 )
