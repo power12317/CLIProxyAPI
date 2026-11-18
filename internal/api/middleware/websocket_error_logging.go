@@ -41,5 +41,5 @@ func (w *ResponseWriterWrapper) snapshotWebsocketError(c *gin.Context, err error
 	apiError := &interfaces.ErrorMessage{StatusCode: clienterror.HTTPStatusFromErrorOr(err, http.StatusBadGateway), Error: err}
 	return w.logRequest(w.extractRequestBody(c), http.StatusSwitchingProtocols, nil, []byte(err.Error()), nil, nil,
 		sections[0].body, nil, sections[1].body, nil, sections[2].body, nil,
-		w.extractAPIResponseTimestamp(c), []*interfaces.ErrorMessage{apiError}, true)
+		w.extractAPIResponseTimestamp(c), append([]*interfaces.ErrorMessage{apiError}, w.responseDiagnostics(c)...), true)
 }

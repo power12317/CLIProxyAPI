@@ -326,7 +326,7 @@ func TestCodexRuntimeCancellationReleasesBlockedStream(t *testing.T) {
 	<-closed
 	for range res.Chunks {
 	}
-	if responseLog := runtimeLogText(t, ginCtx, "API_RESPONSE"); !strings.Contains(responseLog, "context canceled") {
+	if responseLog := runtimeDiagnosticText(t, ginCtx); !strings.Contains(responseLog, "context canceled") {
 		t.Fatal("cancellation missing from response log", responseLog)
 	}
 }

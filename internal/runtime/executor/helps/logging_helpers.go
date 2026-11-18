@@ -56,7 +56,6 @@ type upstreamAttempt struct {
 	bodyStarted          bool
 	bodyHasContent       bool
 	prevWasSSEEvent      bool
-	errorWritten         bool
 	trailingNewlines     int
 }
 
@@ -325,7 +324,8 @@ func RecordAPIResponseMetadata(ctx context.Context, cfg *config.Config, status i
 	updateAggregatedResponseIfMemoryBacked(ginCtx, attempts)
 }
 
-// RecordAPIResponseError adds an error entry for the latest attempt when no HTTP response is available.
+// RecordAPIResponseError retains local failures for the downstream RESPONSE log section.
+// API response capture contains upstream data only.
 func RecordAPIResponseError(ctx context.Context, cfg *config.Config, err error) {
 	if err == nil {
 		return
@@ -338,20 +338,39 @@ func RecordAPIResponseError(ctx context.Context, cfg *config.Config, err error) 
 	if ginCtx == nil {
 		return
 	}
-	attempts, attempt := ensureAttempt(ginCtx)
-	ensureResponseIntro(ginCtx, attempt)
-
-	if attempt.bodyStarted && !attempt.bodyHasContent {
-		// Ensure body does not stay empty marker if error arrives first.
-		attempt.bodyStarted = false
+	capture := logging.DeferredAPICaptureFromContext(ctx)
+	if capture == nil {
+		capture = deferredResponseCaptureFrom(ginCtx)
 	}
-	if attempt.errorWritten {
-		writeAttemptResponse(ginCtx, attempt, []byte("\n"))
-	}
-	writeAttemptResponse(ginCtx, attempt, []byte(fmt.Sprintf("Error: %s\n", err.Error())))
-	attempt.errorWritten = true
+	capture.RecordResponseError(err)
+	// Prevent handler fallback payloads from fabricating an upstream response on dial errors.
+	ginCtx.Set(logging.APIResponseCapturedContextKey, true)
+}
 
-	updateAggregatedResponseIfMemoryBacked(ginCtx, attempts)
+// RecordFullAPIResponseDiagnostic is reserved for explicitly promoted full
+// error captures; ordinary transport diagnostics remain bounded.
+func RecordFullAPIResponseDiagnostic(ctx context.Context, cfg *config.Config, message string) {
+	if !requestLogCaptureEnabled(cfg) || message == "" {
+		return
+	}
+	ginCtx := ginContextFrom(ctx)
+	if ginCtx == nil {
+		return
+	}
+	capture := logging.DeferredAPICaptureFromContext(ctx)
+	if capture == nil || capture.IsClosed() {
+		// WebSocket error-only capture is closed at upgrade. An explicitly
+		// promoted full failure gets its own holder without reopening it.
+		if value, exists := ginCtx.Get(logging.DeferredAPIResponseContextKey); exists {
+			capture, _ = value.(*logging.DeferredAPICapture)
+		}
+		if capture == nil || capture.IsClosed() {
+			capture = logging.NewDeferredAPICapture()
+			ginCtx.Set(logging.DeferredAPIResponseContextKey, capture)
+		}
+	}
+	capture.RecordFullResponseDiagnostic(message)
+	ginCtx.Set(logging.APIResponseCapturedContextKey, true)
 }
 
 // AppendAPIResponseChunk appends an upstream response chunk to Gin context for request logging.
@@ -663,6 +682,9 @@ func writeAttemptResponse(ginCtx *gin.Context, attempt *upstreamAttempt, payload
 		attempt.response = &strings.Builder{}
 	}
 	attempt.response.Write(payload)
+	if ginCtx != nil {
+		ginCtx.Set(logging.APIResponseCapturedContextKey, true)
+	}
 }
 
 func updateAggregatedRequest(ginCtx *gin.Context, attempts []*upstreamAttempt) {

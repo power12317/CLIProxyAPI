@@ -1,10 +1,10 @@
 package signature
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/MoeForge/moego/base64"
+	"github.com/MoeForge/moego/json"
 
 	"github.com/MoeForge/moego/ojson"
 	"google.golang.org/protobuf/encoding/protowire"

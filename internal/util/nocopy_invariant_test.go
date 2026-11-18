@@ -3,9 +3,10 @@ package util
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/MoeForge/moego/regexp"
 )
 
 // inPlaceSJSONTokens are the sjson knobs that let a write reuse the caller's
@@ -104,7 +105,6 @@ type reviewedInPlaceByteWrite struct {
 }
 
 var reviewedInPlaceByteWrites = map[string]reviewedInPlaceByteWrite{
-	"sdk/cliproxy/auth/selector_weighted.go":                        {2, "shifts weightedPoolMember structs in scheduler-owned slices; no JSON payload bytes are rewritten"},
 	"internal/kvstore/bolt_store.go":                                {1, "encodeEnvelope copies into a freshly allocated private buffer before returning it; no JSON reader can alias that destination"},
 	"internal/translator/common/apply_patch_responses.go":           {1, "shifts [][]byte item references in a private output slice; no byte of any JSON payload is rewritten"},
 	"internal/translator/common/vertex_partial_args.go":             {1, "shifts []string object keys to insert a key; no byte of any payload is rewritten"},
@@ -117,6 +117,7 @@ var reviewedInPlaceByteWrites = map[string]reviewedInPlaceByteWrite{
 	"internal/client/codex/live/tcp_proxy.go":                       {1, "copies header and payload into a freshly allocated frame"},
 	"internal/home/client.go":                                       {1, "zeroes a secret buffer after json.Unmarshal has copied every value out"},
 	"internal/pluginstore/auth.go":                                  {1, "zeroes a locally built credential buffer after base64 encoding copied it out"},
+	"sdk/cliproxy/auth/selector_weighted.go":                        {2, "shifts weightedPoolMember bookkeeping structs when inserting or removing members; no byte of any JSON payload is rewritten"},
 }
 
 // TestInPlaceByteWritesAreReviewed keeps the set of in-place byte writes small

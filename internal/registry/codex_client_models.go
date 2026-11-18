@@ -3,12 +3,14 @@ package registry
 import (
 	"bytes"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/MoeForge/moego/json"
+	"github.com/MoeForge/moego/ojson"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -90,7 +92,7 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 		return false, fmt.Errorf("%s: %w", source, err)
 	}
 
-	cloned := append([]byte(nil), data...)
+	cloned := applyForkCodexClientDefaults(data, thinkingLevelsMap)
 	UpdateCodexResponsesLiteCapabilitiesFromCatalog(cloned)
 	codexClientCatalogStore.mu.Lock()
 	defer codexClientCatalogStore.mu.Unlock()
@@ -233,4 +235,29 @@ func requiredCodexClientModelInteger(model map[string]any, field string, positiv
 		return 0, fmt.Errorf("field %q must not be negative", field)
 	}
 	return int64(value), nil
+}
+
+// applyForkCodexClientDefaults preserves the fork's selected low defaults after
+// embedded or remote refreshes without changing capabilities or review metadata.
+func applyForkCodexClientDefaults(data []byte, supported map[string][]string) []byte {
+	doc := ojson.NewDoc(data)
+	changed := false
+	for index, model := range doc.Get("models").Array() {
+		slug := strings.ToLower(strings.TrimSpace(model.Get("slug").String()))
+		if slug != "gpt-6-astra" && slug != "gpt-5.5" {
+			continue
+		}
+		for _, level := range supported[slug] {
+			if level == "low" && model.Get("default_reasoning_level").String() != "low" {
+				if err := doc.Set("models."+strconv.Itoa(index)+".default_reasoning_level", "low"); err == nil {
+					changed = true
+				}
+				break
+			}
+		}
+	}
+	if !changed {
+		return append([]byte(nil), data...)
+	}
+	return doc.Bytes()
 }
