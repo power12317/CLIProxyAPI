@@ -1443,15 +1443,18 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 	}
 
 	close(loseFirst)
+	// Allow for heartbeat-loss detection and the configured first retry.
 	select {
 	case <-started:
 		t.Fatal("heartbeat failover started draining the blocking scope")
-	case <-time.After(50 * time.Millisecond):
+	case <-secondSubscribe:
+	case <-time.After(homeSubscriberRetryInitial + 2*time.Second):
+		t.Fatal("new subscription did not start while the old scope remained active")
 	}
 	select {
-	case <-secondSubscribe:
-	case <-time.After(time.Second):
-		t.Fatal("new subscription did not start while the old scope remained active")
+	case <-started:
+		t.Fatal("heartbeat failover started draining the blocking scope")
+	default:
 	}
 	service.homeMu.Lock()
 	exposedRegistry := service.homeRegistry

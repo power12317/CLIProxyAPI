@@ -3,21 +3,24 @@ package codexruntime
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/MoeForge/moego/json"
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
+	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
 )
 
 // Error preserves native failures for CPA's ordinary retry policy. IPC failures
 // remain request-scoped because their upstream outcome is unknown.
 type Error struct {
+	cause           error
 	Status          int
 	Message         string
 	Body            []byte
@@ -26,6 +29,7 @@ type Error struct {
 	nativeFailure   bool
 }
 
+func (e *Error) Unwrap() error              { return e.cause }
 func (e *Error) Error() string              { return e.Message }
 func (e *Error) StatusCode() int            { return e.Status }
 func (e *Error) IsRequestScoped() bool      { return !e.nativeFailure }
@@ -36,6 +40,7 @@ func fail(status int, message string) error { return &Error{Status: status, Mess
 
 // Capabilities describes the master shared by all managed credentials.
 type Capabilities struct {
+	SessionInstructions  string `json:"sessionInstructions"`
 	BusinessNotification string `json:"businessNotification"`
 	CompletionSemantics  string `json:"completionSemantics"`
 	DiagnosticsCompleted bool   `json:"diagnosticsCompleted"`
@@ -68,14 +73,41 @@ type UpstreamLog struct {
 	OaiLBNode         string      `json:"oaiLbNode"`
 }
 
+// SessionInstructions describes only CPA-verified control metadata. The business
+// request already contains the configured instructions and must not be rebuilt.
+type SessionInstructions struct {
+	HTTPOnly           bool   `json:"httpOnly,omitempty"`
+	Mode               string `json:"mode"`
+	Scope              string `json:"scope"`
+	BaselineDigest     string `json:"baselineDigest"`
+	FrameType          string `json:"frameType,omitempty"`
+	PreviousResponseID string `json:"previousResponseId,omitempty"`
+}
+
+func (s *SessionInstructions) Incremental() bool {
+	return s != nil && (s.PreviousResponseID != "" || s.FrameType == "response.append")
+}
+
+type sessionInstructionsKey struct{}
+
+func WithSessionInstructions(ctx context.Context, control *SessionInstructions) context.Context {
+	return context.WithValue(ctx, sessionInstructionsKey{}, control)
+}
+
+func SessionInstructionsFromContext(ctx context.Context) *SessionInstructions {
+	control, _ := ctx.Value(sessionInstructionsKey{}).(*SessionInstructions)
+	return control
+}
+
 type Request struct {
-	ImageAPI     string          `json:"imageApi,omitempty"`
-	RequestID    string          `json:"requestId"`
-	CredentialID string          `json:"credentialId"`
-	Operation    string          `json:"operation"`
-	SourceFormat string          `json:"sourceFormat"`
-	SessionID    string          `json:"sessionId"`
-	Request      json.RawMessage `json:"request"`
+	SessionInstructions *SessionInstructions `json:"sessionInstructions,omitempty"`
+	ImageAPI            string               `json:"imageApi,omitempty"`
+	RequestID           string               `json:"requestId"`
+	CredentialID        string               `json:"credentialId"`
+	Operation           string               `json:"operation"`
+	SourceFormat        string               `json:"sourceFormat"`
+	SessionID           string               `json:"sessionId"`
+	Request             json.RawMessage      `json:"request"`
 }
 
 type Frame struct {
@@ -106,6 +138,9 @@ type incoming struct {
 }
 
 type Client struct {
+	endpoint         string
+	receipt          *managedReceipt
+	managed          bool
 	inbox            *notificationQueue[incoming]
 	diagnostics      *notificationQueue[UpstreamLog]
 	diagnosticsDone  chan struct{}
@@ -145,7 +180,7 @@ func Dial(ctx context.Context, endpoint string) (*Client, error) {
 		}
 		return nil, fail(503, "Codex runtime connection failed")
 	}
-	c := &Client{conn: conn, ctx: ctx, diagnosticsDone: make(chan struct{})}
+	c := &Client{endpoint: endpoint, conn: conn, ctx: ctx, diagnosticsDone: make(chan struct{})}
 	// The local runtime bridge carries complete requests and upstream logs without a size limit.
 	c.stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
 	if err := c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "cliproxyapi", "version": buildinfo.Version}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
@@ -205,6 +240,9 @@ func (c *Client) NativeTerminal() bool { return c.Caps.CompletionSemantics == "n
 func (c *Client) ioError() error {
 	if c.ctx.Err() != nil {
 		return c.ctx.Err()
+	}
+	if c.receipt != nil {
+		return managedTurnError(&core.UpstreamWebsocketTurnError{})
 	}
 	return fail(502, "Codex runtime connection closed before completion")
 }
@@ -292,6 +330,30 @@ func (c *Client) Start(req Request) error {
 	var body map[string]json.RawMessage
 	if json.Unmarshal(req.Request, &body) != nil || body == nil {
 		return fail(400, "Codex runtime request must be a JSON object")
+	}
+	if control := req.SessionInstructions; control != nil {
+		switch c.Caps.SessionInstructions {
+		case "websocket":
+			if control.Incremental() && !c.Caps.ResponsesWebsocket {
+				return missingManagedParent()
+			}
+		case "full":
+			if control.Incremental() {
+				return missingManagedParent()
+			}
+		default:
+			const body = `{"error":{"type":"invalid_request_error","code":"unsupported_runtime_capability","message":"Codex runtime does not support session instructions; upgrade the worker"}}`
+			return &Error{Status: http.StatusServiceUnavailable, Message: body, Body: []byte(body)}
+		}
+		c.managed = true
+		route := managedRoutes.GetOrAdd(control.Scope, func() *managedRoute { return &managedRoute{} })
+		receipt, err := route.begin(managedOwner{c.endpoint, req.CredentialID, req.SessionID}, control)
+		if err != nil {
+			return err
+		}
+		if c.Caps.SessionInstructions == "websocket" && !control.HTTPOnly {
+			c.receipt = receipt
+		}
 	}
 	if !c.Caps.ResponsesWebsocket && req.Operation == "responses" {
 		if v := body["previous_response_id"]; len(v) > 0 && string(v) != "null" && string(v) != "\"\"" {
@@ -527,7 +589,19 @@ func (c *Client) remoteError(status int, message, body string, headers http.Head
 	if message == "" {
 		message = "Codex runtime inference failed"
 	}
-	return &Error{Status: status, Message: message, Body: []byte(body), ResponseHeaders: SafeHeaders(headers), NativeError: nativeError, nativeFailure: c.NativeTerminal()}
+	var cause error
+	nativeFailure := c.NativeTerminal()
+	if c.managed {
+		switch ojson.Get(body, "error.code").String() {
+		case "previous_response_not_found":
+			cause = &core.UpstreamWebsocketTurnError{FullContextRequired: true}
+		case "upstream_websocket_not_sent":
+			cause = &core.UpstreamWebsocketTurnError{NotSent: true}
+		case "upstream_websocket_lost":
+			cause = &core.UpstreamWebsocketTurnError{}
+		}
+	}
+	return &Error{Status: status, Message: message, Body: []byte(body), ResponseHeaders: SafeHeaders(headers), NativeError: nativeError, nativeFailure: nativeFailure && cause == nil, cause: cause}
 }
 
 func canonicalHeaders(headers http.Header) http.Header {

@@ -617,6 +617,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 	}()
 
 	var lastRequest []byte
+	var managedInstructionHistory bool
 	lastResponseOutput := []byte("[]")
 	var observedCompaction responsesWebsocketObservedCompactionState
 	lastResponseID := ""
@@ -899,7 +900,18 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		var errMsg *interfaces.ErrorMessage
 		previousResponseID := strings.TrimSpace(ojson.GetBytes(payload, "previous_response_id").String())
 		isPrewarm := !forceBridge && !useUpstreamWebsocketPassthrough && shouldHandleResponsesWebsocketPrewarmLocally(payload, false)
-		if pendingPrewarmID != "" && previousResponseID != "" {
+		frame := ojson.GetBytesNoCopy(payload, "@this")
+		incremental := previousResponseID != "" || frame.Get("type").String() == wsRequestTypeAppend
+		marker, ambiguousInstructions := cliproxyexecutor.SessionInstructionMarker(frame)
+		markedInstructions := marker.Exists()
+		managedDelta := incremental && (markedInstructions || managedInstructionHistory)
+		if ambiguousInstructions || ((markedInstructions || managedDelta) && !cliproxyexecutor.UniqueSessionInstructionFields(frame, "type", "previous_response_id", "instructions", "input")) {
+			errMsg = &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: errors.New("ambiguous session instructions payload")}
+		} else if (managedDelta || markedInstructions) && !isPrewarm && pendingPrewarmID == "" {
+			// Preserve the actual delta. A reconstructed transcript cannot prove its parent.
+			requestJSON, errMsg = normalizeResponsesWebsocketPassthroughRequest(payload, requestModelName)
+			updatedLastRequest = requestJSON
+		} else if pendingPrewarmID != "" && previousResponseID != "" {
 			if previousResponseID != pendingPrewarmID {
 				errMsg = responsesWebsocketPreviousResponseNotFoundError()
 			} else {
@@ -1006,6 +1018,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			if modelName := strings.TrimSpace(ojson.GetBytesNoCopy(requestJSON, "model").String()); modelName != "" {
 				passthroughModelName = strings.Clone(modelName)
 			}
+		} else if managedDelta {
+			nextLastRequest = requestJSON
 		} else {
 			requestJSON, toolCacheTurn = prepareResponsesWebsocketFallbackTurn(downstreamSessionKey, requestJSON)
 			nextLastRequest = requestJSON
@@ -1046,6 +1060,14 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			var cliCancel handlers.APIHandlerCancelFunc
 			cliCtx, cliCancel = h.GetContextWithCancel(h, c, turnExecutionParent)
 			cliCtx = cliproxyexecutor.WithDownstreamWebsocket(cliCtx)
+			if managedDelta && !markedInstructions {
+				cliCtx = cliproxyexecutor.WithImplicitSessionInstructionReuse(cliCtx)
+			}
+			if !nativeWebsocketPassthrough && !ojson.GetBytesNoCopy(payload, "instructions").Exists() {
+				if inherited := ojson.GetBytesNoCopy(requestJSON, "instructions"); inherited.Exists() {
+					cliCtx = cliproxyexecutor.WithInheritedWebsocketInstructions(cliCtx, strings.Clone(inherited.Raw))
+				}
+			}
 			cliCtx = cliproxyexecutor.WithLocalWebsocketTurnTracker(cliCtx)
 			cliCtx = cliproxyexecutor.WithWebsocketInputEpoch(cliCtx, &inputEpoch, msgEpoch)
 			if duplexInput != nil {
@@ -1273,6 +1295,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			continue
 		}
 
+		managedInstructionHistory = markedInstructions || managedDelta
 		toolCacheTurn.commit()
 		pendingPrewarmID = ""
 		localTurnExecuted := cliproxyexecutor.LocalWebsocketTurnExecuted(cliCtx)

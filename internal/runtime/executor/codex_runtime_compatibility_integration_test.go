@@ -147,6 +147,12 @@ func TestCodexRuntimeCompatibleRealWorker(t *testing.T) {
 			return nil
 		}
 	}
+	t.Run("managed_session_sse", func(t *testing.T) {
+		testManagedClientSSE(t, cfg, auth, func() []byte { return read(t) })
+	})
+	t.Run("managed_session_instructions", func(t *testing.T) {
+		testManagedClientWebsocket(t, cfg, auth, false, func() []byte { return read(t) })
+	})
 	schema := `{"type":"object","$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"code":{"type":"string","pattern":"\\p{L}+","default":"UPPER"},"large":{"type":"integer","maximum":9007199254740993}},"additionalProperties":false}`
 	for _, source := range []sdktranslator.Format{sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.FormatGemini, sdktranslator.FormatInteractions} {
 		for _, stream := range []bool{false, true} {
