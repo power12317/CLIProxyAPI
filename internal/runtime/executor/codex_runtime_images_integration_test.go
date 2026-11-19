@@ -400,6 +400,24 @@ func testCodexNativeRuntimeRealWorker(t *testing.T, nativeTransport string) {
 		}
 		return
 	}
+	t.Run("managed_session_sse", func(t *testing.T) {
+		handshakes := websocketAttempts.Load()
+		testManagedClientSSE(t, cfg, auth, func() []byte {
+			exchange := readExchange(t)
+			if exchange.websocket {
+				t.Fatal("HTTP session instructions upgraded to WebSocket")
+			}
+			return exchange.body
+		})
+		if websocketAttempts.Load() != handshakes {
+			t.Fatal("HTTP session instructions attempted a WebSocket handshake")
+		}
+	})
+	if nativeTransport == "websocket" {
+		t.Run("managed_session_instructions", func(t *testing.T) {
+			testManagedClientWebsocket(t, cfg, auth, true, func() []byte { return readExchange(t).body })
+		})
+	}
 	for _, marker := range []string{"fail-before-output", "fail-after-output"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("error_reaches_HTTP_client/%s/stream=%t", marker, stream), func(t *testing.T) {

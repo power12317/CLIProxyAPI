@@ -186,6 +186,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 		}
 		if !codexCompactionSummaryFromContext(ctx) {
+			body = helps.ReserveCodexSessionInstructions(ctx, body, req, opts, false)
 			body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
 		}
 		if err != nil {
@@ -224,18 +225,24 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, err
 	}
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
-	var turnStateBody []byte
+	if !officialOAuthRequest && !useSIWC {
+		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
+	}
+	doc = ojson.NewDoc(upstreamBody)
+	sessionInstructions, errSession := helps.PrepareCodexExecutorSessionInstructions(ctx, doc, req, opts, e.runtime != nil, codexCompactionSummaryFromContext(ctx))
+	if errSession != nil {
+		return resp, errSession
+	}
+	helps.FinalizePayloadDoc(ctx, doc)
+	upstreamBody = doc.Bytes()
+	if errFinal := sessionInstructions.ValidateOutbound(upstreamBody, from); errFinal != nil {
+		return resp, errFinal
+	}
+	turnStateBody := upstreamBody
 	if !officialOAuthRequest {
-		if !useSIWC {
-			upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
-		}
-		upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
-		turnStateBody = upstreamBody
 		replaceCodexRequestBody(httpReq, e.codexWireBody(ctx, url, upstreamBody, auth, opts.Headers))
 		alignCodexContentEncoding(httpReq)
 	} else {
-		upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
-		turnStateBody = upstreamBody
 		encodedBody, errEncode := helps.EncodeCodexOAuthBody(upstreamBody)
 		if errEncode != nil {
 			return resp, fmt.Errorf("codex oauth: encode zstd body: %w", errEncode)
@@ -275,6 +282,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return resp, errValidate
 	}
 	if e.runtime != nil {
+		ctx = sessionInstructions.RuntimeContext(ctx)
 		return e.runtime.executeViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, replayScope)
 	}
 	turnState.ObserveRequest(httpReq.Header, nil)
@@ -288,7 +296,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		URL:       url,
 		Method:    http.MethodPost,
 		Headers:   httpReq.Header.Clone(),
-		Body:      upstreamBody,
+		Body:      sessionInstructions.LogBody(upstreamBody),
 		Provider:  e.Identifier(),
 		AuthID:    authID,
 		AuthLabel: authLabel,
@@ -567,6 +575,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if !codexUseSIWCForRequest(ctx, auth, opts.Headers) && (helps.CodexAuthUsesOAuthCookieJar(auth) || e.runtime != nil) && helps.IsOfficialCodexRequest(body) {
 		body, compactIdentity, compactOAuth = helps.ApplyCodexOAuthFidelity(body, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
 	}
+	doc = ojson.NewDoc(body)
+	helps.StripCodexSessionInstructionMarker(doc, from)
+	body = doc.Bytes()
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
 	httpReq, upstreamBody, err := e.prepareCachedRequest(ctx, from, url, req, body, opts.Headers)
 	if err != nil {
@@ -576,6 +587,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
 	upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
 	turnStateBody = upstreamBody
+	if errMarker := helps.ValidateCodexSessionInstructionMarker(upstreamBody, from); errMarker != nil {
+		return resp, errMarker
+	}
 	replaceCodexRequestBody(httpReq, e.codexWireBody(ctx, url, upstreamBody, auth, opts.Headers))
 	alignCodexContentEncoding(httpReq)
 	reporter.SetTranslatedReasoningEffort(turnStateBody, to.String())

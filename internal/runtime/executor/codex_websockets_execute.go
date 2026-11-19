@@ -49,6 +49,34 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		}
 	}
 
+	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
+	wsURL, err := buildCodexResponsesWebsocketURL(httpURL)
+	if err != nil {
+		return resp, err
+	}
+
+	executionSessionID := e.websocketSessionID(auth, req, opts, wsURL)
+	var sess *codexWebsocketSession
+	isEphemeralSession := false
+	sessionLocked := false
+	unlockSession := func() {
+		if sess != nil && sessionLocked {
+			sess.releaseRequest()
+			sessionLocked = false
+		}
+	}
+	if executionSessionID != "" {
+		sess = e.getOrCreateSession(executionSessionID)
+		if errAcquire := sess.acquireRequest(ctx); errAcquire != nil {
+			return resp, errAcquire
+		}
+		sessionLocked = true
+		defer unlockSession()
+	} else {
+		isEphemeralSession = true
+		sess = newEphemeralCodexWebsocketSession()
+	}
+
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
 	ctx = helps.WithCodexOaiLBReporter(ctx, reporter)
 	defer func() {
@@ -98,6 +126,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		if ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
 			body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 		}
+		body = helps.ReserveCodexSessionInstructions(ctx, body, req, opts, sess != nil && sess.sessionInstructions.Armed())
 		body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
 		if err != nil {
 			return resp, err
@@ -113,12 +142,6 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	doc = ojson.NewDoc(body)
 	sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURLDoc(ctx, "codex websockets executor", doc, isCompat, targetModel, baseURL)
-
-	httpURL := strings.TrimSuffix(baseURL, "/") + "/responses"
-	wsURL, err := buildCodexResponsesWebsocketURL(httpURL)
-	if err != nil {
-		return resp, err
-	}
 
 	wsHeaders, _, errPromptCache := applyCodexPromptCacheHeadersWithContextDoc(ctx, from, req, doc, opts.Headers)
 	if errPromptCache != nil {
@@ -160,7 +183,16 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	if useSIWC {
 		upstreamBody = applyCodexSIWCWebsocketBodyRules(upstreamBody, hasExplicitInstructions, cliproxyexecutor.Options{KeepTopLevelEffort: thinking.HasThinkingSuffix(req.Model)})
 	}
-	upstreamBody = finalizePayload(upstreamBody)
+	doc = ojson.NewDoc(upstreamBody)
+	sessionInstructions, errSession := e.prepareSessionInstructions(ctx, doc, auth, req, opts, sess, wsURL, useSIWC)
+	if errSession != nil {
+		return resp, errSession
+	}
+	finalizePayload.FinalizeDoc(doc)
+	upstreamBody = doc.Bytes()
+	if errFinal := sessionInstructions.ValidateOutbound(upstreamBody, from); errFinal != nil {
+		return resp, errFinal
+	}
 	upstreamModel := strings.TrimSpace(ojson.GetBytes(upstreamBody, "model").String())
 	if upstreamModel != "" && upstreamModel != baseModel {
 		reporter.SetUpstreamModel(upstreamModel)
@@ -180,43 +212,13 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		authType, authValue = auth.AccountInfo()
 	}
 
-	executionSessionID := e.websocketSessionID(auth, req, opts, wsURL)
-	var sess *codexWebsocketSession
-	isEphemeralSession := false
-	sessionLocked := false
-	unlockSession := func() {
-		if sess != nil && sessionLocked {
-			sess.releaseRequest()
-			sessionLocked = false
-		}
-	}
-	if executionSessionID != "" {
-		sess = e.getOrCreateSession(executionSessionID)
-		if errAcquire := sess.acquireRequest(ctx); errAcquire != nil {
-			return resp, errAcquire
-		}
-		sessionLocked = true
-		defer unlockSession()
-	} else {
-		isEphemeralSession = true
-		sess = newEphemeralCodexWebsocketSession()
-	}
-
-	if sess.isTopicSession() {
-		var errState error
-		upstreamBody, errState = e.refreshTopicTurnState(auth, turnState, upstreamBody, wsHeaders, baseModel)
-		if errState != nil {
-			unlockSession()
-			return resp, errState
-		}
-	}
 	wsReqBody := frameCodexWebsocketRequestBody(upstreamBody)
 	sess.setLogSessionID(turnState.SessionID())
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
 		Method:    "WEBSOCKET",
 		Headers:   wsHeaders.Clone(),
-		Body:      wsReqBody,
+		Body:      sessionInstructions.LogBody(wsReqBody),
 		Provider:  e.Identifier(),
 		AuthID:    authID,
 		AuthLabel: authLabel,
@@ -229,12 +231,15 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	var respHS *http.Response
 	var errDial error
 	dialCtx := ctx
-	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
+	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) || sessionInstructions.ConnectionBound() {
 		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC, helps.CodexConnectionFingerprint(auth, wsHeaders, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth)))
 		if conn != nil {
 			helps.RecordCodexOaiLBNode(ctx, sess.oaiLBNodeFor(conn))
 		}
 		if conn == nil {
+			if errConn := sessionInstructions.OnConnection(nil); errConn != nil {
+				return resp, errConn
+			}
 			return resp, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
 		}
 	} else {
@@ -262,6 +267,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			return resp, newCodexStatusErrWithHeadersAndCooling(respHS.StatusCode, respHS.Header, bodyErr, e.modelLevelCooling())
 		}
 		return resp, errDial
+	}
+	if errConn := sessionInstructions.OnConnection(conn); errConn != nil {
+		return resp, errConn
 	}
 	if errBind := sess.bindExecutionLifecycle(opts, conn, closer, req.Model); errBind != nil {
 		unlockSession()
@@ -304,6 +312,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	restoreMultiAgentV2 := !multiAgentV2Conflict && (optimizeMultiAgentV2 || sess.isMultiAgentV2Optimized(conn))
 
+	sessionReceipt := sess.sessionInstructions.Sent(conn, sessionInstructions)
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
 		errSend = helps.GuardCodexWebsocketFailure(ctx, mapCodexWebsocketWriteError(sess, conn, errSend))
@@ -320,6 +329,10 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			helps.RecordAPIWebsocketError(ctx, e.cfg, "send", errSend)
 			if !shouldRetryCodexWebsocketSend(errSend) {
 				return resp, errSend
+			}
+
+			if errConn := sessionInstructions.OnConnection(nil); errConn != nil {
+				return resp, errConn
 			}
 
 			// Retry once with a fresh websocket connection. This is mainly to handle
@@ -343,7 +356,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 					URL:       wsURL,
 					Method:    "WEBSOCKET",
 					Headers:   wsHeaders.Clone(),
-					Body:      wsReqBodyRetry,
+					Body:      sessionInstructions.LogBody(wsReqBodyRetry),
 					Provider:  e.Identifier(),
 					AuthID:    authID,
 					AuthLabel: authLabel,
@@ -354,6 +367,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				turnState.ObserveResponse(respHSRetry)
 				helps.RecordCodexTurnStateTicketOnResponse(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, respHSRetry)
 				reporter.StartResponseTTFT()
+				sessionReceipt = sess.sessionInstructions.Sent(conn, sessionInstructions)
 				cliproxyexecutor.MarkUpstreamAttempt(ctx)
 				if errSendRetry := writeCodexWebsocketMessage(sess, conn, wsReqBodyRetry); errSendRetry == nil {
 					wsReqBody = wsReqBodyRetry
@@ -441,6 +455,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			return resp, streamErr
 		}
 
+		sessionReceipt.Observe(payload)
 		payload = normalizeCodexWebsocketCompletion(payload)
 		eventType := ojson.GetBytesNoCopy(payload, "type").String()
 		if helps.HasMeaningfulCodexOutputDelta(payload) {

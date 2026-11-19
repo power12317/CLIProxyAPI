@@ -116,7 +116,14 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 	if scope == "" {
 		scope, _ = opts.Metadata[coreexecutor.CallerScopeMetadataKey].(string)
 	}
+	control := bridge.SessionInstructionsFromContext(ctx)
 	session, _ := opts.Metadata[coreexecutor.CanonicalSessionIDMetadataKey].(string)
+	if control != nil {
+		copyControl := *control
+		copyControl.HTTPOnly = !e.cfg.Codex.ForceWebsocket && !coreexecutor.DownstreamWebsocket(ctx)
+		control = &copyControl
+		session = helps.ExplicitCodexInstructionSession(opts.Headers)
+	}
 	if session == "" {
 		session, _ = opts.Metadata[coreexecutor.ExecutionSessionMetadataKey].(string)
 	}
@@ -129,7 +136,11 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 	identityJSON, _ := json.Marshal([]string{scope, auth.ID, session})
 	identity := sha256.Sum256(identityJSON)
 	session = hex.EncodeToString(identity[:])
-	client, err := bridge.Dial(ctx, e.cfg.Codex.Runtime.Endpoint())
+	endpoint := e.cfg.Codex.Runtime.Endpoint()
+	if err := bridge.CheckManagedParent(control, endpoint, auth.ID, session); err != nil {
+		return nil, err
+	}
+	client, err := bridge.Dial(ctx, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +160,7 @@ func (e *CodexRuntimeExecutor) startOperation(ctx context.Context, auth *coreaut
 		}
 		requestID = id.String()
 	}
-	err = client.Start(bridge.Request{RequestID: requestID, CredentialID: auth.ID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body, ImageAPI: imageAPI})
+	err = client.Start(bridge.Request{SessionInstructions: control, RequestID: requestID, CredentialID: auth.ID, Operation: operation, SourceFormat: opts.SourceFormat.String(), SessionID: session, Request: body, ImageAPI: imageAPI})
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -191,6 +202,7 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 		if errNext != nil {
 			return resp, errNext
 		}
+		client.ObserveManagedEvent(frame.Data)
 		event := helps.RestoreCodexMultiAgentV2Response(frame.Data, optimizeMultiAgentV2)
 		if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 			continue
@@ -239,6 +251,7 @@ func (e *CodexRuntimeExecutor) executeViaMaster(ctx context.Context, auth *corea
 		}
 		output = sdktranslator.TranslateNonStream(ctx, sdktranslator.FormatCodex, format, req.Model, original, body, terminal, &param)
 	}
+	client.CompleteManagedDelivery()
 	reporter.EnsurePublished(ctx)
 	return coreexecutor.Response{Payload: output, Headers: client.Headers}, nil
 }
@@ -315,8 +328,10 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				if !terminal {
 					fail(runtimeError(502, "Codex runtime completed without a model result"))
 				} else {
+					client.CompleteManagedDelivery()
 					for _, chunk := range finalChunks {
 						if !send(chunk) {
+							client.AbandonManagedDelivery()
 							return
 						}
 					}
@@ -328,6 +343,7 @@ func (e *CodexRuntimeExecutor) executeStreamViaMaster(ctx context.Context, auth 
 				fail(errNext)
 				return
 			}
+			client.ObserveManagedEvent(frame.Data)
 			event := helps.RestoreCodexMultiAgentV2Response(frame.Data, optimizeMultiAgentV2)
 			if len(event) == 0 || bytes.Equal(event, []byte("[DONE]")) {
 				if (format == sdktranslator.FormatOpenAIResponse || format == sdktranslator.FormatCodex) && len(frame.Wire) > 0 {

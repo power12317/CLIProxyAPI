@@ -171,6 +171,9 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 		return nil, nil, err
 	}
 	body = helps.FinalizePayload(ctx, body)
+	if errMarker := helps.ValidateCodexSessionInstructionMarker(body, from); errMarker != nil {
+		return nil, nil, errMarker
+	}
 	var headers http.Header
 	if len(headerSets) > 0 {
 		headers = headerSets[0]
@@ -1009,6 +1012,9 @@ func (e *CodexExecutor) cacheHelperDoc(ctx context.Context, from sdktranslator.F
 	var rawJSON []byte
 	if doc != nil {
 		rawJSON = doc.Bytes()
+	}
+	if errMarker := helps.ValidateCodexSessionInstructionMarker(rawJSON, from); errMarker != nil {
+		return nil, nil, errMarker
 	}
 	wireBody := e.codexWireBody(ctx, url, rawJSON, auth, headers)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(wireBody))

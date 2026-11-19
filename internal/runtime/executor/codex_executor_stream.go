@@ -112,6 +112,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		if ojson.GetBytes(body, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite").Exists() {
 			body = ensureCodexResponsesLiteMirror(body, toolHeaders)
 		}
+		body = helps.ReserveCodexSessionInstructions(ctx, body, req, opts, false)
 		body, err = applyCodexImageGenerationPolicy(body, baseModel, auth, e.cfg, toolHeaders, requestPath, officialCodexRequest, originalPayloadSource)
 		if err != nil {
 			return nil, err
@@ -147,18 +148,24 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, err
 	}
 	upstreamBody = helps.ApplyCodexTurnStateTicketBody(auth, e.cfg.Codex.EffectiveTurnStateTicket(), baseModel, upstreamBody)
-	var turnStateBody []byte
+	if !officialOAuthRequest && !useSIWC {
+		upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
+	}
+	doc = ojson.NewDoc(upstreamBody)
+	sessionInstructions, errSession := helps.PrepareCodexExecutorSessionInstructions(ctx, doc, req, opts, e.runtime != nil, codexCompactionSummaryFromContext(ctx))
+	if errSession != nil {
+		return nil, errSession
+	}
+	helps.FinalizePayloadDoc(ctx, doc)
+	upstreamBody = doc.Bytes()
+	if errFinal := sessionInstructions.ValidateOutbound(upstreamBody, from); errFinal != nil {
+		return nil, errFinal
+	}
+	turnStateBody := upstreamBody
 	if !officialOAuthRequest {
-		if !useSIWC {
-			upstreamBody, fixedInstallationID, _, _ = helps.ApplyCodexInstallationIdentity(upstreamBody, codexInstallationAccountID(auth), codexInstallationCredentialSystem(auth), codexDeviceConvergenceEnabled(e.cfg))
-		}
-		upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
-		turnStateBody = upstreamBody
 		replaceCodexRequestBody(httpReq, e.codexWireBody(ctx, url, upstreamBody, auth, opts.Headers))
 		alignCodexContentEncoding(httpReq)
 	} else {
-		upstreamBody = helps.FinalizePayload(ctx, upstreamBody)
-		turnStateBody = upstreamBody
 		encodedBody, errEncode := helps.EncodeCodexOAuthBody(upstreamBody)
 		if errEncode != nil {
 			return nil, fmt.Errorf("codex oauth: encode zstd body: %w", errEncode)
@@ -198,6 +205,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		return nil, errValidate
 	}
 	if e.runtime != nil {
+		ctx = sessionInstructions.RuntimeContext(ctx)
 		return e.runtime.executeStreamViaMaster(ctx, auth, req, opts, reporter, turnStateBody, optimizeMultiAgentV2, replayScope)
 	}
 	turnState.ObserveRequest(httpReq.Header, nil)
@@ -211,7 +219,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		URL:       url,
 		Method:    http.MethodPost,
 		Headers:   httpReq.Header.Clone(),
-		Body:      upstreamBody,
+		Body:      sessionInstructions.LogBody(upstreamBody),
 		Provider:  e.Identifier(),
 		AuthID:    authID,
 		AuthLabel: authLabel,
