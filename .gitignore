@@ -73,3 +73,6 @@ docker-compose.override.yml
 
 # Server-specific deployment configuration stays local.
 docker-compose.server.yaml
+
+# Validated model snapshot downloaded during release builds.
+/internal/registry/models/codex_client_models.build.json

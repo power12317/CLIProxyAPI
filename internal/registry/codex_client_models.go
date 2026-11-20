@@ -2,7 +2,8 @@ package registry
 
 import (
 	"bytes"
-	_ "embed"
+	"crypto/sha256"
+	"embed"
 	"fmt"
 	"math"
 	"strconv"
@@ -14,8 +15,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-//go:embed models/codex_client_models.json
-var embeddedCodexClientModelsJSON []byte
+// The optional build snapshot is refreshed by CI. Keep the release catalog
+// separately so a later remote refresh can still recover its approved entry.
+//
+//go:embed models/codex_client_models*.json
+var codexCatalogFiles embed.FS
+
+const releaseCodexCatalogPath = "models/codex_client_models.json"
+
+var embeddedCodexClientModelsJSON = func() []byte {
+	data, err := codexCatalogFiles.ReadFile("models/codex_client_models.build.json")
+	if err != nil {
+		// The go:embed pattern always includes the checked-in release file.
+		data, _ = codexCatalogFiles.ReadFile(releaseCodexCatalogPath)
+	}
+	return data
+}()
 
 type codexClientModelsPayload struct {
 	Models []map[string]any `json:"models"`
@@ -87,6 +102,7 @@ func CodexClientModelThinkingLevels(slug string) []string {
 }
 
 func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
+	data = restoreReleasedGPT55(data)
 	responsesLiteMap, thinkingLevelsMap, err := parseAndValidateCodexClientModelsJSON(data)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", source, err)
@@ -104,6 +120,42 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 	codexClientCatalogStore.thinkingLevelsMap = thinkingLevelsMap
 	codexClientCatalogStore.revision++
 	return true, nil
+}
+
+// SHA-256 of the complete v8.0.79 gpt-5.5 object serialized with sorted
+// keys. A changed or additional field identifies a different catalog entry.
+const legacyGPT55Digest = "c2352e085919b9fdd039ceb272f0bbd0463c8537b6a268bb15b14780d7f45249"
+
+func restoreReleasedGPT55(data []byte) []byte {
+	for index, model := range ojson.GetBytesNoCopy(data, "models").Array() {
+		if model.Get("slug").String() != "gpt-5.5" || model.Get("display_name").String() != "GPT-6 Chat Thinking" {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(model.Raw))
+		decoder.UseNumber()
+		var fields map[string]any
+		if err := decoder.Decode(&fields); err != nil {
+			return data
+		}
+		canonical, err := json.Marshal(fields)
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(canonical)) != legacyGPT55Digest {
+			return data
+		}
+		release, err := codexCatalogFiles.ReadFile(releaseCodexCatalogPath)
+		if err != nil {
+			return data
+		}
+		replacement := ojson.GetBytesNoCopy(release, `models.#(slug=="gpt-5.5")`)
+		if !replacement.IsObject() {
+			return data
+		}
+		doc := ojson.NewDoc(data)
+		if err := doc.SetRaw("models."+strconv.Itoa(index), replacement.Raw); err != nil {
+			return data
+		}
+		return doc.Bytes()
+	}
+	return data
 }
 
 // ValidateCodexClientModelsJSON validates the fields required to serve a

@@ -84,13 +84,14 @@ func StopTranslatedClaudeStream(ctx context.Context, retainedErr *error, reporte
 	err := *retainedErr
 	*retainedErr = nil
 	PublishTranslatedClaudeStreamFailure(ctx, err, reporter, streamUsage)
+	chunk := cliproxyexecutor.StreamChunk{Err: err, UpstreamResponseError: true}
 	select {
-	case out <- cliproxyexecutor.StreamChunk{Err: err}:
+	case out <- chunk:
 		return true
 	default:
 	}
 	select {
-	case out <- cliproxyexecutor.StreamChunk{Err: err}:
+	case out <- chunk:
 	case <-ctx.Done():
 	}
 	return true

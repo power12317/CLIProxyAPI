@@ -148,6 +148,11 @@ type RequestAfterAuthInterceptResponse struct {
 	ClearHeaders []string
 	// Terminate prevents the selected executor from receiving the request.
 	Terminate bool
+	// TerminateScope narrows Terminate for after-auth interceptors.
+	// Empty or "request" terminates the whole request; "credential" refuses only
+	// the selected credential for this request so selection continues with the
+	// next candidate. Unknown values behave as "request".
+	TerminateScope string
 	// StatusCode is the downstream HTTP status used when Terminate is true.
 	StatusCode int
 	// ResponseHeaders contains downstream response headers used when Terminate is true.
@@ -281,6 +286,8 @@ type StreamChunk struct {
 	// Incomplete reports that the upstream stream ended in an incomplete terminal state
 	// (e.g., response.incomplete) even if protocol translation mapped it to a normal chunk.
 	Incomplete bool
+	// UpstreamResponseError marks a terminal Err derived from the provider response.
+	UpstreamResponseError bool
 	// Err reports any terminal error encountered while producing chunks.
 	Err error
 }
