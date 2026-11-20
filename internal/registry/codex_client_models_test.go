@@ -1,12 +1,18 @@
 package registry
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"testing"
 
 	"github.com/MoeForge/moego/json"
+	"github.com/MoeForge/moego/ojson"
 )
 
 func TestEmbeddedCodexClientModelsCatalogIsValid(t *testing.T) {
@@ -209,4 +215,70 @@ func testCodexClientCatalog(t *testing.T, models ...map[string]any) []byte {
 		t.Fatalf("marshal test Codex client catalog: %v", err)
 	}
 	return data
+}
+
+func TestRefreshOnlyRestoresKnownLegacyGPT55(t *testing.T) {
+	// Fixture: the gpt-5.5 entry at official v8.0.79 (6faa8d20).
+	fixture, err := os.ReadFile("testdata/gpt-5.5-v8.0.79.json.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	release, err := codexCatalogFiles.ReadFile(releaseCodexCatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const query = `models.#(slug=="gpt-5.5")`
+	expected := ojson.GetBytesNoCopy(release, query)
+	original, _ := GetCodexClientModelsSnapshot()
+	t.Cleanup(func() {
+		if _, err := loadCodexClientModelsFromBytes(original, "test-restore"); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, updated := range []bool{false, true, false} {
+		model := ojson.NewDoc(legacy)
+		other := testCodexClientModel("live-only-model", 4)
+		if updated {
+			// Even an unknown new field makes this a distinct remote entry.
+			if err := model.Set("new_remote_field", true); err != nil {
+				t.Fatal(err)
+			}
+			other["context_window"] = 312345
+		}
+		raw := testCodexClientCatalog(t, other)
+		doc := ojson.NewDoc(raw)
+		if err := doc.SetRawBytes("models.1", model.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadCodexClientModelsFromBytes(doc.Bytes(), "remote"); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := GetCodexClientModelsJSON()
+		got := ojson.GetBytesNoCopy(snapshot, query)
+		if updated {
+			if !got.Get("new_remote_field").Bool() || got.Get("context_window").Int() != 272000 || got.Get("default_reasoning_level").String() != "low" {
+				t.Fatal("an updated remote gpt-5.5 was replaced or lost its fork default")
+			}
+		} else {
+			// Formatting can change in a document update. Compare all fields.
+			var actual, want map[string]any
+			if json.Unmarshal([]byte(got.Raw), &actual) != nil || json.Unmarshal([]byte(expected.Raw), &want) != nil || !reflect.DeepEqual(actual, want) {
+				t.Fatal("the full official release entry was not restored")
+			}
+		}
+		if gotWindow := ojson.GetBytesNoCopy(snapshot, "models.0.context_window").Int(); gotWindow != int64(other["context_window"].(int)) {
+			t.Fatalf("unrelated model context_window = %d, want %d", gotWindow, other["context_window"])
+		}
+	}
 }
