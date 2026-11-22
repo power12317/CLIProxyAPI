@@ -285,15 +285,15 @@ func TestHomeDispatchHeadersSynthesizesCodexUserAgentForImageRequests(t *testing
 	}
 }
 
-func TestCodexImageSIWCBypassDoesNotChangeNativeClientPreference(t *testing.T) {
+func TestCodexImageSIWCBypassIsRequestScoped(t *testing.T) {
 	a := &Auth{Provider: "codex", Metadata: map[string]any{
-		"use_siwc": true, "allow_codex_client_siwc": true,
+		"use_siwc":     true,
 		"access_token": "outer-token", "siwc": map[string]any{"access_token": "siwc-token"},
 	}}
 	h := http.Header{"User-Agent": {"codex-tui/0.166.0"}}
 	ordinary := WithCodexClientRequest(context.Background(), true)
 	if !IsCodexUseSIWCForRequest(ordinary, a, h) {
-		t.Fatal("ordinary native client lost its explicit SIWC preference")
+		t.Fatal("ordinary request lost its SIWC selection")
 	}
 	image := WithCodexImageRequest(ordinary)
 	if IsCodexUseSIWCForRequest(image, a, h) {

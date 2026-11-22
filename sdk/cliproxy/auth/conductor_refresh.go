@@ -575,9 +575,6 @@ func secretGrantChanged(existing, incoming *Auth) bool {
 	}
 	existingUseSIWC, existingHasUseSIWC := parseBoolAny(existing.Metadata["use_siwc"])
 	incomingUseSIWC, incomingHasUseSIWC := parseBoolAny(incoming.Metadata["use_siwc"])
-	if CodexClientSIWCAllowed(existing) != CodexClientSIWCAllowed(incoming) {
-		return true
-	}
 	if existingHasUseSIWC != incomingHasUseSIWC || existingUseSIWC != incomingUseSIWC {
 		return true
 	}

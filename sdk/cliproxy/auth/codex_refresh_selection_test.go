@@ -14,7 +14,7 @@ func TestCodexUnknownSIWCRefreshKeepsHealthyOuterAccess(t *testing.T) {
 	manager := NewManager(nil, nil, nil)
 	manager.RegisterExecutor(&unauthorizedRefreshExecutor{id: "codex", refreshErr: codex.WrapSIWCRefreshError(&codex.RefreshOutcomeUnknownError{Stage: "transport"})})
 	auth := &Auth{ID: t.Name(), Provider: "codex", Status: StatusActive, Metadata: map[string]any{
-		"access_token": "outer", "refresh_token": "outer-refresh", "expired": now.Add(time.Hour).Format(time.RFC3339), "use_siwc": true, "allow_codex_client_siwc": false,
+		"access_token": "outer", "refresh_token": "outer-refresh", "expired": now.Add(time.Hour).Format(time.RFC3339), "use_siwc": true,
 		"siwc": map[string]any{"access_token": "siwc", "refresh_token": "siwc-refresh", "client_id": "client", "expires_at": now.Add(-time.Hour).Format(time.RFC3339)},
 	}}
 	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
@@ -29,27 +29,27 @@ func TestCodexUnknownSIWCRefreshKeepsHealthyOuterAccess(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name    string
-		native  bool
+		image   bool
 		mutate  func(*Auth)
 		blocked bool
 	}{
-		{name: "healthy outer", native: true},
-		{name: "SIWC selected", native: true, blocked: true, mutate: func(auth *Auth) { auth.Metadata["allow_codex_client_siwc"] = true }},
+		{name: "healthy outer", image: true},
+		{name: "SIWC selected", blocked: true},
 		{name: "expired SIWC", blocked: true},
-		{name: "disabled", native: true, blocked: true, mutate: func(auth *Auth) { auth.Disabled = true }},
-		{name: "expired outer", native: true, blocked: true, mutate: func(auth *Auth) { auth.Metadata["expired"] = now.Add(-time.Hour).Format(time.RFC3339) }},
-		{name: "rejected outer", native: true, blocked: true, mutate: func(auth *Auth) { auth.RejectedAccessToken = "outer" }},
-		{name: "other cooldown", native: true, blocked: true, mutate: func(auth *Auth) { auth.NextRetryAfter = now.Add(time.Hour) }},
-		{name: "credential quota", native: true, blocked: true, mutate: func(auth *Auth) {
+		{name: "disabled", image: true, blocked: true, mutate: func(auth *Auth) { auth.Disabled = true }},
+		{name: "expired outer", image: true, blocked: true, mutate: func(auth *Auth) { auth.Metadata["expired"] = now.Add(-time.Hour).Format(time.RFC3339) }},
+		{name: "rejected outer", image: true, blocked: true, mutate: func(auth *Auth) { auth.RejectedAccessToken = "outer" }},
+		{name: "other cooldown", image: true, blocked: true, mutate: func(auth *Auth) { auth.NextRetryAfter = now.Add(time.Hour) }},
+		{name: "credential quota", image: true, blocked: true, mutate: func(auth *Auth) {
 			auth.Quota = QuotaState{Exceeded: true, Reason: "credential_quota", NextRecoverAt: now.Add(time.Hour)}
 		}},
-		{name: "model cooldown", native: true, blocked: true, mutate: func(auth *Auth) {
+		{name: "model cooldown", image: true, blocked: true, mutate: func(auth *Auth) {
 			auth.ModelStates = map[string]*ModelState{"model": {Status: StatusError, Unavailable: true, NextRetryAfter: now.Add(time.Hour)}}
 		}},
-		{name: "unrelated error", native: true, blocked: true, mutate: func(auth *Auth) { auth.LastError = &Error{Code: "unrelated"} }},
-		{name: "explicit unauthorized", native: true, blocked: true, mutate: func(auth *Auth) { auth.LastError = &Error{Code: "unauthorized", HTTPStatus: http.StatusUnauthorized} }},
-		{name: "no SIWC fence", native: true, blocked: true, mutate: func(auth *Auth) { auth.RejectedSIWCRefreshToken = "" }},
-		{name: "other provider", native: true, blocked: true, mutate: func(auth *Auth) { auth.Provider = "claude" }},
+		{name: "unrelated error", image: true, blocked: true, mutate: func(auth *Auth) { auth.LastError = &Error{Code: "unrelated"} }},
+		{name: "explicit unauthorized", image: true, blocked: true, mutate: func(auth *Auth) { auth.LastError = &Error{Code: "unauthorized", HTTPStatus: http.StatusUnauthorized} }},
+		{name: "no SIWC fence", image: true, blocked: true, mutate: func(auth *Auth) { auth.RejectedSIWCRefreshToken = "" }},
+		{name: "other provider", image: true, blocked: true, mutate: func(auth *Auth) { auth.Provider = "claude" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			current := base.Clone()
@@ -57,10 +57,14 @@ func TestCodexUnknownSIWCRefreshKeepsHealthyOuterAccess(t *testing.T) {
 				tc.mutate(current)
 			}
 			var headers http.Header
-			if tc.native {
+			if tc.image {
 				headers = http.Header{"User-Agent": {"codex_cli_rs/1.0.0"}}
 			}
-			blocked, _, _ := isAuthBlockedForModelForRequest(context.Background(), current, "model", now, headers)
+			ctx := context.Background()
+			if tc.image {
+				ctx = WithCodexImageRequest(ctx)
+			}
+			blocked, _, _ := isAuthBlockedForModelForRequest(ctx, current, "model", now, headers)
 			if blocked != tc.blocked {
 				t.Fatalf("blocked = %v, want %v", blocked, tc.blocked)
 			}
@@ -74,7 +78,7 @@ func TestCodexUnknownSIWCRefreshCacheKeepsHealthyOuterAccess(t *testing.T) {
 	executor := &unauthorizedRefreshExecutor{id: "codex", refreshErr: codex.WrapSIWCRefreshError(&codex.RefreshOutcomeUnknownError{Stage: "transport"})}
 	manager.RegisterExecutor(executor)
 	auth := &Auth{ID: t.Name(), Provider: "codex", Status: StatusActive, Metadata: map[string]any{
-		"access_token": "outer", "expired": now.Add(time.Hour).Format(time.RFC3339), "use_siwc": true, "allow_codex_client_siwc": false,
+		"access_token": "outer", "expired": now.Add(time.Hour).Format(time.RFC3339), "use_siwc": true,
 		"siwc": map[string]any{"access_token": "siwc", "refresh_token": "siwc-refresh", "client_id": "client", "expires_at": now.Add(-time.Hour).Format(time.RFC3339)},
 	}}
 	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
@@ -89,7 +93,7 @@ func TestCodexUnknownSIWCRefreshCacheKeepsHealthyOuterAccess(t *testing.T) {
 		t.Fatal("cached recovery state lost its classification or resubmitted the grant")
 	}
 	headers := http.Header{"User-Agent": {"codex_cli_rs/1.0.0"}}
-	if blocked, _, _ := isAuthBlockedForModelForRequest(context.Background(), current, "model", now, headers); blocked {
+	if blocked, _, _ := isAuthBlockedForModelForRequest(WithCodexImageRequest(context.Background()), current, "model", now, headers); blocked {
 		t.Fatal("cached SIWC recovery state blocked healthy outer access")
 	}
 }
@@ -112,7 +116,7 @@ func TestCodexPartialRefreshKeepsUnknownSelectedPartitionBlocked(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			now := time.Now()
 			auth := &Auth{ID: t.Name(), Provider: "codex", Status: StatusActive, Metadata: map[string]any{
-				"access_token": "outer", "refresh_token": "outer-refresh", "expired": now.Add(-time.Hour).Format(time.RFC3339), "use_siwc": useSIWC, "allow_codex_client_siwc": false,
+				"access_token": "outer", "refresh_token": "outer-refresh", "expired": now.Add(-time.Hour).Format(time.RFC3339), "use_siwc": useSIWC,
 				"siwc": map[string]any{"access_token": "siwc", "refresh_token": "siwc-refresh", "client_id": "client", "expires_at": now.Add(-time.Hour).Format(time.RFC3339)},
 			}}
 			manager := NewManager(nil, nil, nil)
@@ -151,8 +155,11 @@ func TestCodexPartialRefreshKeepsUnknownSelectedPartitionBlocked(t *testing.T) {
 				t.Fatal("partial refresh restored an expired selected partition")
 			}
 			headers := http.Header{"User-Agent": {"codex_cli_rs/1.0.0"}}
-			if blocked, _, _ := isAuthBlockedForModelForRequest(context.Background(), current, "model", now, headers); blocked == useSIWC {
-				t.Fatal("native request availability does not match its outer access token")
+			if blocked, _, _ := isAuthBlockedForModelForRequest(context.Background(), current, "model", now, headers); !blocked {
+				t.Fatal("Codex client bypassed its unresolved selected partition")
+			}
+			if blocked, _, _ := isAuthBlockedForModelForRequest(WithCodexImageRequest(context.Background()), current, "model", now, headers); blocked == useSIWC {
+				t.Fatal("image request availability does not match its outer access token")
 			}
 		})
 	}
@@ -165,7 +172,7 @@ func TestCodexMissingRecoveryAccessBlocksBeforeHealthyModelState(t *testing.T) {
 			auth := &Auth{Provider: "codex", Status: StatusError, RequiresSignIn: true, Unavailable: unavailable,
 				RefreshError: &Error{Code: "refresh_outcome_unknown"},
 				Metadata: map[string]any{
-					"refresh_token": "outer-refresh", "use_siwc": useSIWC, "allow_codex_client_siwc": false,
+					"refresh_token": "outer-refresh", "use_siwc": useSIWC,
 					"siwc": map[string]any{"refresh_token": "siwc-refresh", "client_id": "client"},
 				},
 				ModelStates: map[string]*ModelState{"model": {Status: StatusActive}},
@@ -208,7 +215,7 @@ func TestCodexUnknownDiagnostic401UsesPriorUnauthorizedState(t *testing.T) {
 						siwc["expires_at"] = now.Add(-time.Hour).Format(time.RFC3339)
 					}
 					auth := &Auth{ID: t.Name(), Provider: "codex", Status: StatusActive, Metadata: map[string]any{
-						"access_token": "outer-valid", "expired": now.Add(time.Hour).Format(time.RFC3339), "use_siwc": true, "allow_codex_client_siwc": false, "siwc": siwc,
+						"access_token": "outer-valid", "expired": now.Add(time.Hour).Format(time.RFC3339), "use_siwc": true, "siwc": siwc,
 					}}
 					if mode == "cached" {
 						auth.RequiresSignIn = true
@@ -246,8 +253,8 @@ func TestCodexUnknownDiagnostic401UsesPriorUnauthorizedState(t *testing.T) {
 						t.Fatalf("diagnostic 401 created a terminal rejection: %#v", current.LastError)
 					}
 					headers := http.Header{"User-Agent": {"codex_cli_rs/1.0.0"}}
-					if blocked, _, _ := isAuthBlockedForModelForRequest(context.Background(), current, "model", now, headers); blocked != priorUnauthorized {
-						t.Fatalf("native outer blocked=%v, want %v", blocked, priorUnauthorized)
+					if blocked, _, _ := isAuthBlockedForModelForRequest(WithCodexImageRequest(context.Background()), current, "model", now, headers); blocked != priorUnauthorized {
+						t.Fatalf("image outer blocked=%v, want %v", blocked, priorUnauthorized)
 					}
 					if blocked, _, _ := isAuthBlockedForModelForRequest(context.Background(), current, "model", now); !blocked {
 						t.Fatal("unusable SIWC access was admitted")

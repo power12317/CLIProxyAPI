@@ -619,20 +619,19 @@ func (e *codexClientOuter401Executor) Execute(_ context.Context, auth *Auth, _ c
 	return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusUnauthorized, Code: "unauthorized", Message: "401 unauthorized"}
 }
 
-func TestCodexClient401OnSIWCAuthRejectsAndRefreshesOuterTokenOnly(t *testing.T) {
+func TestCodexClient401WithSIWCDisabledRefreshesOuterTokenOnly(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	auth := &Auth{
 		ID:       "codex-client-outer-401.json",
 		Provider: "codex",
 		Status:   StatusActive,
 		Metadata: map[string]any{
-			"allow_codex_client_siwc": false,
-			"type":                    "codex",
-			"access_token":            "outer-token-1",
-			"refresh_token":           "outer-refresh-1",
-			"account_id":              "acct-1",
-			"expired":                 now.Add(2 * time.Hour).Format(time.RFC3339),
-			"use_siwc":                true,
+			"type":          "codex",
+			"access_token":  "outer-token-1",
+			"refresh_token": "outer-refresh-1",
+			"account_id":    "acct-1",
+			"expired":       now.Add(2 * time.Hour).Format(time.RFC3339),
+			"use_siwc":      false,
 			"siwc": map[string]any{
 				"access_token":  "siwc-valid-token",
 				"refresh_token": "siwc-refresh-1",
@@ -669,8 +668,11 @@ func TestCodexClient401OnSIWCAuthRejectsAndRefreshesOuterTokenOnly(t *testing.T)
 		t.Fatalf("Execute payload = %s, want {\"id\":\"ok\"}", resp.Payload)
 	}
 	after, _ := m.GetByID(auth.ID)
-	if got := after.CodexSIWCStatus(now); got != SIWCStatusValid {
-		t.Fatalf("CodexSIWCStatus after Codex client outer 401 = %q, want %q", got, SIWCStatusValid)
+	if got := after.CodexSIWCStatus(now); got != SIWCStatusOff {
+		t.Fatalf("CodexSIWCStatus after Codex client outer 401 = %q, want %q", got, SIWCStatusOff)
+	}
+	if authSIWCTokenField(after, "access_token") != "siwc-valid-token" {
+		t.Fatal("outer refresh changed the stored SIWC access token")
 	}
 	if after.RejectedSIWCAccessToken != "" {
 		t.Fatalf("RejectedSIWCAccessToken = %q, want empty", after.RejectedSIWCAccessToken)

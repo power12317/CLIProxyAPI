@@ -458,7 +458,7 @@ func TestCodexExecutor_CompressedImageResponsesDecoded(t *testing.T) {
 					defer server.Close()
 					auth := codexTestAuth(server.URL)
 					if !direct {
-						auth.Metadata = map[string]any{"access_token": "outer-test", "use_siwc": true, "allow_codex_client_siwc": true, "siwc": map[string]any{"access_token": "siwc-test"}}
+						auth.Metadata = map[string]any{"access_token": "outer-test", "use_siwc": true, "siwc": map[string]any{"access_token": "siwc-test"}}
 					}
 					req := cliproxyexecutor.Request{Model: "gpt-image-1.5", Payload: []byte(`{"model":"gpt-image-1.5","prompt":"a cat"}`)}
 					if !direct {
