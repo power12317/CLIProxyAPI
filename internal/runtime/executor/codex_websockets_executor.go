@@ -200,9 +200,17 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		if reason := basispoints.NativeToolReason(req.Payload); reason != "" {
 			helps.LogBasispointsNativeToolRoute(ctx, reason)
 		} else {
-			result, err := e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
-			if err == nil && basispoints.OptionalNativeTools(req.Payload) {
-				result, err = helps.BufferNativeToolDecision(ctx, result)
+			var result *cliproxyexecutor.StreamResult
+			var err error
+			if basispoints.NeedsNativeToolDecision(req.Payload) {
+				candidateCtx, cancel := context.WithCancel(ctx)
+				result, err = e.basispointsExec.ExecuteStream(candidateCtx, auth, req, opts)
+				if err == nil {
+					result, err = helps.BufferNativeToolDecision(candidateCtx, result, !basispoints.OptionalNativeTools(req.Payload))
+				}
+				cancel()
+			} else {
+				result, err = e.basispointsExec.ExecuteStream(ctx, auth, req, opts)
 			}
 			if reason := basispoints.RequestedNativeTool(err); reason != "" {
 				if ctx.Err() != nil {

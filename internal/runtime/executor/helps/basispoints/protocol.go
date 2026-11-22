@@ -6,12 +6,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
 	"sync"
 
+	"github.com/MoeForge/moego/json"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/codexwire"
 )
@@ -85,13 +85,15 @@ func (c *Cache) get(key string) object {
 
 // Bridge is request-scoped; the cache is shared across requests and configuration reloads.
 type Bridge struct {
-	cache       *Cache
-	scope       string
-	tools       map[string]tool
-	nativeTools map[string][]object
-	choice      string
-	emitted     map[string]object
-	structured  *structuredOutput
+	cache         *Cache
+	scope         string
+	tools         map[string]tool
+	nativeTools   map[string][]object
+	choice        string
+	clientCatalog []any
+	clientChoice  any
+	emitted       map[string]object
+	structured    *structuredOutput
 	// ObserveEvent receives untouched upstream events for the existing CPA logs.
 	ObserveEvent func([]byte)
 	// LastEvent retains the complete event that failed conversion for error logs.
@@ -158,6 +160,8 @@ func Prepare(raw []byte, scope, session string, cache *Cache) ([]byte, *Bridge, 
 	if err != nil {
 		return nil, nil, err
 	}
+	bridge.clientCatalog = responseToolCatalog(catalog, bridge.nativeTools)
+	bridge.clientChoice = body["tool_choice"]
 	switch choice := body["tool_choice"].(type) {
 	case string:
 		bridge.choice = choice
@@ -362,6 +366,7 @@ func (b *Bridge) convertItem(item object) (object, error) {
 }
 
 func (b *Bridge) convertResponse(response object) error {
+	b.decorateToolCatalog(response)
 	items, _ := response["output"].([]any)
 	if response["status"] == nil || response["status"] == "completed" {
 		if err := b.nativeIntent(items); err != nil {

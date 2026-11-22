@@ -111,3 +111,10 @@ func OptionalNativeTools(raw []byte) bool {
 	})
 	return found
 }
+
+// NeedsNativeToolDecision withholds tool-capable candidates until every call has a handler.
+func NeedsNativeToolDecision(raw []byte) bool {
+	found := false
+	eachDeclaredTool(raw, func(tool ojson.Result) { found = true })
+	return found
+}

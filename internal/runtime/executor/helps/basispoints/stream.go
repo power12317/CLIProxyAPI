@@ -3,9 +3,10 @@ package basispoints
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"io"
 	"strings"
+
+	"github.com/MoeForge/moego/json"
 )
 
 // Stream decodes SSE incrementally. Only tool items wait for complete arguments;
@@ -91,6 +92,9 @@ func (b *Bridge) Stream(reader io.Reader, emit func([]byte) error) error {
 			return failure(502, "invalid_stream", "Basispoints returned invalid SSE JSON")
 		}
 		kind := stringValue(event["type"])
+		if response, ok := event["response"].(object); ok {
+			b.decorateToolCatalog(response)
+		}
 		if b.structured != nil {
 			item, _ := event["item"].(object)
 			if structuredMessageEvent(kind, item) {

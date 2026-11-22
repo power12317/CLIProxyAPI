@@ -2,11 +2,12 @@ package basispoints
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/MoeForge/moego/json"
 )
 
 func functionTransportSource(name, field string) object {
@@ -85,8 +86,16 @@ func TestFunctionRawTransportPreservesArgumentsAndHistory(t *testing.T) {
 						t.Fatal("cached native history changed")
 					}
 					outer, _ := decode([]byte(stringValue(restored["arguments"])))
-					if outer["summary"] != marker || outer["code"] != code {
+					if !strings.HasPrefix(stringValue(outer["summary"]), marker) || outer["code"] != code {
 						t.Fatal("cache-miss history reintroduced nested source JSON")
+					}
+					if scope == "account-b" {
+						if _, exists := outer["references"]; exists {
+							t.Fatal("history invented empty target references")
+						}
+						if _, err := decode([]byte(stringValue(outer["extended_summary"]))); err == nil {
+							t.Fatal("new history overloaded the human-readable explanation")
+						}
 					}
 					roundtrip, err := next.convertTool(restored)
 					if err != nil || roundtrip["arguments"] != call["arguments"] {
@@ -102,7 +111,7 @@ func TestFunctionRawTransportRejectsMalformedEnvelope(t *testing.T) {
 	for field, name := range map[string]string{"code": "run_code", "cmd": "exec_command"} {
 		source := functionTransportSource(name, field)
 		_, bridge := prepareFunctionTransport(t, source, "account", &Cache{})
-		for _, metadata := range []any{nil, 12, "", "[]", "null", "{} {}", "{invalid", fmt.Sprintf("{\"%s\":\"different\"}", field)} {
+		for _, metadata := range []any{nil, 12, "[]", "null", "{} {}", "{invalid", fmt.Sprintf("{\"%s\":\"different\"}", field)} {
 			_, err := bridge.convertTool(functionTransportNative(t, name, field, "private source", metadata))
 			if err == nil || strings.Contains(err.Error(), "private source") {
 				t.Fatalf("malformed metadata accepted or source leaked: %v", err)
@@ -238,6 +247,59 @@ func TestFunctionRawTransportContractAndDuplicates(t *testing.T) {
 		}
 		if _, err := bridge.convertTool(functionTransportNative(t, name, otherField, "source", "{}")); err == nil {
 			t.Fatal("wrong source marker accepted")
+		}
+	}
+}
+
+func TestRawFunctionProseAndExplicitMetadataFollowDeclaredSchema(t *testing.T) {
+	const code = "  const value = '中文\\\\n';\r\nthrow new Error('must not execute');\n"
+	for field, name := range map[string]string{"code": "run_code", "cmd": "exec_command"} {
+		for _, requiredExtra := range []bool{false, true} {
+			source := functionTransportSource(name, field)
+			schema := source["tools"].([]any)[0].(object)["tools"].([]any)[0].(object)["parameters"].(object)
+			schema["required"] = []any{field}
+			schema["additionalProperties"] = false
+			if requiredExtra {
+				schema["required"] = []any{field, "workdir"}
+			}
+			for _, prose := range []string{"Open the local preview and inspect the output.", ""} {
+				_, bridge := prepareFunctionTransport(t, source, "account", &Cache{})
+				native := functionTransportNative(t, name, field, code, prose)
+				call, err := bridge.convertTool(native)
+				if requiredExtra {
+					if err == nil {
+						t.Fatal("a required non-source argument was invented")
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				args, _ := decode([]byte(stringValue(call["arguments"])))
+				if args[field] != code || len(args) != 1 {
+					t.Fatal("prose changed source or invented optional arguments")
+				}
+			}
+			_, bridge := prepareFunctionTransport(t, source, "account", &Cache{})
+			native := functionTransportNative(t, name, field, code, "Execute the declared client tool.")
+			outer, _ := toolObject(native["arguments"])
+			outer["summary"] = stringValue(outer["summary"]) + ` {"workdir":"/actual"}`
+			nativeArgs, _ := json.Marshal(outer)
+			native["arguments"] = string(nativeArgs)
+			call, err := bridge.convertTool(native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args, _ := decode([]byte(stringValue(call["arguments"])))
+			if args[field] != code || args["workdir"] != "/actual" || len(args) != 2 {
+				t.Fatal("explicit metadata or source changed")
+			}
+			outer["extended_summary"] = `{"workdir":"/conflicting"}`
+			nativeArgs, _ = json.Marshal(outer)
+			native["arguments"] = string(nativeArgs)
+			if _, err := bridge.convertTool(native); err == nil {
+				t.Fatal("conflicting explicit metadata was accepted")
+			}
 		}
 	}
 }

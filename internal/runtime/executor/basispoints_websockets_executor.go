@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -40,9 +41,13 @@ func (e *BasispointsExecutor) readWebsocket(ctx context.Context, auth *coreauth.
 			if !stream {
 				return emit(event)
 			}
-			// The existing optional-tool path publishes only a successful candidate.
+			// The tool-capable path publishes only a successful candidate.
 			// Retain that boundary per attempt so rejected text cannot leak on retry.
 			if bufferOutput {
+				bufferedBytes += len(event)
+				if bufferedBytes > 32<<20 || len(buffered) >= 65536 {
+					return &coreexecutor.CodexReplayUnsafeError{Cause: fmt.Errorf("Basispoints candidate exceeds the relay limit")}
+				}
 				buffered = append(buffered, bytes.Clone(event))
 				return nil
 			}
