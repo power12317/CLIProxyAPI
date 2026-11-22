@@ -1,9 +1,10 @@
 package basispoints
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/MoeForge/moego/json"
 )
 
 const rawCustomPrefix = "cpa.custom/"
@@ -17,7 +18,7 @@ func toolKey(spec tool) string {
 
 func toolInstructions(catalog []tool) string {
 	var out strings.Builder
-	out.WriteString(" The client's shell, filesystem, planning and other declared tools are available. Use an appropriate tool when needed instead of only announcing an action or claiming it is unavailable. Invoke one client tool through each run_officejs call; the proxy intercepts this transport and does not run Office code. For ordinary FUNCTION tools without a raw transport specified in the catalog, code contains JSON text {\"name\":\"exact.catalog.name\",\"arguments\":{...}}. For CUSTOM tools, set summary to cpa.custom/exact.catalog.name and put the exact raw input directly in code, following its declared format. Do not wrap raw custom input in another JSON object or Markdown fences. Outer arguments also include extended_summary, destructive=false and references=[]. Use separate calls for multiple tools. Follow the complete tool descriptions and schemas below, including planning tools. After receiving results continue the task and do not repeat completed calls. Client tool catalog:\n")
+	out.WriteString(" Only the tools in the client catalog below have client execution handlers. Use an appropriate tool when needed instead of only announcing an action or claiming it is unavailable. Invoke one client tool through each run_officejs call; the proxy intercepts this transport and does not run Office code. For ordinary FUNCTION tools without a raw transport specified in the catalog, code contains JSON text {\"name\":\"exact.catalog.name\",\"arguments\":{...}}. For CUSTOM tools, set summary to cpa.custom/exact.catalog.name and put the exact raw input directly in code, following its declared format. Do not wrap raw custom input in another JSON object or Markdown fences. Keep extended_summary human-readable and set destructive=false. Omit optional references when no real target reference applies. Use separate calls for multiple tools. Follow the complete tool descriptions and schemas below, including planning tools. After receiving results continue the task and do not repeat completed calls. Client tool catalog:\n")
 	for _, spec := range catalog {
 		fmt.Fprintf(&out, "\nTool %q (%s): %s\n", toolKey(spec), spec.Type, spec.Description)
 		for _, field := range []struct {
@@ -37,10 +38,10 @@ func toolInstructions(catalog []tool) string {
 		} else if spec.Type == "tool_search" {
 			out.WriteString("This is client-executed tool discovery. Use the ordinary FUNCTION envelope with name tool_search and the declared search arguments. The client performs the lookup and returns tool_search_output; its loaded tools become available on the next request.\n")
 		} else if field := rawFunctionField(spec); field != "" {
-			fmt.Fprintf(&out, "Use FUNCTION_%s transport: set summary to exactly %s%s/%s and put the exact %s argument directly in code. Put all other supplied arguments in one JSON object in extended_summary, or {} when there are none. Do not include %s in that object. This replaces the ordinary FUNCTION envelope for this tool; do not JSON-wrap, fence or re-escape the source text.\n", strings.ToUpper(field), rawFunctionPrefix, field, toolKey(spec), field, field)
+			fmt.Fprintf(&out, "Use FUNCTION_%s transport: set summary to exactly %s%s/%s and put the exact %s argument directly in code. Append a space and one JSON object containing all other supplied arguments to the summary marker, or omit the object when there are none. Keep extended_summary as a short human-readable explanation. Do not include %s in the metadata object. This replaces the ordinary FUNCTION envelope for this tool; do not JSON-wrap, fence or re-escape the source text.\n", strings.ToUpper(field), rawFunctionPrefix, field, toolKey(spec), field, field)
 		}
 	}
-	out.WriteString("\nUse the exact catalog tool name. Follow each tool's specified transport: FUNCTION_CODE and FUNCTION_CMD use their exact summary marker, raw source in code and metadata JSON in extended_summary; CUSTOM uses its exact marker and raw input. Ordinary FUNCTION tools use one JSON object in code with properly escaped string values. Do not nest run_officejs wrappers.")
+	out.WriteString("\nUse the exact catalog tool name. Follow each tool's specified transport: FUNCTION_CODE and FUNCTION_CMD use their exact summary marker, raw source in code and an optional metadata JSON object after the summary marker; extended_summary is human-readable; CUSTOM uses its exact marker and raw input. Ordinary FUNCTION tools use one JSON object in code with properly escaped string values. Do not nest run_officejs wrappers.")
 	return out.String()
 }
 
@@ -221,6 +222,16 @@ func (b *Bridge) lookupTool(key string) (tool, bool) {
 	if !ok && key == "update_plan" {
 		spec, ok = b.tools["functions.update_plan"]
 	}
+	if !ok && !strings.Contains(key, ".") {
+		for _, candidate := range b.tools {
+			if candidate.Name == key {
+				if ok {
+					return tool{}, false
+				}
+				spec, ok = candidate, true
+			}
+		}
+	}
 	return spec, ok
 }
 
@@ -261,7 +272,7 @@ func (b *Bridge) rebuildToolCall(call object) (object, error) {
 	}
 	if outer == nil {
 		code, _ := json.Marshal(envelope)
-		outer = object{"summary": "Client tool " + name, "extended_summary": "Replay client tool result", "code": string(code), "references": []any{}, "destructive": false}
+		outer = object{"summary": "Client tool " + name, "extended_summary": "Replay client tool result", "code": string(code), "destructive": false}
 	}
 	arguments, _ := json.Marshal(outer)
 	return object{"type": "function_call", "id": functionItemID(id), "call_id": id, "name": "run_officejs", "arguments": string(arguments), "status": "completed"}, nil

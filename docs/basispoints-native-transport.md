@@ -131,12 +131,19 @@ run_officejs. The proxy forwards the original request once to native Codex, with
 dispatching any speculative client tools. Malformed tool output, transport errors
 and upstream rejections do not trigger this capability switch or a correction.
 
-For streaming requests with optional native capabilities, the candidate Basispoints
-response is buffered until the complete tool batch resolves the channel decision.
+A direct provider tool call requires an unambiguous declared client handler and
+compatible arguments. This applies to all provider tool families, including skills,
+connectors, workbook operations, and planning. An unmapped or incompatible direct
+call selects the native channel once using the original request. Provider tools
+are never added to the client's response catalog merely because Basispoints offers them.
+
+For streaming requests with declared tools, the candidate Basispoints response is
+buffered until the complete tool batch resolves the channel decision.
 This delays downstream text and tool events even when the result stays on Basispoints.
 If native Codex is needed, the first candidate response is withheld and only the
 native response is published. Both upstream generations retain their usage records.
-This is a capability switch, not a format-repair retry. Client-only streams retain
+The decision buffer is bounded to 32 MiB and 65,536 frames. Tool-capable responses
+wait for validation, including client-only catalogs. Text-only requests retain
 incremental delivery. Cancellation does not start a native request.
 
 Native requests do not close an already retained Basispoints socket. The existing
@@ -232,11 +239,14 @@ to CUSTOM raw input, eligible FUNCTION tools use an explicit source marker:
 - `cpa.function_cmd/<exact-catalog-name>` for `exec_command` functions declaring
   a string `cmd` property, unless the function qualifies for FUNCTION_CODE.
 
-The original source is placed directly in `code`. `extended_summary` contains
-one JSON object with every other supplied argument, or `{}`. The bridge combines
-these fields and serializes the client arguments with Go's JSON encoder. It does
-not evaluate, trim, infer a target from, or rewrite source text. Exact duplicate
-source fields are accepted; conflicting duplicates remain protocol errors.
+The original source is placed directly in `code`. Append a space and one JSON
+object containing supplied non-source arguments to the exact summary marker.
+Omit the object when no additional arguments are supplied. `extended_summary`
+retains its native human-readable meaning. For existing history, a complete JSON
+object in `extended_summary` is still accepted; conflicting metadata is rejected.
+A prose or empty explanation supplies no additional arguments, and the complete
+declared schema must validate the resulting call. Required parameters are never
+invented. The bridge preserves source text exactly without evaluating it.
 
 SSE, WebSocket and aggregated responses use the same converter. Cached native
 items replay unchanged; complete uncached plaintext history uses the raw

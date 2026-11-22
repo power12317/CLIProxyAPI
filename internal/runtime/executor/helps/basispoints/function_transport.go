@@ -1,8 +1,9 @@
 package basispoints
 
 import (
-	"encoding/json"
 	"strings"
+
+	"github.com/MoeForge/moego/json"
 )
 
 const rawFunctionPrefix = "cpa.function_"
@@ -38,7 +39,10 @@ func (b *Bridge) rawFunctionEnvelope(outer object) (object, bool, error) {
 		if !strings.HasPrefix(summary, prefix) {
 			continue
 		}
-		name := strings.TrimPrefix(summary, prefix)
+		name, extra, hasExtra := strings.Cut(strings.TrimPrefix(summary, prefix), " ")
+		if hasExtra && strings.TrimSpace(extra) == "" {
+			return nil, true, failure(502, "invalid_tool_envelope", "raw function metadata marker is empty")
+		}
 		spec, exists := b.tools[name]
 		if !exists {
 			return nil, true, failure(502, "unexpected_tool", "raw function target is absent from the client catalog")
@@ -49,19 +53,42 @@ func (b *Bridge) rawFunctionEnvelope(outer object) (object, bool, error) {
 		source, sourceOK := outer["code"].(string)
 		metadata, metadataOK := outer["extended_summary"].(string)
 		if !sourceOK || !metadataOK {
-			return nil, true, failure(502, "invalid_tool_arguments", "raw function transport requires string code and metadata")
+			return nil, true, failure(502, "invalid_tool_arguments", "raw function transport requires string code and extended_summary")
 		}
 		if len(source) > maxItemBytes || len(metadata) > maxItemBytes-len(source) {
 			return nil, true, failure(502, "tool_item_too_large", "raw function arguments exceed the relay limit")
 		}
-		args, err := decode([]byte(metadata))
-		if err != nil {
-			return nil, true, failure(502, "invalid_tool_envelope", "raw function extended_summary must contain one JSON object")
+		args := object{}
+		if strings.TrimSpace(extra) != "" {
+			var err error
+			args, err = decode([]byte(extra))
+			if err != nil {
+				return nil, true, failure(502, "invalid_tool_envelope", "raw function summary metadata must contain one JSON object")
+			}
+		}
+		// Accept old explicit JSON metadata, but never interpret prose as arguments.
+		legacy := strings.TrimSpace(metadata)
+		if strings.HasPrefix(legacy, "{") {
+			previous, err := decode([]byte(legacy))
+			if err != nil {
+				return nil, true, failure(502, "invalid_tool_envelope", "legacy function metadata must contain one JSON object")
+			}
+			for key, value := range previous {
+				if existing, present := args[key]; present && digest(existing) != digest(value) {
+					return nil, true, failure(502, "invalid_tool_envelope", "conflicting function metadata")
+				}
+				args[key] = value
+			}
+		} else if _, err := decodeToolJSON(legacy); err == nil {
+			return nil, true, failure(502, "invalid_tool_envelope", "legacy function metadata must be an object")
 		}
 		if duplicate, exists := args[field]; exists && duplicate != source {
 			return nil, true, failure(502, "invalid_tool_envelope", "conflicting raw function source fields")
 		}
 		args[field] = source
+		if err := validateFunctionArguments(spec, args); err != nil {
+			return nil, true, err
+		}
 		encoded, err := json.Marshal(args)
 		if err != nil || len(encoded) > maxItemBytes {
 			return nil, true, failure(502, "tool_item_too_large", "raw function arguments exceed the relay limit")
@@ -95,6 +122,10 @@ func (b *Bridge) rawFunctionHistory(name string, call, args object) (object, boo
 	if err != nil {
 		return nil, true, failure(400, "invalid_tool_history", "function metadata cannot be serialized")
 	}
-	return object{"summary": rawFunctionPrefix + field + "/" + name, "code": source,
-		"extended_summary": string(encoded), "references": []any{}, "destructive": false}, true, nil
+	summary := rawFunctionPrefix + field + "/" + name
+	if len(metadata) > 0 {
+		summary += " " + string(encoded)
+	}
+	return object{"summary": summary, "code": source,
+		"extended_summary": "Replay the declared client tool", "destructive": false}, true, nil
 }
