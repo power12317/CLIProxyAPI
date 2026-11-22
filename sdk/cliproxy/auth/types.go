@@ -1063,32 +1063,15 @@ func IsCodexClientRequest(ctx context.Context, clientHeaders ...http.Header) boo
 	return false
 }
 
-// CodexClientSIWCAllowed defaults to allowing native clients on SIWC-enabled credentials.
-// An explicit false restores the upstream ordinary-OAuth policy for Codex clients.
-func CodexClientSIWCAllowed(a *Auth) bool {
-	if a != nil {
-		if allowed, ok := parseBoolAny(a.Metadata["allow_codex_client_siwc"]); ok {
-			return allowed
-		}
-	}
-	return true
-}
-
 // IsCodexUseSIWCForRequest reports whether a request should use the nested SIWC credential section.
-func IsCodexUseSIWCForRequest(ctx context.Context, a *Auth, clientHeaders ...http.Header) bool {
+func IsCodexUseSIWCForRequest(ctx context.Context, a *Auth, _ ...http.Header) bool {
 	if codexRuntimeOwnsSelectedRequest(ctx, a) {
 		return false
 	}
 	if ctx != nil && ctx.Value(codexImageRequestContextKey{}) == true {
 		return false
 	}
-	if !IsCodexUseSIWC(a) {
-		return false
-	}
-	if !CodexClientSIWCAllowed(a) && IsCodexClientRequest(ctx, clientHeaders...) {
-		return false
-	}
-	return true
+	return IsCodexUseSIWC(a)
 }
 
 // OuterExpirationTime extracts the outer credential expiration timestamp, ignoring the nested "siwc" section.

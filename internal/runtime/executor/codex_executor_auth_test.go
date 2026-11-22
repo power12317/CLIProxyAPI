@@ -1375,7 +1375,7 @@ func assertCodexRefreshPatch(t *testing.T, before, refreshed *cliproxyauth.Auth,
 	}
 }
 
-func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
+func TestCodexExecutorSIWCSelectionUsesCredentialPreference(t *testing.T) {
 	codexUserAgents := []string{
 		"codex-desktop/0.159.0 (Mac OS 26.5.2; arm64)",
 		"Codex Desktop/26.803.41515",
@@ -1412,15 +1412,14 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 				Provider: "codex",
 				Attributes: map[string]string{
 					"base_url":   upstream.URL,
-					"use_siwc":   "true",
+					"use_siwc":   "false",
 					"websockets": "true",
 				},
 				Metadata: map[string]any{
-					"allow_codex_client_siwc": false,
-					"type":                    "codex",
-					"access_token":            "outer-non-siwc-token",
-					"account_id":              "acct-non-siwc",
-					"use_siwc":                true,
+					"type":         "codex",
+					"access_token": "outer-non-siwc-token",
+					"account_id":   "acct-non-siwc",
+					"use_siwc":     false,
 					"siwc": map[string]any{
 						"access_token":  "siwc-token-must-not-be-used",
 						"refresh_token": "siwc-refresh-token",
@@ -1477,30 +1476,6 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 				t.Fatalf("PayloadFinalizer override missing: service_tier=%v", gotBody["service_tier"])
 			}
 
-			// 1b. Non-Codex client on the same credential must still use SIWC token and SIWC body rules.
-			_, errNonCodex := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
-				Model:   "gpt-5.4",
-				Payload: reqPayload,
-			}, cliproxyexecutor.Options{
-				SourceFormat: sdktranslator.FormatOpenAIResponse,
-				Headers:      http.Header{"User-Agent": []string{"curl/8.7.1"}},
-			})
-			if errNonCodex != nil {
-				t.Fatalf("Non-Codex Execute error: %v", errNonCodex)
-			}
-			if got := gotHeaders.Get("Authorization"); got != "Bearer siwc-token-must-not-be-used" {
-				t.Fatalf("Non-Codex Authorization = %q, want Bearer siwc-token-must-not-be-used", got)
-			}
-			if got := gotHeaders.Get("Chatgpt-Account-Id"); got != "" {
-				t.Fatalf("Non-Codex Chatgpt-Account-Id = %q, want empty", got)
-			}
-			if _, hasTools := gotBody["tools"]; hasTools {
-				t.Fatalf("Non-Codex SIWC request should not inject image_generation tool, got %#v", gotBody["tools"])
-			}
-			if _, hasInstructions := gotBody["instructions"]; hasInstructions {
-				t.Fatalf("Non-Codex SIWC request should strip empty instructions, got %#v", gotBody["instructions"])
-			}
-
 			// 2. HTTP ExecuteStream with Codex client UA (even when SIWC token is missing!).
 			authWithoutSIWCToken := auth.Clone()
 			delete(authWithoutSIWCToken.Metadata, "siwc")
@@ -1545,8 +1520,7 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 				t.Fatalf("compact temperature should be preserved for Codex client, got %v", gotBody["temperature"])
 			}
 
-			// 4. Default base URL resolution: Codex client uses https://chatgpt.com/backend-api/codex,
-			// while non-Codex client uses https://api.openai.com/v1 on the exact same auth.
+			// 4. SIWC-disabled credentials use the ordinary endpoint for every client.
 			authDefaultBase := auth.Clone()
 			delete(authDefaultBase.Attributes, "base_url")
 			var capturedURLs []string
@@ -1586,8 +1560,8 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 			if capturedURLs[0] != "https://chatgpt.com/backend-api/codex/responses" || capturedAuths[0] != "Bearer outer-non-siwc-token" {
 				t.Fatalf("Codex client request = (%s, %s), want (https://chatgpt.com/backend-api/codex/responses, Bearer outer-non-siwc-token)", capturedURLs[0], capturedAuths[0])
 			}
-			if capturedURLs[1] != "https://api.openai.com/v1/responses" || capturedAuths[1] != "Bearer siwc-token-must-not-be-used" {
-				t.Fatalf("non-Codex client request = (%s, %s), want (https://api.openai.com/v1/responses, Bearer siwc-token-must-not-be-used)", capturedURLs[1], capturedAuths[1])
+			if capturedURLs[1] != "https://chatgpt.com/backend-api/codex/responses" || capturedAuths[1] != "Bearer outer-non-siwc-token" {
+				t.Fatalf("non-Codex client request = (%s, %s), want (https://chatgpt.com/backend-api/codex/responses, Bearer outer-non-siwc-token)", capturedURLs[1], capturedAuths[1])
 			}
 
 			// 5. WebSocket prepare & execute with Codex client UA must use wss://chatgpt.com/backend-api/codex/responses and outer token.
@@ -1612,8 +1586,7 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 				t.Fatalf("wsHeaders ChatGPT-Account-ID = %q, want acct-non-siwc", got)
 			}
 
-			// 5b. WebSocket session reuse: a SIWC WebSocket connection opened by a non-Codex client
-			// must NOT be reused by a subsequent Codex client request in the same execution session.
+			// 5b. Changing the credential preference must replace the selected-partition connection.
 			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 			var wsHandshakes []string
 			wsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1642,7 +1615,9 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 				cliproxyexecutor.ExecutionSessionMetadataKey: "shared-ws-session-" + ua,
 			}
 			wsCtx := cliproxyexecutor.WithDownstreamWebsocket(context.Background())
-			// First request: non-Codex client (curl) dials with SIWC token
+			// First request selects SIWC.
+			authWSReuse.Metadata["use_siwc"] = true
+			authWSReuse.Attributes["use_siwc"] = "true"
 			if _, errWS1 := wsExec.Execute(wsCtx, authWSReuse, cliproxyexecutor.Request{
 				Model:   "gpt-5.4",
 				Payload: reqPayload,
@@ -1653,7 +1628,9 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 			}); errWS1 != nil {
 				t.Fatalf("wsExec.Execute (non-Codex) error: %v", errWS1)
 			}
-			// Second request: Codex client on the same session must detach SIWC conn and dial with outer token
+			// Disabling SIWC selects the outer token even in the same execution session.
+			authWSReuse.Metadata["use_siwc"] = false
+			authWSReuse.Attributes["use_siwc"] = "false"
 			if _, errWS2 := wsExec.Execute(wsCtx, authWSReuse, cliproxyexecutor.Request{
 				Model:   "gpt-5.4",
 				Payload: reqPayload,
@@ -1668,18 +1645,6 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 				t.Fatalf("wsHandshakes = %v, want [Bearer siwc-token-must-not-be-used, Bearer outer-non-siwc-token]", wsHandshakes)
 			}
 
-			// 6. Missing non-SIWC access_token on a use_siwc=true credential must fail closed (401) for Codex clients and never fall back to SIWC.
-			authMissingOuter := authDefaultBase.Clone()
-			delete(authMissingOuter.Metadata, "access_token")
-			if _, errMissingOuter := executor.Execute(ctxRT, authMissingOuter, cliproxyexecutor.Request{
-				Model:   "gpt-5.4",
-				Payload: []byte(`{"model":"gpt-5.4","input":[]}`),
-			}, cliproxyexecutor.Options{
-				SourceFormat: sdktranslator.FormatOpenAIResponse,
-				Headers:      headers,
-			}); errMissingOuter == nil {
-				t.Fatal("expected Codex client request to fail when outer non-SIWC access_token is missing")
-			}
 		})
 	}
 }

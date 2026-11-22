@@ -35,13 +35,13 @@ func (t codexRecoveryTransport) RoundTrip(req *http.Request) (*http.Response, er
 
 func TestCodexSIWCRecoveryPreservesRequestPartition(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		missingSIWC   bool
-		siwcStatus    int
-		nativeAllowed bool
+		name         string
+		missingSIWC  bool
+		siwcStatus   int
+		outerAllowed bool
 	}{
-		{name: "expired SIWC", siwcStatus: http.StatusServiceUnavailable, nativeAllowed: true},
-		{name: "missing SIWC with healthy model state", missingSIWC: true, siwcStatus: http.StatusServiceUnavailable, nativeAllowed: true},
+		{name: "expired SIWC", siwcStatus: http.StatusServiceUnavailable, outerAllowed: true},
+		{name: "missing SIWC with healthy model state", missingSIWC: true, siwcStatus: http.StatusServiceUnavailable, outerAllowed: true},
 		{name: "explicit SIWC rejection", siwcStatus: http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestCodexSIWCRecoveryPreservesRequestPartition(t *testing.T) {
 				Attributes: map[string]string{"base_url": server.URL},
 				Metadata: map[string]any{
 					"access_token": "outer-before", "refresh_token": authID + "-outer", "expired": now.Add(time.Hour).Format(time.RFC3339),
-					"use_siwc": true, "allow_codex_client_siwc": false, "siwc": siwc,
+					"use_siwc": true, "siwc": siwc,
 				},
 			}
 			if tc.missingSIWC {
@@ -120,21 +120,26 @@ func TestCodexSIWCRecoveryPreservesRequestPartition(t *testing.T) {
 				t.Fatal("the unresolved or rejected SIWC grant lost its recovery requirement")
 			}
 			request := cliproxyexecutor.Request{Model: model, Payload: []byte(`{"model":"gpt-5.4","input":"hello"}`)}
-			assertSIWCBlocked := func() {
+			assertSIWCBlocked := func(headers ...http.Header) {
 				t.Helper()
-				_, errExecute := manager.Execute(context.Background(), []string{"codex"}, request, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse})
+				opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}
+				if len(headers) > 0 {
+					opts.Headers = headers[0]
+				}
+				_, errExecute := manager.Execute(context.Background(), []string{"codex"}, request, opts)
 				var authErr *coreauth.Error
 				if !errors.As(errExecute, &authErr) || authErr.Code != "auth_unavailable" {
 					t.Fatalf("unusable SIWC credential reached execution: %v", errExecute)
 				}
 			}
 			assertSIWCBlocked()
-			_, errNative := manager.Execute(context.Background(), []string{"codex"}, request, cliproxyexecutor.Options{
+			assertSIWCBlocked(http.Header{"User-Agent": {"codex_cli_rs/1.0.0"}})
+			_, errOuter := manager.Execute(coreauth.WithCodexImageRequest(context.Background()), []string{"codex"}, request, cliproxyexecutor.Options{
 				SourceFormat: sdktranslator.FormatOpenAIResponse,
 				Headers:      http.Header{"User-Agent": {"codex_cli_rs/1.0.0"}},
 			})
-			if (errNative == nil) != tc.nativeAllowed {
-				t.Fatalf("native outer inference: error=%v, want allowed=%v", errNative, tc.nativeAllowed)
+			if (errOuter == nil) != tc.outerAllowed {
+				t.Fatalf("image-routed outer inference: error=%v, want allowed=%v", errOuter, tc.outerAllowed)
 			}
 			assertSIWCBlocked()
 			_, _ = manager.ForceRefreshAuth(context.Background(), authID)
@@ -143,7 +148,7 @@ func TestCodexSIWCRecoveryPreservesRequestPartition(t *testing.T) {
 			}
 			assertSIWCBlocked()
 			wantInference := int32(0)
-			if tc.nativeAllowed {
+			if tc.outerAllowed {
 				wantInference = 1
 			}
 			if inferenceCalls.Load() != wantInference {
