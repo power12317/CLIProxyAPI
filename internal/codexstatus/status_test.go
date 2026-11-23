@@ -28,8 +28,8 @@ func TestDetectionRuleAndFixedTurnWindow(t *testing.T) {
 		{"different request", "turn", 779, 780, 0, "normal"},
 		{"different response", "turn", 780, 779, 0, "normal"},
 		{"missing turn", "", 780, 780, 0, "normal"},
-		{"one hour", "turn", 780, 780, time.Hour, "degraded"},
-		{"expired", "turn", 780, 780, time.Hour + time.Nanosecond, "normal"},
+		{"55 minutes", "turn", 780, 780, 55 * time.Minute, "degraded"},
+		{"past 55 minutes", "turn", 780, 780, 55*time.Minute + time.Nanosecond, "normal"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New(config.EventNotifications{})

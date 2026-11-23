@@ -110,7 +110,7 @@ func (r *Request) Begin(c Credential, turn string, length int) *Attempt {
 			m.turns[turn] = first
 		}
 		age := now.Sub(first)
-		eligible = length == 780 && age >= 0 && age <= time.Hour
+		eligible = length == 780 && age >= 0 && age <= 55*time.Minute
 	}
 	r.seen = true
 	r.version++
